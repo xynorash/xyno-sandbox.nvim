@@ -9,6 +9,8 @@ permissions:
   contents: read
 
 env:
+  NVIM_VERSION: v0.12.5
+  NVIM_SHA256: bce0f56eda1f1b1db6eee8f4133d7a38813ea07933837dd1777411ca384c6875
   LAZY_SHA: 85c7ff3711b730b4030d03144f6db6375044ae82 # lazy.nvim v11.17.5
 
 jobs:
@@ -20,14 +22,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Neovim stable (checksum verified)
+      - name: Install Neovim (pinned, checksum verified)
         run: |
-          base=https://github.com/neovim/neovim/releases/download/stable
-          curl -fsSL -o nvim-linux-x86_64.tar.gz "$base/nvim-linux-x86_64.tar.gz"
-          curl -fsSL -o shasum.txt "$base/shasum.txt"
-          grep ' nvim-linux-x86_64.tar.gz$' shasum.txt | sha256sum -c -
+          curl -fsSL -o nvim.tar.gz "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-x86_64.tar.gz"
+          echo "${NVIM_SHA256}  nvim.tar.gz" | sha256sum -c -
           mkdir -p "$HOME/nvim"
-          tar -xzf nvim-linux-x86_64.tar.gz -C "$HOME/nvim" --strip-components=1
+          tar -xzf nvim.tar.gz -C "$HOME/nvim" --strip-components=1
           echo "$HOME/nvim/bin" >> "$GITHUB_PATH"
 
       - name: Install bubblewrap
