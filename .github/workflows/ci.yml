@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install Neovim stable (checksum verified)
+        run: |
+          base=https://github.com/neovim/neovim/releases/download/stable
+          curl -fsSL -o nvim-linux-x86_64.tar.gz "$base/nvim-linux-x86_64.tar.gz"
+          curl -fsSL -o shasum.txt "$base/shasum.txt"
+          grep ' nvim-linux-x86_64.tar.gz$' shasum.txt | sha256sum -c -
+          mkdir -p "$HOME/nvim"
+          tar -xzf nvim-linux-x86_64.tar.gz -C "$HOME/nvim" --strip-components=1
+          echo "$HOME/nvim/bin" >> "$GITHUB_PATH"
+
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - name: Spec suite
+        # Specs that need a working sandbox skip with a message on runners that
+        # restrict user namespaces.
+        run: nvim --version | head -1 && nvim -l tests/run.lua
+
+      - name: Smoke test with lazy.nvim
+        run: |
+          git clone --filter=blob:none --branch=stable https://github.com/folke/lazy.nvim.git "$RUNNER_TEMP/lazy.nvim"
+          LAZY_PATH="$RUNNER_TEMP/lazy.nvim" nvim --headless -u tests/e2e/smoke.lua
