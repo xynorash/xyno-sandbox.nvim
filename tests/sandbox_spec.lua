@@ -1,4 +1,4 @@
--- lua/xyno_sandbox/init.lua: the bubblewrap wrapper around a coding agent (claude).
+-- lua/xyno_sandbox/init.lua: the bubblewrap wrapper around a coding agent.
 -- Structure tests build the wrapped command against a FAKE $HOME (the module
 -- reads os_homedir() once at load, so it is reloaded per fake home); the
 -- behavioural tests run real commands inside bwrap against that same fake
@@ -1221,7 +1221,7 @@ describe("README residual-risk claims", function()
   it("documents the residual risks that cannot be tested mechanically", function()
     local text = H.docs_text()
     for _, claim in ipairs({
-      "`~/.claude/.credentials.json` must stay readable",
+      "credential file under its config directory in `$HOME` must stay readable",
       "everything unlisted under `$HOME` is readable",
       "loopback services",
       "nested `.git` deeper than 2 levels is not locked",

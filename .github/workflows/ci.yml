@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  LAZY_SHA: 85c7ff3711b730b4030d03144f6db6375044ae82 # lazy.nvim v11.17.5
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -37,5 +40,7 @@ jobs:
 
       - name: Smoke test with lazy.nvim
         run: |
-          git clone --filter=blob:none --branch=stable https://github.com/folke/lazy.nvim.git "$RUNNER_TEMP/lazy.nvim"
+          git init -q "$RUNNER_TEMP/lazy.nvim"
+          git -C "$RUNNER_TEMP/lazy.nvim" fetch -q --depth 1 https://github.com/folke/lazy.nvim.git "${LAZY_SHA}"
+          git -C "$RUNNER_TEMP/lazy.nvim" checkout -q FETCH_HEAD
           LAZY_PATH="$RUNNER_TEMP/lazy.nvim" nvim --headless -u tests/e2e/smoke.lua

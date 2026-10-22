@@ -21,8 +21,8 @@ the project and a scratch directory, credentials are hidden, secret
 environment variables are stripped, and files that would later run outside the
 sandbox are locked read-only. The network stays open.
 
-The policy is written for Claude Code (it knows `~/.claude`), but |wrap()|
-takes any command.
+The policy knows the config, cache and state directories of one agent CLI,
+but |wrap()| takes any command.
 
 ==============================================================================
 2. Requirements                                         *xyno-sandbox-requirements*
@@ -118,7 +118,7 @@ require("xyno_sandbox").readonly_paths({project})
 pid, ipc, uts and cgroup namespaces, nested user namespaces disabled, all
 capabilities dropped and no controlling terminal. The project, the scratch
 directory and a few agent and cargo cache paths are writable. Git directories,
-`.cargo`, `.envrc`, `.vscode`, `.claude` and the agent settings, hooks, skills
+`.cargo`, `.envrc`, `.vscode`, the agent's project directory and the agent settings, hooks, skills
 and memory are read-only (or masked with an empty read-only directory when
 absent). Credential directories and files are replaced by empty ones.
 Environment variables that look like secrets are removed.
@@ -128,7 +128,8 @@ Environment variables that look like secrets are removed.
 
 It is a denylist on a read-only view of the filesystem with the network open.
 
-  - `~/.claude/.credentials.json` must stay readable and writable.
+  - the agent's credential file under its config directory must stay readable
+    and writable.
   - everything unlisted under `$HOME` is readable.
   - loopback services and abstract sockets are reachable.
   - cargo's `registry/src` and `git` are writable.

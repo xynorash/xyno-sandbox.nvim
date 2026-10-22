@@ -4,9 +4,9 @@ A Neovim plugin that runs a command-line coding agent inside a bubblewrap sandbo
 
 ## Why
 
-Agents like `claude --dangerously-skip-permissions` run with all of your privileges. I did not want that from inside my editor, so I wrap them: the filesystem is read-only except the project and a scratch directory, credentials are hidden, secret environment variables are stripped, and anything that would later run outside the sandbox (git hooks, editor task files, direnv, cargo config, the agent's own settings) is locked read-only. Where no sandbox can be created, the agent does not start. That fail-closed default is the point of the plugin.
+Command-line coding agents that run without permission prompts have all of your privileges. I did not want that from inside my editor, so I wrap them: the filesystem is read-only except the project and a scratch directory, credentials are hidden, secret environment variables are stripped, and anything that would later run outside the sandbox (git hooks, editor task files, direnv, cargo config, the agent's own settings) is locked read-only. Where no sandbox can be created, the agent does not start. That fail-closed default is the point of the plugin.
 
-The policy is written for Claude Code (it knows `~/.claude`), but `wrap()` takes any command, so it works for other agents too. The Claude-specific paths are simply absent for them.
+The policy knows the config, cache and state directories of one agent CLI, but `wrap()` takes any command; for other agents those paths are simply absent.
 
 ## Requirements
 
@@ -77,35 +77,12 @@ sandbox.readonly_paths(project)         -- paths re-bound read-only, and absent 
 ### Wrapping an agent command
 
 ```lua
-local cmd = { "claude", "--dangerously-skip-permissions", "-p", "..." }
+local cmd = { "my-agent", "--some-flag", "..." } -- any agent command
 local wrapped, err = require("xyno_sandbox").wrap(cmd, project_root, scratch_dir)
 if not wrapped then
   error("sandbox: " .. tostring(err), 0) -- fail closed
 end
 vim.system(wrapped, { cwd = project_root })
-```
-
-### Example: the 99 plugin
-
-This is how my own config plugs it into [99](https://github.com/ThePrimeagen/99): the provider builds its command, then the wrapper wraps it, and a refusal aborts the request before anything starts. That glue stays in [xynovim](https://github.com/xynorash/xynovim), it is not part of this plugin.
-
-```lua
-function Guarded._build_command(self, query, context)
-  local cmd = Claude._build_command(self, query, context)
-  local project = vim.fs.root(0, ".git") or vim.uv.cwd()
-  local wrapped, err = require("xyno_sandbox").wrap(cmd, project, tmp_dir)
-  if not wrapped then
-    error("99 sandbox: " .. tostring(err), 0)
-  end
-  return wrapped
-end
-
-function Guarded.make_request(self, query, context, observer)
-  if require("xyno_sandbox").status().mode == "refused" then
-    -- notify, fail the observer, and do not start
-  end
-  -- ...
-end
 ```
 
 ### Mapping from xynovim's option variables
@@ -120,24 +97,24 @@ The values are read at every `status()` and `wrap()` call, so changing `require(
 
 ## How it works
 
-`wrap()` prefixes the command with `bwrap`: a read-only bind of `/`, a private `/dev`, `/proc` and `/tmp`, new user, pid, ipc, uts and cgroup namespaces, nested user namespaces disabled, all capabilities dropped, no controlling terminal (no TIOCSTI injection). The project, the scratch directory, and a short list of agent and cargo cache paths are writable. On top of those binds, git directories (also behind `.git` files and in submodules down to two levels), `.cargo`, `.envrc`, `.vscode`, `.claude` and the agent's settings, hooks, skills and memory are read-only, or masked with an empty read-only directory when absent. A denylist of credential directories (`~/.ssh`, `~/.aws`, browser profiles, keyrings, shell histories, `/run/user/<uid>`, container sockets and more) is replaced by empty directories or files. Environment variables whose names look like secrets or cloud credentials are removed with `--unsetenv`. `~/.claude.json` is replaced by a private copy.
+`wrap()` prefixes the command with `bwrap`: a read-only bind of `/`, a private `/dev`, `/proc` and `/tmp`, new user, pid, ipc, uts and cgroup namespaces, nested user namespaces disabled, all capabilities dropped, no controlling terminal (no TIOCSTI injection). The project, the scratch directory, and a short list of agent and cargo cache paths are writable. On top of those binds, git directories (also behind `.git` files and in submodules down to two levels), `.cargo`, `.envrc`, `.vscode`, the agent's project directory and the agent's settings, hooks, skills and memory are read-only, or masked with an empty read-only directory when absent. A denylist of credential directories (`~/.ssh`, `~/.aws`, browser profiles, keyrings, shell histories, `/run/user/<uid>`, container sockets and more) is replaced by empty directories or files. Environment variables whose names look like secrets or cloud credentials are removed with `--unsetenv`. The agent's user-level config file in `$HOME` is replaced by a private copy.
 
 ## Residual risks
 
 It is a denylist on a read-only view of the whole filesystem, with the network open (the model needs it). It is not a security boundary against a determined attacker.
 
-- `~/.claude/.credentials.json` must stay readable and writable (OAuth refresh), so an agent can read that token.
+- the agent's credential file under its config directory in `$HOME` must stay readable and writable (token refresh), so an agent can read that token.
 - everything unlisted under `$HOME` is readable.
 - loopback services and abstract sockets are reachable.
 - cargo's `registry/src` and `git` are writable, so your own cargo may later build planted code.
 - a nested `.git` deeper than 2 levels is not locked.
 - files the project lacks (`.envrc`, `.vscode/tasks.json`, `rust-toolchain.toml`, `bacon.toml`) can be created inside the project.
-- masks leave empty directories behind (for example an empty `.cargo`, or `~/.claude/projects/<name>/memory`).
+- masks leave empty directories behind (for example an empty `.cargo`, or an empty memory directory in the agent's config directory).
 
 ## Platform status
 
 - Linux: the specs in this repository run on Linux (`nvim -l tests/run.lua`); that is the only platform where the sandbox works and the only one I claim.
-- Windows and macOS: there is no bubblewrap, so `wrap()` refuses and nothing starts. In the original xynovim CI the sandbox spec is skipped on both by design, and the refusal was exercised by a separate spec there. Beyond that, this repository has not been run on Windows or macOS.
+- Windows and macOS: there is no bubblewrap, so `wrap()` refuses and nothing starts. In the original xynovim CI the sandbox spec is skipped on both by design, and the refusal was exercised by a separate spec there. `tests/failclosed_spec.lua` ports that refusal check without an OS gate, but this repository's CI only runs on Linux, so on Windows and macOS it is not run here.
 - Windows guards from the source stay in place (the module loads without a user id).
 - Sandbox specs that need a working user namespace skip with a message on machines that restrict them.
 
@@ -150,7 +127,7 @@ LAZY_PATH=/path/to/lazy.nvim nvim --headless -u tests/e2e/smoke.lua   # lazy.nvi
 
 ## Extracted from xynovim
 
-This plugin is the sandbox wrapper of my Neovim config, [xynovim](https://github.com/xynorash/xynovim), published on its own. The 99 integration stays there.
+This plugin is the sandbox wrapper of my Neovim config, [xynovim](https://github.com/xynorash/xynovim), published on its own.  The glue for the agent plugin I use stays there.
 
 It is my own independent project and is not affiliated with the vendors of the agents it can wrap.
 
