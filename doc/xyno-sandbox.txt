@@ -1,0 +1,146 @@
+*xyno-sandbox.txt*  Run a coding agent inside a bubblewrap sandbox, or not at all
+
+==============================================================================
+CONTENTS                                                  *xyno-sandbox-contents*
+
+  1. Introduction ............................ |xyno-sandbox|
+  2. Requirements ............................ |xyno-sandbox-requirements|
+  3. Setup and options ....................... |xyno-sandbox-setup|
+  4. Commands ................................ |xyno-sandbox-commands|
+  5. Lua API ................................. |xyno-sandbox-api|
+  6. How it works ............................ |xyno-sandbox-how|
+  7. Residual risks .......................... |xyno-sandbox-risks|
+  8. Platforms ............................... |xyno-sandbox-platforms|
+
+==============================================================================
+1. Introduction                                                  *xyno-sandbox*
+
+xyno-sandbox.nvim wraps a command-line coding agent in bubblewrap (`bwrap`)
+and refuses to start it without a sandbox. The filesystem is read-only except
+the project and a scratch directory, credentials are hidden, secret
+environment variables are stripped, and files that would later run outside the
+sandbox are locked read-only. The network stays open.
+
+The policy is written for Claude Code (it knows `~/.claude`), but |wrap()|
+takes any command.
+
+==============================================================================
+2. Requirements                                         *xyno-sandbox-requirements*
+
+  - Neovim 0.12 or newer
+  - Linux with `bwrap` on $PATH and unprivileged user namespaces
+  - no other plugin
+
+==============================================================================
+3. Setup and options                                          *xyno-sandbox-setup*
+
+>lua
+    require("xyno_sandbox").setup({
+      sandbox = true,
+      allow_unsandboxed = false,
+      keymaps = false,
+      commands = true,
+    })
+<
+                                                          *xyno-sandbox-sandbox*
+sandbox                 boolean, default true
+    `false` is the deliberate opt-out: the agent runs unsandboxed even where
+    bwrap works. Only the boolean `false` counts.
+
+                                                *xyno-sandbox-allow_unsandboxed*
+allow_unsandboxed       boolean, default false
+    `true` lets the agent run unsandboxed when NO backend exists (Windows,
+    macOS, Linux without bwrap). It never disables a working sandbox. Only the
+    boolean `true` counts.
+
+                                                         *xyno-sandbox-keymaps*
+keymaps                 false or table, default false
+    No global keymap is set by default. `{ status = "<lhs>" }` maps normal mode
+    <lhs> to the status message.
+
+                                                        *xyno-sandbox-commands-opt*
+commands                boolean, default true
+    Register |:XynoSandboxStatus| and |:XynoSandboxRun|.
+
+Mapping from xynovim: `vim.g.xynovim_99_sandbox = false` is
+`setup({ sandbox = false })` and `vim.g.xynovim_99_allow_unsandboxed = true`
+is `setup({ allow_unsandboxed = true })`.
+
+==============================================================================
+4. Commands                                                *xyno-sandbox-commands*
+
+                                                          *:XynoSandboxStatus*
+:XynoSandboxStatus      Show how an agent would run here: sandboxed,
+                        unsandboxed (and why) or refused (and why).
+
+                                                             *:XynoSandboxRun*
+:XynoSandboxRun {cmd} [args...]
+                        Run the command in a terminal split, wrapped. The
+                        project is the current directory. Without a sandbox it
+                        prints a one-line error and starts nothing. Every
+                        explicitly unsandboxed run warns.
+
+==============================================================================
+5. Lua API                                                     *xyno-sandbox-api*
+
+                                                                     *status()*
+require("xyno_sandbox").status()
+    Returns `{ mode = "bwrap" }`, `{ mode = "unsandboxed", via, reason }` or
+    `{ mode = "refused", reason }`. `via` is "sandbox=false" or
+    "allow_unsandboxed".
+
+                                                                       *wrap()*
+require("xyno_sandbox").wrap({cmd}, {project}, {tmp_dir})
+    Returns the wrapped command (a string list), or `nil, reason` when
+    refused. When explicitly unsandboxed the same {cmd} table is returned.
+    {project} and {tmp_dir} are writable inside the sandbox. The agent starts
+    in Neovim's current directory when that is inside {project}, otherwise in
+    {project}.
+
+                                                                        *run()*
+require("xyno_sandbox").run({cmd}, {opts})
+    What |:XynoSandboxRun| does. {opts} may hold `project` and `tmp_dir`.
+    Returns the job id, or nil when nothing was started.
+
+                                                                *scrub_names()*
+require("xyno_sandbox").scrub_names({env}, {file_login})
+    Names of the environment variables that are removed.
+
+                                                             *readonly_paths()*
+require("xyno_sandbox").readonly_paths({project})
+    Returns the paths bound read-only on top of the writable binds, and the
+    absent directories masked with an empty read-only directory.
+
+==============================================================================
+6. How it works                                                 *xyno-sandbox-how*
+
+`bwrap` gets a read-only bind of `/`, private /dev, /proc and /tmp, new user,
+pid, ipc, uts and cgroup namespaces, nested user namespaces disabled, all
+capabilities dropped and no controlling terminal. The project, the scratch
+directory and a few agent and cargo cache paths are writable. Git directories,
+`.cargo`, `.envrc`, `.vscode`, `.claude` and the agent settings, hooks, skills
+and memory are read-only (or masked with an empty read-only directory when
+absent). Credential directories and files are replaced by empty ones.
+Environment variables that look like secrets are removed.
+
+==============================================================================
+7. Residual risks                                              *xyno-sandbox-risks*
+
+It is a denylist on a read-only view of the filesystem with the network open.
+
+  - `~/.claude/.credentials.json` must stay readable and writable.
+  - everything unlisted under `$HOME` is readable.
+  - loopback services and abstract sockets are reachable.
+  - cargo's `registry/src` and `git` are writable.
+  - a nested `.git` deeper than 2 levels is not locked.
+  - masks leave empty directories behind.
+
+==============================================================================
+8. Platforms                                               *xyno-sandbox-platforms*
+
+Linux is the only platform where the sandbox works, and the specs in this
+repository run there. On Windows and macOS there is no bubblewrap: |wrap()|
+refuses and nothing starts, unless `allow_unsandboxed` or `sandbox = false`
+is set.
+
+ vim:tw=78:ts=8:ft=help:norl:
