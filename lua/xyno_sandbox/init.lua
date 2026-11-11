@@ -470,10 +470,15 @@ function M.wrap(cmd, project, tmp_dir, opts)
     return cmd
   end
   local plan = opts.plan
+  local excs = opts.exceptions
   if plan and (plan.mode ~= "bwrap" or plan.project ~= project or stale(plan)) then
+    -- keep what the operator approved for this launch when the plan has to be rebuilt
+    excs = vim.list_extend(vim.deepcopy(excs or {}), vim.tbl_filter(function(e)
+      return e.scope == "once"
+    end, plan.exceptions or {}))
     plan = nil
   end
-  plan = plan or M.plan(cmd, project, tmp_dir, { exceptions = opts.exceptions })
+  plan = plan or M.plan(cmd, project, tmp_dir, { exceptions = excs })
   local temp = prepare(plan)
   next_id = next_id + 1
   local h = { id = next_id, plan = plan, temp = temp }
