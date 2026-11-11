@@ -40,6 +40,15 @@ but |wrap()| takes any command.
       allow_unsandboxed = false,
       keymaps = false,
       commands = true,
+      preview = "once",
+      strip_skip_permissions = false,
+      agent_cmd = nil,
+      policy = {
+        readonly = {}, writable = {}, hidden = {},
+        guard_dirs = {}, guard_files = {},
+        scrub = { contains = {}, prefix = {}, exact = {} },
+        scan_depth = 8,
+      },
     })
 <
                                                           *xyno-sandbox-sandbox*
@@ -62,6 +71,30 @@ keymaps                 false or table, default false
 commands                boolean, default true
     Register |:XynoSandboxStatus| and |:XynoSandboxRun|.
 
+                                                         *xyno-sandbox-preview*
+preview                 "always" | "once" | "never", default "once"
+    Show the policy preview (see |:XynoSandboxPolicy|) before a launch: every
+    launch, the first launch of each project, or never. Needs a UI.
+
+                                                *xyno-sandbox-strip_skip_permissions*
+strip_skip_permissions  boolean, default false
+    `true` removes `--dangerously-skip-permissions` from the command. The
+    preview always shows a line "Agent permission prompts: ON/OFF".
+
+                                                          *xyno-sandbox-policy*
+policy                  table, default {}
+    Additive lists, validated by setup() (an invalid value raises and changes
+    nothing):
+      readonly     more read-only locks (project-relative, absolute or ~/)
+      writable     more writable paths (absolute or ~/, never / or $HOME)
+      hidden       more hidden paths (absolute or ~/)
+      guard_dirs   project-relative dirs masked when absent
+      guard_files  project-relative files bound empty and read-only when absent
+      scrub        { contains, prefix, exact }: more variable names to strip
+      scan_depth   depth of the nested .git / member walk, 1 to 32, default 8
+
+`sandbox` and `allow_unsandboxed` may also be functions returning the boolean.
+
 Mapping from xynovim: `vim.g.xynovim_99_sandbox = false` is
 `setup({ sandbox = false })` and `vim.g.xynovim_99_allow_unsandboxed = true`
 is `setup({ allow_unsandboxed = true })`.
@@ -70,15 +103,32 @@ is `setup({ allow_unsandboxed = true })`.
 4. Commands                                                *xyno-sandbox-commands*
 
                                                           *:XynoSandboxStatus*
-:XynoSandboxStatus      Show how an agent would run here: sandboxed,
-                        unsandboxed (and why) or refused (and why).
+:XynoSandboxStatus[!]   Show how an agent would run here: sandboxed,
+                        unsandboxed (and why) or refused (and why, with a fix
+                        hint). ! re-runs the readiness probe.
+
+                                                          *:XynoSandboxPolicy*
+:XynoSandboxPolicy[!] [dir]
+                        Show the policy preview: writable, read-only, locked
+                        git directories, guarded and hidden paths, stripped
+                        variable NAMES, network, the permission-bypass line.
+                        ! lists every entry. In the window: e considers one
+                        exception (approve once, approve for the project, or
+                        refuse; every decision is logged to
+                        stdpath("state")/xyno-sandbox/exceptions.log).
+
+                                                      *:XynoSandboxApprovals*
+:XynoSandboxApprovals   List the remembered approvals (x revokes the one under
+                        the cursor). `revoke {id}` revokes by id, `log` opens
+                        the decision log.
 
                                                              *:XynoSandboxRun*
 :XynoSandboxRun {cmd} [args...]
                         Run the command in a terminal split, wrapped. The
                         project is the current directory. Without a sandbox it
                         prints a one-line error and starts nothing. Every
-                        explicitly unsandboxed run warns.
+                        explicitly unsandboxed run warns. A job that cannot start
+                        leaves no empty split.
 
 ==============================================================================
 5. Lua API                                                     *xyno-sandbox-api*
@@ -96,6 +146,22 @@ require("xyno_sandbox").wrap({cmd}, {project}, {tmp_dir})
     {project} and {tmp_dir} are writable inside the sandbox. The agent starts
     in Neovim's current directory when that is inside {project}, otherwise in
     {project}.
+
+                                                                      *plan()*
+require("xyno_sandbox").plan({cmd}, {project}, {tmp_dir}, {opts})
+    The structured plan the preview shows and |wrap()| runs. Pure builder:
+    require("xyno_sandbox.plan").build(). `nil, reason` when refused.
+
+                                                                  *statusline()*
+require("xyno_sandbox").statusline()
+    "sandbox: on", "sandbox: checking", "sandbox: OFF" or "sandbox: refused",
+    plus " x2" for two running sandboxes. A lualine component; never blocks.
+    statusline_hl() gives a matching highlight group.
+
+                                                              *approve()*
+require("xyno_sandbox").approve({project}, {kind}, {value}, {scope})
+    Log and apply an exception: kind "env", "unhide" or "writable", scope
+    "once" or "project". refuse(), approvals() and revoke() complete it.
 
                                                                         *run()*
 require("xyno_sandbox").run({cmd}, {opts})
@@ -117,7 +183,7 @@ require("xyno_sandbox").readonly_paths({project})
 `bwrap` gets a read-only bind of `/`, private /dev, /proc and /tmp, new user,
 pid, ipc, uts and cgroup namespaces, nested user namespaces disabled, all
 capabilities dropped and no controlling terminal. The project, the scratch
-directory and a few agent and cargo cache paths are writable. Git directories,
+directory and a few agent and cargo cache paths are writable. Git directories (down to 8 levels),
 `.cargo`, `.envrc`, `.vscode`, the agent's project directory and the agent settings, hooks, skills
 and memory are read-only (or masked with an empty read-only directory when
 absent). Credential directories and files are replaced by empty ones.
@@ -133,8 +199,11 @@ It is a denylist on a read-only view of the filesystem with the network open.
   - everything unlisted under `$HOME` is readable.
   - loopback services and abstract sockets are reachable.
   - cargo's `registry/src` and `git` are writable.
-  - a nested `.git` deeper than 2 levels is not locked.
-  - masks leave empty directories behind.
+  - a nested `.git` deeper than 8 levels (policy.scan_depth) is not locked,
+    nor one the agent creates in a new directory.
+  - the network is open.
+  - placeholders of the guards are removed when the run ends, not after a
+    crash; masks inside the agent's config directory stay.
 
 ==============================================================================
 8. Platforms                                               *xyno-sandbox-platforms*

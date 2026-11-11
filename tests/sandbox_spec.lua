@@ -47,18 +47,6 @@ local function fake_home(opts)
   return dir
 end
 
---- Run `fn`; if it fails, report the test as skipped with `reason` (a confirmed
---- bug in the module under test, kept as the assertion of the CORRECT behaviour).
-local function known_bug(reason, fn)
-  local ok, err = pcall(fn)
-  if not ok then
-    if harness.is_skip(err) then
-      error(err, 0)
-    end
-    harness.skip("KNOWN BUG: " .. reason .. " | " .. tostring(err):gsub("\n.*", ""))
-  end
-end
-
 --- xyno_sandbox loaded as if $HOME were `home`.
 local function load_for(home)
   local old = vim.uv.os_getenv("HOME")
@@ -656,7 +644,7 @@ describe("readonly_paths", function()
     return s
   end
 
-  it("finds every .git up to 2 levels deep and resolves gitdir/commondir from a .git file", function()
+  it("finds every .git down to the scan depth and resolves gitdir/commondir from a .git file", function()
     local home = fake_home()
     local m = load_for(home)
     local base = H.tmpdir()
@@ -668,7 +656,8 @@ describe("readonly_paths", function()
     write(base .. "/store/wt/x/commondir", "../../common\n")
     write(project .. "/sub/.git", "gitdir: ../../store/wt/x\n")
     mkdir(project .. "/a/b/.git") -- depth 2: locked
-    mkdir(project .. "/a/b/c/.git") -- depth 3: not locked
+    mkdir(project .. "/a/b/c/d/e/.git") -- depth 5: locked since the walk goes 8 levels deep
+    mkdir(project .. "/a/b/c/d/e/f/g/h/i/.git") -- depth 9: beyond the scan depth
     mkdir(project .. "/target/.git") -- skipped
     mkdir(project .. "/node_modules/.git")
     mkdir(project .. "/.cache/.git")
@@ -678,7 +667,8 @@ describe("readonly_paths", function()
     H.ok(ro[vim.uv.fs_realpath(base .. "/store/wt/x")], "gitdir behind the .git file")
     H.ok(ro[vim.uv.fs_realpath(base .. "/store/common")], "commondir")
     H.ok(ro[project .. "/a/b/.git"])
-    H.not_ok(ro[project .. "/a/b/c/.git"], "deeper than 2 is not locked (documented residual)")
+    H.ok(ro[project .. "/a/b/c/d/e/.git"], "a nested .git at depth 5 is locked")
+    H.not_ok(ro[project .. "/a/b/c/d/e/f/g/h/i/.git"], "beyond 8 levels is not locked (documented residual)")
     H.not_ok(ro[project .. "/target/.git"])
     H.not_ok(ro[project .. "/node_modules/.git"])
     H.not_ok(ro[project .. "/.cache/.git"])
@@ -723,14 +713,15 @@ describe("readonly_paths", function()
     end
   end)
 
-  it("locks .cargo and .envrc of members up to depth 3, not hidden or skipped dirs", function()
+  it("locks .cargo and .envrc of members down to the scan depth, not hidden or skipped dirs", function()
     local m = load_for(fake_home())
     local project = H.tmpdir()
     mkdir(project .. "/m1/.cargo")
     write(project .. "/m1/.envrc")
     mkdir(project .. "/x/y/.cargo")
     write(project .. "/x/y/z/.envrc")
-    mkdir(project .. "/x/y/z/w/.cargo") -- depth 4: not locked
+    mkdir(project .. "/x/y/z/w/.cargo") -- depth 4: locked now (was a documented gap)
+    mkdir(project .. "/p/q/r/s/t/u/v/w/x/.cargo") -- depth 9: beyond the scan depth
     mkdir(project .. "/.hid/.cargo")
     mkdir(project .. "/target/foo/.cargo")
     mkdir(project .. "/node_modules/foo/.cargo")
@@ -739,7 +730,8 @@ describe("readonly_paths", function()
     H.ok(ro[project .. "/m1/.envrc"])
     H.ok(ro[project .. "/x/y/.cargo"])
     H.ok(ro[project .. "/x/y/z/.envrc"])
-    H.not_ok(ro[project .. "/x/y/z/w/.cargo"])
+    H.ok(ro[project .. "/x/y/z/w/.cargo"], "a member at depth 4")
+    H.not_ok(ro[project .. "/p/q/r/s/t/u/v/w/x/.cargo"])
     H.not_ok(ro[project .. "/.hid/.cargo"])
     H.not_ok(ro[project .. "/target/foo/.cargo"])
     H.not_ok(ro[project .. "/node_modules/foo/.cargo"])
@@ -1210,8 +1202,9 @@ describe("headless skip", function()
     setenv("PATH", bin .. ":" .. vim.uv.os_getenv("PATH"))
     local ok, why = H.sandbox_available()
     H.eq(false, ok)
-    H.match(why, "bwrap cannot create a sandbox here", true)
+    H.match(why, "bwrap cannot create a user namespace", true)
     H.match(why, "No permissions to create a new namespace", true)
+    H.match(why, "unprivileged_userns_clone", true, "the probe's hint is part of the refusal")
   end)
 end)
 
@@ -1224,7 +1217,7 @@ describe("README residual-risk claims", function()
       "credential file under its config directory in `$HOME` must stay readable",
       "everything unlisted under `$HOME` is readable",
       "loopback services",
-      "nested `.git` deeper than 2 levels is not locked",
+      "nested `.git` deeper than 8 levels is not locked",
     }) do
       H.has(text, claim)
     end

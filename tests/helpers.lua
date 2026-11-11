@@ -108,12 +108,15 @@ function H.sandbox_available()
   end
   local dir = H.tmpdir()
   local prev = vim.fn.chdir(dir)
-  local cmd, err = require("xyno_sandbox").wrap({ "true" }, dir, dir)
+  local cmd, err, handle = require("xyno_sandbox").wrap({ "true" }, dir, dir)
   vim.fn.chdir(prev)
   if not cmd then
     return false, err
   end
   local r = vim.system(cmd, { cwd = dir }):wait(10000)
+  if handle then
+    handle.release()
+  end
   if r.code ~= 0 then
     return false, "bwrap cannot create a sandbox here: " .. vim.trim(r.stderr or "")
   end

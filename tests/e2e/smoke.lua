@@ -30,7 +30,7 @@ require("lazy").setup({
 -- fired, so load explicitly)
 require("lazy").load({ plugins = { "xyno-sandbox.nvim" } })
 
-for _, cmd in ipairs({ "XynoSandboxStatus", "XynoSandboxRun" }) do
+for _, cmd in ipairs({ "XynoSandboxStatus", "XynoSandboxPolicy", "XynoSandboxApprovals", "XynoSandboxRun" }) do
   if vim.fn.exists(":" .. cmd) ~= 2 then
     fail("command missing: " .. cmd)
   end
@@ -39,7 +39,7 @@ local ok, sb = pcall(require, "xyno_sandbox")
 if not ok then
   fail("require xyno_sandbox: " .. tostring(sb))
 end
-for _, fn in ipairs({ "setup", "status", "wrap", "run", "scrub_names", "readonly_paths" }) do
+for _, fn in ipairs({ "setup", "status", "wrap", "run", "scrub_names", "readonly_paths", "plan", "argv", "approve", "statusline" }) do
   if type(sb[fn]) ~= "function" then
     fail("missing function: " .. fn)
   end

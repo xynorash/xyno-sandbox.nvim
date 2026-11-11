@@ -17,168 +17,169 @@
 --                                          (never disables a working sandbox)
 -- Linux+bwrap: sandboxed (only sandbox=false turns it off). No backend:
 -- refused (sandbox=false or allow_unsandboxed=true: unsandboxed).
+local plan_mod = require("xyno_sandbox.plan")
+local store = require("xyno_sandbox.store")
+local probe = require("xyno_sandbox.probe")
+
 local M = {}
 
---- Policy switches. Read at every status()/wrap() call; only the booleans
---- `false` / `true` count (0, "false", 1, "true" do not).
+--- Policy switches. `sandbox` and `allow_unsandboxed` are read at every status()/wrap() call;
+--- only the booleans `false` / `true` count (0, "false", 1, "true" do not). Either may also be a
+--- function returning the value, evaluated at every call.
 M.config = {
   sandbox = true, -- false: deliberate opt-out, run unsandboxed even where bwrap works
   allow_unsandboxed = false, -- true: run unsandboxed when NO backend exists
-  keymaps = false, -- false, or { status = "<lhs>" }
+  keymaps = false, -- false, or { status = "<lhs>", policy = "<lhs>" }
   commands = true,
+  preview = "once", -- the policy preview before a launch: "always" | "once" (per project) | "never"
+  strip_skip_permissions = false, -- true: remove --dangerously-skip-permissions from the command
+  policy = {}, -- additive policy lists, see validate_opts()
+  agent_cmd = nil, -- command shown by :XynoSandboxPolicy when nothing was launched yet
 }
 
 local home = vim.uv.os_homedir()
 local pwd = vim.uv.os_get_passwd() -- uid is -1 or the call fails on Windows
 local uid = pwd and pwd.uid or -1
 
--- Writable inside the sandbox (when they exist). Deliberately NOT here:
--- ~/.local/share/claude (the claude binary), ~/.cargo/bin, ~/.cargo/config.toml.
-local WRITABLE = {
-  home .. "/.claude", -- sessions/projects/todos/cache/...; exec-ish parts re-locked below
-  home .. "/.cache/claude",
-  home .. "/.local/state/claude",
-  home .. "/.cargo/registry",
-  home .. "/.cargo/git",
-  home .. "/.cargo/.package-cache", -- cargo's download locks (files)
-  home .. "/.cargo/.package-cache-mutate",
-}
+-- ------------------------------------------------------------------ options
 
--- Re-bound read-only on top of the writable binds when they exist. Whatever an
--- agent planted here would run (or steer a tool) outside the sandbox later.
-local HOME_READONLY = {
-  home .. "/.claude/settings.json",
-  home .. "/.claude/settings.local.json",
-  home .. "/.claude/CLAUDE.md",
-  home .. "/.claude/keybindings.json",
-  home .. "/.claude/hooks",
-  home .. "/.claude/commands",
-  home .. "/.claude/agents",
-  home .. "/.claude/skills",
-  home .. "/.claude/plugins",
-  home .. "/.claude/output-styles",
-  home .. "/.claude/ide", -- IDE lock files make claude connect to a local server
-  home .. "/.claude/rules",
-  home .. "/.claude/chrome", -- chrome-native-host is a shell script Chrome launches unsandboxed
-  home .. "/.claude/security", -- the security-guidance hook imports from agent-sdk-venv here, unsandboxed
-}
+local POLICY_LISTS = { "readonly", "writable", "hidden", "guard_dirs", "guard_files" }
+local PREVIEW = { always = true, once = true, never = true }
 
--- Same dirs, but when ABSENT the agent could create them (a later unsandboxed
--- claude would load them: prompt injection), so mask them with an empty
--- read-only dir (leaves one empty dir behind in ~/.claude).
-local HOME_MASK_IF_ABSENT = {
-  home .. "/.claude/hooks",
-  home .. "/.claude/commands",
-  home .. "/.claude/agents",
-  home .. "/.claude/skills",
-  home .. "/.claude/rules",
-  home .. "/.claude/output-styles",
-  home .. "/.claude/security",
-}
+local function str_list(name, v, errs, check)
+  if type(v) ~= "table" or vim.islist and not vim.islist(v) then
+    errs[#errs + 1] = name .. " must be a list of strings"
+    return
+  end
+  for i, e in ipairs(v) do
+    if type(e) ~= "string" or e == "" then
+      errs[#errs + 1] = ("%s[%d] must be a non-empty string"):format(name, i)
+    elseif check then
+      local why = check(e)
+      if why then
+        errs[#errs + 1] = ("%s[%d] %q: %s"):format(name, i, e, why)
+      end
+    end
+  end
+end
 
--- Ephemeral inside the sandbox: claude sources these before running commands.
-local HOME_EPHEMERAL = {
-  home .. "/.claude/shell-snapshots",
-  home .. "/.claude/session-env",
-}
+local function path_check(allow_relative, forbid_whole)
+  return function(e)
+    if e:find("..", 1, true) and (e:match("^%.%./") or e:match("/%.%./") or e:match("/%.%.$") or e == "..") then
+      return "'..' is not allowed"
+    end
+    local abs = e:sub(1, 1) == "/" or e:sub(1, 2) == "~/"
+    if not abs and not allow_relative then
+      return "must be absolute or start with ~/"
+    end
+    if forbid_whole and (e == "/" or e == "~" or e == "~/" or plan_mod.normalize(e) == home) then
+      return "would expose all of / or $HOME"
+    end
+  end
+end
 
--- Project-relative auto-executing / tool-steering files (locked when present).
-local PROJECT_READONLY = {
-  ".gitmodules",
-  ".envrc",
-  ".mise.toml",
-  ".tool-versions",
-  ".nvim.lua",
-  ".nvimrc",
-  ".exrc",
-  ".vscode/tasks.json",
-  ".vscode/settings.json",
-  ".cargo", -- whole dir: config.toml sets runner / linker / rustflags and runs on the next cargo build
-  ".vscode", -- whole dir, so tasks.json cannot be swapped by renaming the parent
-  ".mcp.json",
-}
--- Locked in workspace members (depth <= 3) too: cargo reads .cargo/config from
--- every ancestor of the directory it runs in; direnv reads the nearest .envrc.
-local MEMBER_READONLY = { ".cargo", ".envrc" }
--- Created empty-and-read-only when absent at the project root (leaves an empty
--- .cargo dir behind): a planted .cargo/config.toml is the one that bites.
--- .git too: without one the agent ran `git init` and planted `core.fsmonitor = <cmd>` in
--- .git/config, which the user's next unsandboxed `git status` executed. (A later `git init`
--- needs `rmdir .git` first: the mask leaves an empty dir behind.)
-local PROJECT_MASK_IF_ABSENT = { ".cargo", ".git" }
--- Project dir that is ALWAYS locked: read-only when present, otherwise masked
--- with an empty read-only dir (leaves one empty dir behind), because a planted
--- .claude/settings.local.json with hooks would run on the user's next claude.
-local PROJECT_MASKED = ".claude"
+--- Check setup() options; returns a list of problems (empty when valid).
+--- policy = {
+---   readonly    = { "rel/or/abs", ... }  extra read-only locks (project-relative, absolute, or ~/)
+---   writable    = { "/abs", "~/x" }      extra writable paths (never / or $HOME)
+---   hidden      = { "/abs", "~/x" }      extra hidden paths (dir -> empty tmpfs, file -> empty)
+---   guard_dirs  = { "rel" }              dirs masked read-only when absent
+---   guard_files = { "rel" }              files bound read-only (empty) when absent
+---   scrub       = { contains = {}, prefix = {}, exact = {} }  more env var names to strip
+---   scan_depth  = 8                      how deep nested .git / members are looked for (1..32)
+--- }
+--- The lists only ADD to the built-in policy; nothing can be removed from it.
+function M.validate_opts(opts)
+  local errs = {}
+  local known = { sandbox = true, allow_unsandboxed = true, keymaps = true, commands = true, preview = true,
+    strip_skip_permissions = true, policy = true, agent_cmd = true }
+  for k in pairs(opts) do
+    if not known[k] then
+      errs[#errs + 1] = "unknown option " .. tostring(k)
+    end
+  end
+  if opts.commands ~= nil and type(opts.commands) ~= "boolean" then
+    errs[#errs + 1] = "commands must be a boolean"
+  end
+  if opts.preview ~= nil and not PREVIEW[opts.preview] then
+    errs[#errs + 1] = 'preview must be "always", "once" or "never"'
+  end
+  if opts.strip_skip_permissions ~= nil and type(opts.strip_skip_permissions) ~= "boolean" then
+    errs[#errs + 1] = "strip_skip_permissions must be a boolean"
+  end
+  if opts.agent_cmd ~= nil then
+    str_list("agent_cmd", opts.agent_cmd, errs)
+  end
+  if opts.keymaps ~= nil and opts.keymaps ~= false and type(opts.keymaps) ~= "table" then
+    errs[#errs + 1] = "keymaps must be false or a table"
+  end
+  local p = opts.policy
+  if p ~= nil then
+    if type(p) ~= "table" then
+      errs[#errs + 1] = "policy must be a table"
+    else
+      local pknown = { scrub = true, scan_depth = true }
+      for _, k in ipairs(POLICY_LISTS) do
+        pknown[k] = true
+      end
+      for k in pairs(p) do
+        if not pknown[k] then
+          errs[#errs + 1] = "unknown policy key " .. tostring(k)
+        end
+      end
+      if p.readonly ~= nil then str_list("policy.readonly", p.readonly, errs, path_check(true, false)) end
+      if p.writable ~= nil then str_list("policy.writable", p.writable, errs, path_check(false, true)) end
+      if p.hidden ~= nil then str_list("policy.hidden", p.hidden, errs, path_check(false, true)) end
+      if p.guard_dirs ~= nil then str_list("policy.guard_dirs", p.guard_dirs, errs, path_check(true, true)) end
+      if p.guard_files ~= nil then str_list("policy.guard_files", p.guard_files, errs, path_check(true, true)) end
+      if p.scan_depth ~= nil and not (type(p.scan_depth) == "number" and p.scan_depth >= 1 and p.scan_depth <= 32
+        and p.scan_depth == math.floor(p.scan_depth)) then
+        errs[#errs + 1] = "policy.scan_depth must be an integer from 1 to 32"
+      end
+      if p.scrub ~= nil then
+        if type(p.scrub) ~= "table" then
+          errs[#errs + 1] = "policy.scrub must be a table"
+        else
+          for k in pairs(p.scrub) do
+            if k ~= "contains" and k ~= "prefix" and k ~= "exact" then
+              errs[#errs + 1] = "unknown policy.scrub key " .. tostring(k)
+            end
+          end
+          for _, k in ipairs({ "contains", "prefix", "exact" }) do
+            if p.scrub[k] ~= nil then
+              str_list("policy.scrub." .. k, p.scrub[k], errs, function(e)
+                if not e:match("^[%w_]+$") then
+                  return "environment variable names use letters, digits and _"
+                end
+              end)
+            end
+          end
+        end
+      end
+    end
+  end
+  return errs
+end
 
--- Hidden (dirs: empty tmpfs, files: bound to /dev/null) when they exist.
--- This is a denylist on a read-only view of the whole filesystem, so it is
--- best effort: anything not listed is still readable, and the network is open.
-local HIDDEN = {
-  -- shell/CLI credentials
-  "/.ssh", "/.gnupg", "/.aws", "/.azure", "/.gsutil", "/.boto", "/.docker", "/.kube",
-  "/.terraform.d", "/.vault-token", "/.netrc", "/.git-credentials", "/.npmrc", "/.pypirc",
-  "/.cargo/credentials", "/.cargo/credentials.toml", "/.pub-cache/credentials.json",
-  "/.android/adbkey", "/.pki", "/.password-store", "/.Xauthority", "/.pulse-cookie",
-  -- ~/.config
-  "/.config/gh", "/.config/git/credentials", "/.config/rclone", "/.config/pulumi",
-  "/.config/helm", "/.config/gcloud", "/.config/op", "/.config/doctl", "/.config/hub",
-  "/.config/Bitwarden", "/.config/1Password", "/.config/keepassxc", "/.config/pulse",
-  "/.config/Slack", "/.config/discord", "/.config/Signal", "/.config/rustdesk",
-  "/.config/winapps", "/.config/freerdp", "/.config/obs-studio", "/.config/JetBrains",
-  "/.config/spotify", "/.config/herdr", "/.anydesk", "/.neuralstark-live",
-  -- browsers / mail
-  "/.config/google-chrome", "/.config/google-chrome-headless", "/.config/Google",
-  "/.config/chromium", "/.config/BraveSoftware", "/.config/microsoft-edge",
-  "/.config/vivaldi", "/.config/opera", "/.mozilla", "/.thunderbird", "/.cache/google-chrome",
-  -- ~/.local/share
-  "/.local/share/keyrings", "/.local/share/password-store", "/.local/share/gnome-keyring",
-  "/.local/share/kwalletd", "/.local/share/TelegramDesktop", "/.local/share/fish",
-  "/.local/share/winapps",
-  -- remote-control keys of other claude sessions / the claude daemon
-  "/.claude/daemon", "/.claude/sessions",
-  -- every prompt typed in any project (readable, and it was writable too)
-  "/.claude/history.jsonl",
-}
--- Globs under $HOME (shell and tool histories).
-local HIDDEN_GLOBS = { "/.*_history*", "/.lesshst", "/.config/fish/fish_history" }
--- Absolute system paths: container/dbus sockets are root-equivalent (the user
--- is in group docker) or reach other services; /run/user holds the gpg/ssh
--- agent, keyring, wayland and session-bus sockets.
-local HIDDEN_SYSTEM = {
-  "/run/user/" .. uid,
-  "/run/docker.sock", "/run/docker", "/run/containerd", "/run/podman", "/run/libvirt",
-  "/run/dbus", "/run/snapd.socket", "/run/snapd-snap.socket",
-  -- tailscaled.sock is mode 0666: `tailscale status` listed the peers and RunSSH was on
-  "/run/tailscale", "/run/seatd.sock",
-}
-
--- Environment scrub: any variable whose name contains one of these ...
-local ENV_CONTAINS = {
-  "TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "APIKEY", "CREDENTIAL", "PRIVATE_KEY",
-  "ACCESS_KEY", "AUTH_SOCK", "AGENT_INFO", "PASSPHRASE", "ASKPASS",
-}
--- ... or starts with one of these ...
-local ENV_PREFIX = {
-  "AWS_", "AZURE_", "GOOGLE_", "GCP_", "GCLOUD_", "DOCKER_", "KUBE", "GH_", "GITHUB_", "GITLAB_",
-  "NPM_", "CARGO_REGISTR", "VAULT_", "OPENAI_", "STRIPE_",
-}
--- ... or is exactly one of these (session bus / display access).
-local ENV_EXACT = {
-  DATABASE_URL = true, DBUS_SESSION_BUS_ADDRESS = true, DISPLAY = true, WAYLAND_DISPLAY = true,
-  XAUTHORITY = true, SSH_AUTH_SOCK = true, GPG_AGENT_INFO = true, KUBECONFIG = true,
-  MYSQL_PWD = true, SSHPASS = true, -- not a "PASSWORD" by name; a bare PWD would also be the cwd
-}
--- Variables claude itself authenticates with. Kept only when login is NOT
--- file based (no ~/.claude/.credentials.json); with file-based login claude
--- never reads them, so they are just secrets to strip.
-local ENV_CLAUDE_AUTH = { "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN" }
+--- A switch that may be a function (evaluated now).
+local function flag(name)
+  local v = M.config[name]
+  if type(v) == "function" then
+    local ok, r = pcall(v)
+    if ok then
+      v = r
+    else
+      v = nil
+    end
+  end
+  return v
+end
 
 local function exists(p)
   return vim.uv.fs_stat(p) ~= nil
 end
 
---- Names to `--unsetenv`, computed from the live environment.
+--- Names to `--unsetenv`, computed from the live environment (and policy.scrub).
 --- @param env? table<string,string> defaults to vim.fn.environ()
 --- @param file_login? boolean defaults to: ~/.claude/.credentials.json exists
 --- @return string[]
@@ -187,341 +188,366 @@ function M.scrub_names(env, file_login)
   if file_login == nil then
     file_login = exists(home .. "/.claude/.credentials.json")
   end
-  local keep = {}
-  if not file_login then
-    for _, v in ipairs(ENV_CLAUDE_AUTH) do
-      keep[v] = true
-    end
-  end
-  local out = {}
-  for name in pairs(env) do
-    local u = name:upper()
-    local hit = ENV_EXACT[u] or false
-    for _, s in ipairs(ENV_CONTAINS) do
-      hit = hit or u:find(s, 1, true) ~= nil
-    end
-    for _, s in ipairs(ENV_PREFIX) do
-      hit = hit or u:sub(1, #s) == s
-    end
-    if hit and not keep[name] then
-      out[#out + 1] = name
-    end
-  end
-  table.sort(out)
-  return out
+  return plan_mod.scrub_names(env, file_login, (M.config.policy or {}).scrub)
 end
 
---- Real gitdir (and shared commondir) behind a `.git` FILE ("gitdir: ..." of
---- worktrees, submodules and bare-repo layouts).
-local function resolve_gitfile(dotgit, dir)
-  local out = {}
-  local f = io.open(dotgit, "r")
-  if not f then
-    return out
-  end
-  local line = f:read("l") or ""
-  f:close()
-  local gd = line:match("^gitdir:%s*(.-)%s*$")
-  if not gd or gd == "" then
-    return out
-  end
-  if not gd:match("^/") then
-    gd = dir .. "/" .. gd
-  end
-  gd = vim.uv.fs_realpath(gd)
-  if not gd then
-    return out
-  end
-  out[#out + 1] = gd
-  local cf = io.open(gd .. "/commondir", "r")
-  if cf then
-    local cd = cf:read("l")
-    cf:close()
-    if cd and cd ~= "" then
-      cd = vim.uv.fs_realpath(cd:match("^/") and cd or (gd .. "/" .. cd))
-      if cd then
-        out[#out + 1] = cd
-      end
-    end
-  end
-  return out
-end
-
-local SCAN_SKIP = { target = true, node_modules = true, [".git"] = true, [".cache"] = true }
-
---- Every `.git` (dir or file) in the project and 2 levels below (submodules,
---- nested checkouts) plus the real gitdirs behind `.git` files.
---- @return string[]
-local function git_paths(project)
-  local out, seen = {}, {}
-  local function add(p)
-    if not seen[p] and exists(p) then
-      seen[p] = true
-      out[#out + 1] = p
-    end
-  end
-  local function scan(dir, depth)
-    local dotgit = dir .. "/.git"
-    local st = vim.uv.fs_stat(dotgit)
-    if st then
-      if st.type == "file" then
-        for _, p in ipairs(resolve_gitfile(dotgit, dir)) do
-          add(p)
-        end
-      end
-      add(dotgit)
-    end
-    if depth < 2 then
-      for name, t in vim.fs.dir(dir) do
-        if t == "directory" and not SCAN_SKIP[name] then
-          scan(dir .. "/" .. name, depth + 1)
-        end
-      end
-    end
-  end
-  scan(project, 0)
-  return out
-end
-
---- ~/.claude/projects/<name> of this project: claude names it after its cwd
---- (every non-alphanumeric character as "-"), project root and cwd, real and
---- as given. These are the only parts of ~/.claude/projects left writable.
---- @return string[]
-local function own_project_dirs(project)
-  local cwd = vim.uv.cwd() or project
-  local out, seen = {}, {}
-  for _, d in ipairs({ project, cwd, vim.uv.fs_realpath(project) or project, vim.uv.fs_realpath(cwd) or cwd }) do
-    local dir = home .. "/.claude/projects/" .. d:gsub("[^%w]", "-")
-    if not seen[dir] then
-      seen[dir] = true
-      out[#out + 1] = dir
-    end
-  end
-  return out
+local function cfg_view()
+  return {
+    policy = M.config.policy or {},
+    strip_skip_permissions = M.config.strip_skip_permissions == true,
+  }
 end
 
 --- Paths re-bound read-only on top of the writable binds.
 --- @param project string
 --- @return string[] ro, string[] masks  masks: absent dirs to cover with an empty read-only tmpfs
 function M.readonly_paths(project)
-  local ro = git_paths(project)
-  local seen = {}
-  for _, p in ipairs(ro) do
-    seen[p] = true
+  local p = plan_mod.build({
+    project = project, tmp_dir = "/nonexistent", cwd = vim.uv.cwd(), env = {}, home = home, uid = uid,
+    config = cfg_view(), assume_claude_dir = false,
+  })
+  local ro, masks = {}, {}
+  for _, r in ipairs(p.readonly) do
+    ro[#ro + 1] = r.path
   end
-  local function lock(p)
-    if not seen[p] and exists(p) then
-      seen[p] = true
-      ro[#ro + 1] = p
-    end
-  end
-  -- Started in $HOME (or /): the project-relative locks would hit ~/.claude and ~/.cargo, the
-  -- writable binds claude needs; $HOME is not writable here anyway.
-  local at_home = project == home or project == "/"
-  for _, rel in ipairs(at_home and {} or PROJECT_READONLY) do
-    lock(project .. "/" .. rel)
-  end
-  local member_masks = {}
-  local function scan_members(dir, depth)
-    for name, t in vim.fs.dir(dir) do
-      if t == "directory" and not SCAN_SKIP[name] and name:sub(1, 1) ~= "." then
-        local d = dir .. "/" .. name
-        for _, rel in ipairs(MEMBER_READONLY) do
-          lock(d .. "/" .. rel)
-        end
-        if exists(d .. "/Cargo.toml") and not exists(d .. "/.cargo") then
-          member_masks[#member_masks + 1] = d .. "/.cargo"
-        end
-        if depth < 3 then
-          scan_members(d, depth + 1)
-        end
-      end
-    end
-  end
-  if not at_home then
-    scan_members(project, 1)
-  end
-  for _, p in ipairs(HOME_READONLY) do
-    lock(p)
-  end
-  for _, p in ipairs(vim.fn.glob(home .. "/.claude/projects/*/memory", true, true)) do
-    lock(p) -- MEMORY.md auto-loads into the next unsandboxed session
-  end
-  -- Absent dirs to mask with an empty read-only tmpfs.
-  local masks = member_masks
-  -- This project's own memory dir, also while it does not exist yet (claude
-  -- names it ~/.claude/projects/<path with every non-alphanumeric as "-">/memory
-  -- from its cwd): otherwise the agent could plant a MEMORY.md that the next
-  -- unsandboxed session loads. Needs ~/.claude (the mask is made inside it).
-  if exists(home .. "/.claude") then
-    for _, d in ipairs(own_project_dirs(project)) do
-      local mem = d .. "/memory"
-      if not seen[mem] and not exists(mem) then
-        seen[mem] = true
-        masks[#masks + 1] = mem
-      end
-    end
-  end
-  for _, rel in ipairs(at_home and {} or PROJECT_MASK_IF_ABSENT) do
-    if not exists(project .. "/" .. rel) then
-      masks[#masks + 1] = project .. "/" .. rel
-    end
-  end
-  if at_home then
-    -- (~/.claude is writable here: HOME_READONLY locks what must not change)
-  elseif not exists(project .. "/" .. PROJECT_MASKED) then
-    masks[#masks + 1] = project .. "/" .. PROJECT_MASKED
-  else
-    lock(project .. "/" .. PROJECT_MASKED)
-  end
-  for _, p in ipairs(HOME_MASK_IF_ABSENT) do
-    if not exists(p) then
-      masks[#masks + 1] = p
-    end
+  for _, m in ipairs(p.masks) do
+    masks[#masks + 1] = m.path
   end
   return ro, masks
 end
 
---- How the agent would run here: { mode = "bwrap" } | { mode = "unsandboxed",
---- via = "sandbox=false" | "allow_unsandboxed", reason } | { mode = "refused", reason }.
+-- ------------------------------------------------------------------- status
+
+--- How the agent would run here:
+---   { mode = "bwrap", ready = "ok"|"pending" }
+---   { mode = "unsandboxed", via = "sandbox=false"|"allow_unsandboxed", reason, hint? }
+---   { mode = "refused", reason, hint? }
+--- Never blocks: the user-namespace probe runs asynchronously (the first call starts it, `ready`
+--- is "pending" until it finished). A failed probe counts as no backend (fail closed).
 function M.status()
-  if M.config.sandbox == false then
+  if flag("sandbox") == false then
     return { mode = "unsandboxed", via = "sandbox=false", reason = "sandbox = false" }
   end
   local linux = vim.fn.has("linux") == 1
+  local reason, hint
   if linux and vim.fn.executable("bwrap") == 1 then
-    return { mode = "bwrap" }
+    local c = probe.cached()
+    if c and c.ok then
+      return { mode = "bwrap", ready = "ok" }
+    elseif not c then
+      probe.run(function() end)
+      return { mode = "bwrap", ready = "pending" }
+    end
+    reason, hint = c.reason, c.hint
+  else
+    reason = linux and "bwrap not found (install bubblewrap)"
+      or ("no sandbox backend on " .. (vim.uv.os_uname().sysname or "this OS") .. ": bubblewrap exists only on Linux")
   end
-  local reason = linux and "bwrap not found (install bubblewrap)"
-    or ("no sandbox backend on " .. (vim.uv.os_uname().sysname or "this OS") .. ": bubblewrap exists only on Linux")
-  if M.config.allow_unsandboxed == true then
-    return { mode = "unsandboxed", via = "allow_unsandboxed", reason = reason }
+  if flag("allow_unsandboxed") == true then
+    return { mode = "unsandboxed", via = "allow_unsandboxed", reason = reason, hint = hint }
   end
-  return { mode = "refused", reason = reason }
+  return { mode = "refused", reason = reason, hint = hint }
+end
+
+--- Like status(), but waits for the readiness probe (one short blocking run, cached).
+function M.status_blocking()
+  local st = M.status()
+  if st.mode == "bwrap" and st.ready == "pending" then
+    probe.run_sync()
+    st = M.status()
+  end
+  return st
+end
+
+--- Probe now (async), then call cb(status). `force` re-runs a cached verdict.
+function M.check(cb, force)
+  if flag("sandbox") == false or vim.fn.has("linux") ~= 1 or vim.fn.executable("bwrap") ~= 1 then
+    return cb(M.status())
+  end
+  probe.run(function()
+    cb(M.status())
+  end, force)
+end
+
+-- --------------------------------------------------------------------- plan
+
+local aux_empty
+
+local function aux_paths()
+  aux_empty = aux_empty or (vim.fn.tempname() .. ".empty")
+  return { empty = aux_empty, claude_json = vim.fn.tempname() .. ".claude.json" }
+end
+
+--- The plan for running `cmd` here: the structured policy the launcher and the preview share.
+--- @param cmd string[]
+--- @param project string
+--- @param tmp_dir string
+--- @param opts? { exceptions?: table[], aux?: table, cwd?: string }  exceptions: extra approvals (this launch only)
+--- @return table? plan, string? reason  (a refused status gives nil, reason)
+function M.plan(cmd, project, tmp_dir, opts)
+  opts = opts or {}
+  local st = M.status()
+  if st.mode == "refused" then
+    return nil, st.reason
+  elseif st.mode == "unsandboxed" then
+    return {
+      version = 1, mode = "unsandboxed", via = st.via, reason = st.reason, project = project, tmp_dir = tmp_dir,
+      agent = { cmd = cmd, skip_permissions = plan_mod.skip_flag(cmd) ~= nil, flag = plan_mod.skip_flag(cmd) },
+      exceptions = {}, rejected = {}, notes = {}, writable = {}, hidden = {}, readonly = {}, masks = {},
+      guard_files = {}, env_strip = {}, env_kept = {}, git_locked = {}, network = "open",
+    }
+  end
+  local excs = {}
+  for _, a in ipairs(store.approvals(project)) do
+    excs[#excs + 1] = { kind = a.kind, value = a.value, scope = "project", id = a.id }
+  end
+  for _, e in ipairs(opts.exceptions or {}) do
+    excs[#excs + 1] = e
+  end
+  return plan_mod.build({
+    cmd = cmd, project = project, tmp_dir = tmp_dir, cwd = opts.cwd or vim.uv.cwd(), env = vim.fn.environ(),
+    home = home, uid = uid, config = cfg_view(), aux = opts.aux or aux_paths(), exceptions = excs,
+    state_dir = store.dir(),
+  })
+end
+
+--- The bwrap command line of a plan (pure).
+function M.argv(plan)
+  return plan_mod.argv(plan)
+end
+
+-- ---------------------------------------------------------------- exceptions
+
+--- Record the operator's decision on one exception (see xyno_sandbox.exceptions). Returns the
+--- exception to pass as `opts.exceptions` for a "once" approval, or nil when refused.
+function M.approve(project, kind, value, scope)
+  return require("xyno_sandbox.exceptions").decide(project, "approved", { kind = kind, value = value }, scope)
+end
+
+function M.refuse(project, kind, value)
+  return require("xyno_sandbox.exceptions").decide(project, "refused", { kind = kind, value = value })
+end
+
+--- Remembered approvals of `project`, or of every project when nil.
+function M.approvals(project)
+  return require("xyno_sandbox.exceptions").list(project)
+end
+
+function M.revoke(project, id)
+  return require("xyno_sandbox.exceptions").revoke(project, id)
+end
+
+-- ------------------------------------------------------------------- handles
+
+local live = {} -- id -> handle
+local next_id = 0
+
+--- Number of sandboxes started through wrap() that were not released yet.
+function M.running()
+  local n = 0
+  for _ in pairs(live) do
+    n = n + 1
+  end
+  return n
+end
+
+local function is_empty_leftover(path, kind)
+  local st = vim.uv.fs_lstat(path)
+  if not st then
+    return false
+  end
+  if kind == "dir" then
+    return st.type == "directory" and #vim.fn.readdir(path) == 0
+  end
+  -- bwrap creates the mount point as an empty read-only (0444) file
+  return st.type == "file" and st.size == 0 and bit.band(st.mode, tonumber("222", 8)) == 0
+end
+
+local function release(h)
+  if h.released then
+    return
+  end
+  h.released = true
+  live[h.id] = nil
+  for _, f in ipairs(h.temp) do
+    vim.uv.fs_unlink(f)
+  end
+  local others = false
+  pcall(function()
+    others = store.live_others(h.plan.project, h.reg)
+  end)
+  pcall(store.live_remove, h.reg)
+  if others then
+    return -- another sandbox of this project still mounts the placeholders: removing them would unmount
+  end
+  local items = {}
+  for _, m in ipairs(h.plan.masks) do
+    if m.cleanup then
+      items[#items + 1] = { m.path, "dir" }
+    end
+  end
+  for _, g in ipairs(h.plan.guard_files) do
+    if g.cleanup then
+      items[#items + 1] = { g.path, "file" }
+    end
+  end
+  table.sort(items, function(a, b)
+    return #a[1] > #b[1] -- children first
+  end)
+  for _, it in ipairs(items) do
+    if is_empty_leftover(it[1], it[2]) then
+      if it[2] == "dir" then
+        vim.uv.fs_rmdir(it[1])
+      else
+        vim.uv.fs_unlink(it[1])
+      end
+    end
+  end
+end
+
+--- Release every live sandbox (temp files, empty leftovers). Runs at VimLeavePre.
+function M.cleanup()
+  local all = {}
+  for _, h in pairs(live) do
+    all[#all + 1] = h
+  end
+  for _, h in ipairs(all) do
+    h.release()
+  end
+end
+
+local function stale(plan)
+  for _, m in ipairs(plan.masks) do
+    if m.cleanup and exists(m.path) then
+      return true
+    end
+  end
+  for _, g in ipairs(plan.guard_files) do
+    if exists(g.path) then
+      return true
+    end
+  end
+  return false
+end
+
+local function prepare(plan)
+  for _, d in ipairs(plan.needs.mkdir) do
+    vim.fn.mkdir(d, "p")
+  end
+  local temp = {}
+  if plan.empty_file and not exists(plan.empty_file) then
+    vim.fn.writefile({}, plan.empty_file)
+  end
+  if plan.claude_json then
+    -- a private COPY: it works, but nothing the sandbox writes reaches the real file
+    local c = plan.claude_json
+    if vim.uv.fs_copyfile(c.src, c.copy) then
+      vim.uv.fs_chmod(c.copy, tonumber("600", 8))
+      temp[#temp + 1] = c.copy
+    else
+      plan.claude_json = nil
+    end
+  end
+  return temp
 end
 
 --- @param cmd string[] command to wrap
 --- @param project string project root (writable)
 --- @param tmp_dir string scratch dir of the agent (writable)
+--- @param opts? { plan?: table, exceptions?: table[] }  plan: a plan from M.plan() (the one the
+---   operator saw; rebuilt when the files it assumed absent appeared meanwhile)
 --- @return string[]? wrapped command (the same table when explicitly unsandboxed); nil when refused
 --- @return string? reason
-function M.wrap(cmd, project, tmp_dir)
+--- @return table? handle  { plan, release() }: call release() when the process ended (removes the
+---   private copy of the agent config and the empty placeholders the guards left in the project)
+function M.wrap(cmd, project, tmp_dir, opts)
   assert(type(tmp_dir) == "string" and tmp_dir ~= "", "xyno_sandbox.wrap: tmp_dir is required")
-  local st = M.status()
+  opts = opts or {}
+  local st = M.status_blocking()
   if st.mode == "refused" then
-    return nil, st.reason
+    return nil, st.reason .. (st.hint and (" (" .. st.hint .. ")") or "")
   elseif st.mode == "unsandboxed" then
     return cmd
   end
-  -- The ~/.claude/<x> masks need the dir (bwrap cannot mkdir parents on the
-  -- read-only root), and a fresh machine has none until claude first runs.
-  vim.fn.mkdir(home .. "/.claude", "p")
-  local a = {
-    "bwrap", "--die-with-parent",
-    "--new-session", -- no controlling tty: TIOCSTI keystroke injection
-    "--unshare-user", "--disable-userns", -- no nested bwrap / unshare -r
-    "--unshare-pid", -- other processes (/proc/PID/environ, /proc/PID/root) invisible
-    "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try",
-    "--cap-drop", "ALL",
-    "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
-  }
-
-  for _, v in ipairs(M.scrub_names()) do
-    vim.list_extend(a, { "--unsetenv", v })
+  local plan = opts.plan
+  if plan and (plan.mode ~= "bwrap" or plan.project ~= project or stale(plan)) then
+    plan = nil
   end
-
-  -- Never make $HOME or / writable just because nvim was started there.
-  local rw = { tmp_dir }
-  if project ~= home and project ~= "/" then
-    table.insert(rw, 1, project)
+  plan = plan or M.plan(cmd, project, tmp_dir, { exceptions = opts.exceptions })
+  local temp = prepare(plan)
+  next_id = next_id + 1
+  local h = { id = next_id, plan = plan, temp = temp }
+  h.reg = store.live_add(project, tostring(next_id) .. "-" .. tostring(vim.uv.hrtime()))
+  h.release = function()
+    release(h)
   end
-  vim.list_extend(rw, WRITABLE)
-  for _, p in ipairs(rw) do
-    if exists(p) then
-      vim.list_extend(a, { "--bind", p, p })
-    end
-  end
-
-  -- After the writable binds: hides inside ~/.claude must sit on top of it.
-  -- A hidden file reads as empty: /dev/null bound there gave EACCES (the bind is nodev),
-  -- an empty regular file does not.
-  local empty
-  local function hide(p)
-    local st = vim.uv.fs_stat(p)
-    if st then
-      if st.type ~= "directory" and not empty then
-        empty = vim.fn.tempname() .. ".empty"
-        vim.fn.writefile({}, empty)
-      end
-      vim.list_extend(a, st.type == "directory" and { "--tmpfs", p } or { "--ro-bind", empty, p })
-    end
-  end
-  for _, p in ipairs(HIDDEN_SYSTEM) do
-    hide(p)
-  end
-  for _, p in ipairs(HIDDEN) do
-    hide(home .. p)
-  end
-  for _, g in ipairs(HIDDEN_GLOBS) do
-    for _, p in ipairs(vim.fn.glob(home .. g, true, true)) do
-      hide(p)
-    end
-  end
-
-  -- ~/.claude.json holds user-scope mcpServers (= commands the next claude
-  -- runs unsandboxed). Give the sandbox a private COPY: it works, but nothing
-  -- it writes reaches the real file.
-  local cj = home .. "/.claude.json"
-  if exists(cj) then
-    local copy = vim.fn.tempname() .. ".claude.json"
-    if vim.uv.fs_copyfile(cj, copy) then
-      vim.uv.fs_chmod(copy, tonumber("600", 8))
-      vim.list_extend(a, { "--bind", copy, cj })
-    end
-  end
-
-  -- ~/.claude/projects is read-only except this project's own transcript dir:
-  -- a bind mount point cannot be renamed, so `mv projects/<name> ...; mkdir -p
-  -- projects/<name>/memory` cannot get round the memory mask (other projects'
-  -- transcripts and memory are read-only too).
-  local projects = home .. "/.claude/projects"
-  vim.fn.mkdir(projects, "p")
-  vim.list_extend(a, { "--ro-bind", projects, projects })
-  for _, d in ipairs(own_project_dirs(project)) do
-    vim.fn.mkdir(d, "p")
-    vim.list_extend(a, { "--bind", d, d })
-  end
-
-  local ro, masks = M.readonly_paths(project)
-  for _, p in ipairs(ro) do
-    vim.list_extend(a, { "--ro-bind", p, p })
-  end
-  for _, p in ipairs(masks) do
-    -- project-relative masks (.cargo, .claude) would hit $HOME's own when the
-    -- project is $HOME; the ones inside ~/.claude are safe either way
-    if (project ~= home and project ~= "/") or p:find(home .. "/.claude/", 1, true) == 1 then
-      vim.list_extend(a, { "--tmpfs", p, "--remount-ro", p })
-    end
-  end
-  for _, p in ipairs(HOME_EPHEMERAL) do
-    if exists(p) then
-      vim.list_extend(a, { "--tmpfs", p })
-    end
-  end
-
-  -- nvim's own cwd only when it is inside the project: from $HOME the agent started in $HOME, and
-  -- a cwd outside the project (e.g. under /tmp, which is a tmpfs here) made bwrap fail on chdir
-  local cwd = vim.uv.cwd()
-  local inside = cwd and (cwd == project or project == "/" or cwd:sub(1, #project + 1) == project .. "/")
-  vim.list_extend(a, { "--chdir", inside and cwd or project, "--" })
-  return vim.list_extend(a, cmd)
+  live[h.id] = h
+  return plan_mod.argv(plan), nil, h
 end
 
---- Merge options and register the commands / keymaps.
---- @param opts? { sandbox?: boolean, allow_unsandboxed?: boolean, keymaps?: false|table, commands?: boolean }
+-- ------------------------------------------------------------- statusline
+
+--- One short word for a statusline (lualine: `lualine_x = { require("xyno_sandbox").statusline }`).
+--- Never blocks, never errors.
+function M.statusline()
+  local ok, st = pcall(M.status)
+  if not ok then
+    return "sandbox: ?"
+  end
+  local n = M.running()
+  local runs = n > 0 and (" x" .. n) or ""
+  if st.mode == "bwrap" then
+    if st.ready == "pending" then
+      return "sandbox: checking"
+    end
+    return "sandbox: on" .. runs
+  elseif st.mode == "unsandboxed" then
+    return "sandbox: OFF" .. runs
+  end
+  return "sandbox: refused"
+end
+
+--- Highlight group matching statusline(): DiagnosticOk / DiagnosticWarn / DiagnosticError.
+function M.statusline_hl()
+  local ok, st = pcall(M.status)
+  if not ok or st.mode == "refused" then
+    return "DiagnosticError"
+  elseif st.mode == "unsandboxed" then
+    return "DiagnosticWarn"
+  end
+  return st.ready == "pending" and "DiagnosticHint" or "DiagnosticOk"
+end
+
+-- ------------------------------------------------------------------- setup
+
+--- Merge options and register the commands / keymaps. Invalid options raise an error and change
+--- nothing.
+--- @param opts? table see M.config and validate_opts()
 function M.setup(opts)
-  M.config = vim.tbl_extend("force", M.config, opts or {})
+  opts = opts or {}
+  local errs = M.validate_opts(opts)
+  if #errs > 0 then
+    error("xyno_sandbox.setup: " .. table.concat(errs, "; "), 2)
+  end
+  local merged = vim.tbl_extend("force", M.config, opts)
+  if opts.policy then
+    merged.policy = vim.deepcopy(opts.policy)
+  end
+  M.config = merged
   require("xyno_sandbox.run").register(M.config)
+  if not M._autocmd then
+    M._autocmd = vim.api.nvim_create_autocmd("VimLeavePre", {
+      group = vim.api.nvim_create_augroup("xyno_sandbox", { clear = true }),
+      callback = function()
+        pcall(M.cleanup)
+      end,
+    })
+  end
+end
+
+--- The launch-time policy preview and confirm (see xyno_sandbox.run.confirm).
+function M.confirm(cmd, project, tmp_dir, cb)
+  return require("xyno_sandbox.run").confirm(cmd, project, tmp_dir, cb)
 end
 
 --- Run `cmd` wrapped in a terminal split (see xyno_sandbox.run).

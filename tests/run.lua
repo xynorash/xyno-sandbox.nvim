@@ -10,7 +10,7 @@ if repo == "" or repo == "." then
 end
 
 local function run_all()
-  local total = { passed = 0, failed = 0, skipped = 0 }
+  local total = { passed = 0, failed = 0, skipped = 0, xfailed = 0 }
   local files = vim.fn.glob(repo .. "/tests/*_spec.lua", true, true)
   table.sort(files)
   for _, f in ipairs(files) do
@@ -24,7 +24,7 @@ local function run_all()
       total.failed = total.failed + 1
     end
   end
-  io.stdout:write(("RESULT passed=%d failed=%d skipped=%d\n"):format(total.passed, total.failed, total.skipped))
+  io.stdout:write(("RESULT passed=%d failed=%d skipped=%d xfailed=%d\n"):format(total.passed, total.failed, total.skipped, total.xfailed))
   os.exit(total.failed > 0 and 1 or 0)
 end
 
@@ -48,15 +48,15 @@ local ok, err = xpcall(dofile, debug.traceback, spec)
 if not ok then
   if harness.is_skip(err) then
     io.stdout:write(("SKIP %s (%s)\n"):format(vim.fs.basename(spec), err.reason))
-    counts = { passed = 0, failed = 0, skipped = 1 }
+    counts = { passed = 0, failed = 0, skipped = 1, xfailed = 0 }
   else
     io.stdout:write("FAIL loading " .. spec .. "\n" .. tostring(err) .. "\n")
-    counts = { passed = 0, failed = 1, skipped = 0 }
+    counts = { passed = 0, failed = 1, skipped = 0, xfailed = 0 }
   end
 else
   counts = harness.run()
 end
-io.stdout:write(("RESULT passed=%d failed=%d skipped=%d\n"):format(counts.passed, counts.failed, counts.skipped))
+io.stdout:write(("RESULT passed=%d failed=%d skipped=%d xfailed=%d\n"):format(counts.passed, counts.failed, counts.skipped, counts.xfailed or 0))
 io.stdout:flush()
 pcall(function()
   require("xynotest.helpers").cleanup()
