@@ -142,7 +142,31 @@ M.PROJECT_SECRET_GLOBS = {
   "secret.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.kdbx", "id_rsa", "id_dsa",
   "id_ecdsa", "id_ed25519", "*service-account*.json", "*service_account*.json", "client_secret*.json", "*-credentials.json",
   "*.tfvars", "terraform.tfstate", "terraform.tfstate.*", "*.tfstate", "kubeconfig", "*.kubeconfig",
+  -- frameworks and clouds
+  ".dev.vars", ".dev.vars.*", -- Cloudflare Workers
+  "serviceaccountkey.json", "*serviceaccountkey*.json", "firebase-adminsdk*.json", "google-services.json",
+  "googleservice-info.plist", "gha-creds-*.json", "credentials.tfrc.json", -- Firebase, Google, GitHub Actions, Terraform
+  "wp-config.php", "wp-config-*.php", "local.settings.json", -- WordPress, Azure Functions
+  "token", "tokens", "api_key", "api_keys", "apikey", "apikeys", "api-key", "api-keys", "password", "passwords", "passwd",
+  "application-prod.*", "application-production.*", "appsettings.production.json", "appsettings.secrets.json",
+  "master.key", "*.key.pem", "secrets.yml", "secrets.yaml", "secrets.json", "secrets.toml", ".secrets", -- Spring, .NET, Rails, generic
+  "keystore.properties", "gradle.properties.local", "*.ppk", "*.p8", "*.pkcs12", "*.mobileprovision.secret",
+  -- client configs that keep a password or token
+  ".pgpass", ".my.cnf", ".mylogin.cnf", ".s3cfg", ".boto", ".yarnrc", ".sentryclirc", ".vault_pass", ".vault-password",
+  "vault_pass*", "vault-password*", ".git-credentials", ".gem-credentials", "oauth2.json", "client_secrets.json",
 }
+-- Names that mean "a secret" only as a data file: token.txt, api_keys.json ... but not tokenizer.rs or
+-- api_key.rs (source code that merely handles keys stays readable).
+do
+  local bases = { "token", "tokens", "api_key", "api_keys", "apikey", "apikeys", "api-key", "api-keys", "password", "passwords",
+    "passwd", "secret", "private_key", "privatekey", "access_token", "auth_token", "bearer_token" }
+  local exts = { "txt", "json", "yml", "yaml", "ini", "cfg", "conf", "properties", "toml", "env", "dat", "text" }
+  for _, b in ipairs(bases) do
+    for _, e in ipairs(exts) do
+      M.PROJECT_SECRET_GLOBS[#M.PROJECT_SECRET_GLOBS + 1] = b .. "." .. e
+    end
+  end
+end
 M.PROJECT_SECRET_EXCEPT = {
   ".env.example", ".env.sample", ".env.template", ".env.dist", ".env.defaults", ".env.schema", ".env.tpl",
   ".env.local.example", ".env.test.example", "example.env", "sample.env", "template.env",
@@ -261,6 +285,15 @@ function M.real_probes()
     end,
     realpath = function(p)
       return uv.fs_realpath(p)
+    end,
+    --- { nlink, dev, ino } of a path (symlinks followed), or nil
+    stat_info = function(p)
+      local st = uv.fs_stat(p)
+      return st and { nlink = st.nlink, dev = st.dev, ino = st.ino } or nil
+    end,
+    --- bounded scan of the project files (see xyno_sandbox.scan)
+    scan_project = function(project, opts)
+      return require("xyno_sandbox.scan").project(project, opts)
     end,
   }
 end
@@ -1191,7 +1224,22 @@ function M.build(input)
     return false
   end
   local hseen, unhide_used = {}, {}
-  local function hide(p, why)
+  local link_seen = {}
+  local hide
+  hide = function(p, why)
+    -- bwrap cannot mount on a symlink ("Can't mount on symlink destination"): hide what it points to
+    -- (a project `.env -> ../secrets/env`, a dotfile manager's `~/.npmrc -> dotfiles/npmrc`). The link
+    -- itself stays, and reads the hidden target.
+    if lstat_type(p) == "link" then
+      if not link_seen[p] then
+        link_seen[p] = true
+        local real = probes.realpath and probes.realpath(p)
+        if real and real ~= p then
+          hide(real, why)
+        end
+      end
+      return
+    end
     local ty = probes.stat_type(p)
     if ty and not hseen[p] and reachable(p) then
       if exc_by.unhide[p] then
@@ -1359,6 +1407,46 @@ function M.build(input)
     local rel = s.path:sub(#project + 2)
     if not rel_allow[rel] then
       hide(s.path, s.kind == "socket" and "project socket" or "project secret")
+    end
+  end
+  -- secrets no file name gives away (known token formats), and hard links to anything hidden
+  plan.scan = { enabled = false, files = 0, truncated = false }
+  plan.hardlinks = {}
+  local multi = {}
+  if not shared and not at_home and probes.scan_project then
+    local content = policy.content_scan ~= false
+    local sc = probes.scan_project(project, { content = content }) or {}
+    plan.scan = { enabled = content, files = sc.files or 0, truncated = sc.truncated or false, why = sc.why, hits = #(sc.hits or {}) }
+    multi = sc.multi or {}
+    if sc.truncated then
+      plan.notes[#plan.notes + 1] = ("project scan stopped (%s): files beyond that were not checked for secrets or hard links"):format(sc.why or "limit")
+    end
+    for _, h in ipairs(sc.hits or {}) do
+      local rel = h.path:sub(#project + 2)
+      if not rel_allow[rel] then
+        hide(h.path, "project content: looks like a " .. h.kind)
+      end
+    end
+  end
+  if probes.stat_info then
+    local snapshot = vim.list_slice(plan.hidden, 1, #plan.hidden)
+    for _, h in ipairs(snapshot) do
+      local info = h.kind == "file" and probes.stat_info(h.path) or nil
+      if info and info.nlink and info.nlink > 1 then
+        local found = 0
+        for _, m in ipairs(multi) do
+          if m.dev == info.dev and m.ino == info.ino and m.path ~= h.path then
+            found = found + 1
+            hide(m.path, "hard link of the hidden " .. h.path)
+          end
+        end
+        local unaccounted = info.nlink - 1 - found
+        plan.hardlinks[#plan.hardlinks + 1] = { path = h.path, links = info.nlink, masked = found, unaccounted = math.max(unaccounted, 0) }
+        if unaccounted > 0 then
+          plan.notes[#plan.notes + 1] = ("%s has %d more hard link%s outside the project (or beyond the scan): the sandbox hides this name only;"
+            .. " another name that the sandbox shows would still read it"):format(h.path, unaccounted, unaccounted == 1 and "" or "s")
+        end
+      end
     end
   end
   local masks = {}
@@ -1551,6 +1639,39 @@ function M.build(input)
     end
   end
 
+  -- sanitized copies of git configs (remote URLs with tokens, credential helpers)
+  plan.git_configs = {}
+  if aux.git_dir then
+    local gseen2 = {}
+    local function add_config(src)
+      if not gseen2[src] and probes.stat_type(src) == "file" then
+        gseen2[src] = true
+        plan.git_configs[#plan.git_configs + 1] = { src = src, copy = ("%s/%d.config"):format(aux.git_dir, #plan.git_configs + 1) }
+      end
+    end
+    for _, g in ipairs(w.gits) do
+      if probes.stat_type(g) == "directory" then
+        add_config(g .. "/config")
+        for _, mc in ipairs(probes.glob(g .. "/modules/*/config")) do
+          add_config(mc)
+        end
+      end
+    end
+    for _, rel in ipairs({ "/.gitconfig", "/.config/git/config" }) do
+      local f = home .. rel
+      for _, a in ipairs(plan.home_allow) do
+        if inside(f, a.path) then
+          add_config(f)
+          break
+        end
+      end
+    end
+    if #plan.git_configs > 0 then
+      plan.needs.git_dir = aux.git_dir
+      plan.needs.git_configs = plan.git_configs
+    end
+  end
+
   -- cwd inside the project, else the project
   local ins = cwd == project or project == "/" or cwd:sub(1, #project + 1) == project .. "/"
   plan.chdir = ins and cwd or project
@@ -1683,6 +1804,9 @@ function M.ops(plan)
   end
   for _, r in ipairs(plan.readonly or {}) do
     add("readonly", r.why, "--ro-bind", r.path, r.path)
+  end
+  for _, g in ipairs(plan.git_configs or {}) do
+    add("git", "credentials removed from the copy", "--ro-bind", g.copy, g.src)
   end
   for _, m in ipairs(plan.masks or {}) do
     -- project-relative masks (.cargo, .claude) would hit $HOME's own when the project is $HOME;

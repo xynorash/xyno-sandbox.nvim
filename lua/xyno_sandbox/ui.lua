@@ -160,6 +160,19 @@ function M.lines(plan, ctx)
   end
   section("Hidden project secrets and sockets (replaced with empty ones; e approves one)", proj_hidden, hfmt)
   section("Hidden credential paths (replaced with empty ones)", cred_hidden, hfmt)
+  op_section("Git configs shown without credentials (URL tokens, credential helpers, auth headers removed)", "git")
+  if #(plan.hardlinks or {}) > 0 then
+    section("Hidden files that have other hard links", plan.hardlinks, function(l)
+      return ("%s  [%d links: %d other name%s hidden%s]"):format(short(l.path, home), l.links, l.masked, l.masked == 1 and "" or "s",
+        l.unaccounted > 0 and (", " .. l.unaccounted .. " elsewhere NOT hidden") or "")
+    end)
+  end
+  if plan.scan and plan.scan.enabled then
+    add("")
+    add(("Content scan: %d file%s checked for known token formats%s; %d hidden. It does not find passwords, generic keys or"
+      .. " anything in a format it does not know (see the README)."):format(plan.scan.files, plan.scan.files == 1 and "" or "s",
+      plan.scan.truncated and (" (STOPPED: " .. tostring(plan.scan.why) .. ")") or "", plan.scan.hits or 0))
+  end
   op_section("Other mounts", "ephemeral")
   op_section("Agent state (~/.claude)", "claude")
   op_section("Agent config copy", "claude_json")

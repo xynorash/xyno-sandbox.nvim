@@ -106,6 +106,8 @@ end
 ---   secret_allow = { ".env.test" }       project file names (or project-relative paths) never hidden
 ---   claude_share = { "settings.json", "CLAUDE.md" }  names below ~/.claude shown read-only in the sandbox (allowlist view;
 ---                                        default none: the agent sees only its login and this project's transcripts)
+---   content_scan = true                  look inside project files for known token formats (cloud/forge tokens,
+---                                        private keys) and hide the files that contain one (false: do not)
 ---   symlinks    = "warn"                 "warn" (list them in the preview) | "refuse" (do not start when a
 ---                                        symlink leaves the project and its target is readable)
 --- }
@@ -155,7 +157,7 @@ function M.validate_opts(opts)
     if type(p) ~= "table" then
       errs[#errs + 1] = "policy must be a table"
     else
-      local pknown = { scrub = true, scan_depth = true, project_secrets = true, symlinks = true }
+      local pknown = { scrub = true, scan_depth = true, project_secrets = true, symlinks = true, content_scan = true }
       for _, k in ipairs(POLICY_LISTS) do
         pknown[k] = true
       end
@@ -198,6 +200,9 @@ function M.validate_opts(opts)
       if p.secret_allow ~= nil then str_list("policy.secret_allow", p.secret_allow, errs) end
       if p.project_secrets ~= nil and type(p.project_secrets) ~= "boolean" then
         errs[#errs + 1] = "policy.project_secrets must be a boolean"
+      end
+      if p.content_scan ~= nil and type(p.content_scan) ~= "boolean" then
+        errs[#errs + 1] = "policy.content_scan must be a boolean"
       end
       if p.symlinks ~= nil and p.symlinks ~= "warn" and p.symlinks ~= "refuse" then
         errs[#errs + 1] = 'policy.symlinks must be "warn" or "refuse"'
@@ -357,7 +362,8 @@ local aux_empty
 
 local function aux_paths()
   aux_empty = aux_empty or (vim.fn.tempname() .. ".empty")
-  return { empty = aux_empty, claude_json = vim.fn.tempname() .. ".claude.json", net_dir = vim.fn.tempname() .. ".net" }
+  return { empty = aux_empty, claude_json = vim.fn.tempname() .. ".claude.json", net_dir = vim.fn.tempname() .. ".net",
+    git_dir = vim.fn.tempname() .. ".git" }
 end
 
 --- The plan for running `cmd` here: the structured policy the launcher and the preview share.
@@ -484,7 +490,11 @@ local function release(h)
     vim.fn.delete(h.net_dir, "rf")
   end
   for _, f in ipairs(h.temp) do
-    vim.uv.fs_unlink(f)
+    if vim.uv.fs_stat(f) and vim.uv.fs_stat(f).type == "directory" then
+      vim.fn.delete(f, "rf")
+    else
+      vim.uv.fs_unlink(f)
+    end
   end
   local others = false
   pcall(function()
@@ -614,6 +624,23 @@ local function prepare(plan)
       temp[#temp + 1] = c.copy
     else
       plan.claude_json = nil
+    end
+  end
+  if plan.needs.git_configs and #plan.needs.git_configs > 0 then
+    vim.fn.mkdir(plan.needs.git_dir, "p", tonumber("700", 8))
+    temp[#temp + 1] = plan.needs.git_dir
+    for _, g in ipairs(plan.needs.git_configs) do
+      local f = io.open(g.src, "rb")
+      local text = f and f:read("*a")
+      if f then
+        f:close()
+      end
+      -- an unreadable config becomes an empty one: never the original
+      local clean = text and require("xyno_sandbox.sanitize").git_config(text) or "# xyno-sandbox: this git config could not be read\n"
+      local out = assert(io.open(g.copy, "wb"))
+      out:write(clean)
+      out:close()
+      vim.uv.fs_chmod(g.copy, tonumber("600", 8))
     end
   end
   return temp
