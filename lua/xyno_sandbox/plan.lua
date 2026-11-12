@@ -1017,6 +1017,12 @@ M.ENV_CLAUDE_AUTH = { "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_
 -- Inside a project `.git` directory in git write mode (policy.git_write) these stay read-only: git runs hooks/*, reads
 -- core.fsmonitor / core.hooksPath / filter and alias definitions from config, and attributes and excludes from info/.
 M.GIT_WRITE_LOCKED = { "hooks", "config", "info", "config.worktree" }
+-- ... and these are neither created nor changed either (locked when present, an empty read-only directory when absent):
+-- a rebase / cherry-pick / am state with an `exec` line that the next `git rebase --continue` runs, `remotes/` and
+-- `branches/` (legacy remote definitions), `worktrees/` (a worktree's gitdir carries its own commondir), `modules/`
+-- (not renamable: it is a mount point of its own).
+M.GIT_WRITE_NOCREATE = { "rebase-merge", "rebase-apply", "sequencer", "remotes", "branches", "worktrees", "modules" }
+M.GIT_MODULES_DEPTH = 4 -- nested submodule git directories handled below modules/
 
 -- Skipped by the directory walk (still locked when they ARE the project's own .git).
 M.SCAN_SKIP = {
@@ -2481,6 +2487,9 @@ function M.build(input)
     ):format(M.SCAN_MAX_DIRS)
   end
   plan.git_write = {}
+  plan.git_binds = {}
+  plan.git_pins = {}
+  local git_masks = {}
   for _, p in ipairs(w.gits) do
     -- git write mode (policy.git_write): a `.git` DIRECTORY of the project stays writable so `git add` / `git commit`
     -- can write index, objects, refs, HEAD, logs, and only what makes git run code or change behaviour is
@@ -2491,20 +2500,52 @@ function M.build(input)
       policy.git_write == true
       and not at_home
       and not shared
+      and aux.git_dir
       and p:sub(1, #project + 1) == project .. "/"
       and probes.stat_type(p) == "directory"
     then
-      local bases = { p }
-      for _, mdir in ipairs(probes.glob(p .. "/modules/*")) do
-        if probes.stat_type(mdir) == "directory" then
-          bases[#bases + 1] = mdir
-        end
-      end
-      for _, base in ipairs(bases) do
+      -- Every writable git directory is a MOUNT POINT of its own (--bind d d): a mount point cannot be renamed, so
+      -- `mv .git .git.old && mkdir .git && cp -a .git.old/. .git/` cannot rebuild it with a hook or a config of the
+      -- agent's. The same for modules/ and every submodule git directory in it.
+      local function base(b, depth)
+        plan.git_binds[#plan.git_binds + 1] = b
         for _, sub in ipairs(M.GIT_WRITE_LOCKED) do
-          lock(base .. "/" .. sub, "git (write mode)")
+          if exists(b .. "/" .. sub) then
+            lock(b .. "/" .. sub, "git (write mode)")
+          elseif sub == "hooks" or sub == "info" then
+            git_masks[#git_masks + 1] = b .. "/" .. sub
+          end
+        end
+        -- commondir redirects git to ANOTHER common directory (its config, hooks): pinned to ".", which is the
+        -- directory itself; an existing one (a worktree's) is locked
+        if exists(b .. "/commondir") then
+          lock(b .. "/commondir", "git (write mode)")
+        else
+          plan.git_pins[#plan.git_pins + 1] = {
+            src = b .. "/commondir",
+            copy = ("%s/%d.pin"):format(aux.git_dir, #plan.git_pins + 1),
+            text = ".\n",
+          }
+        end
+        for _, name in ipairs(M.GIT_WRITE_NOCREATE) do
+          local d = b .. "/" .. name
+          if name == "modules" and probes.stat_type(d) == "directory" then
+            plan.git_binds[#plan.git_binds + 1] = d
+            if depth < M.GIT_MODULES_DEPTH then
+              for _, mdir in ipairs(probes.glob(d .. "/*")) do
+                if probes.stat_type(mdir) == "directory" then
+                  base(mdir, depth + 1)
+                end
+              end
+            end
+          elseif exists(d) then
+            lock(d, "git (write mode)")
+          else
+            git_masks[#git_masks + 1] = d
+          end
         end
       end
+      base(p, 1)
       plan.git_write[#plan.git_write + 1] = p
     else
       lock(p, "git")
@@ -2733,6 +2774,9 @@ function M.build(input)
   local masks = {}
   local function mask(p, why, absent_project)
     masks[#masks + 1] = { path = p, why = why, cleanup = absent_project or nil }
+  end
+  for _, d in ipairs(git_masks) do
+    mask(d, "git (write mode): absent " .. d:match("[^/]*$"), true)
   end
   if not at_home then
     for _, m in ipairs(w.members) do
@@ -3011,7 +3055,7 @@ function M.build(input)
     end
   end
   for _, m in ipairs(plan.masks) do
-    if m.why == "absent .git" then
+    if m.why == "absent .git" or m.why:find("^git %(write mode%)") then
       plan.git_locked[#plan.git_locked + 1] = m.path
     end
   end
@@ -3044,9 +3088,10 @@ function M.build(input)
         end
       end
     end
-    if #plan.git_configs > 0 then
+    if #plan.git_configs > 0 or #plan.git_pins > 0 then
       plan.needs.git_dir = aux.git_dir
       plan.needs.git_configs = plan.git_configs
+      plan.needs.git_pins = plan.git_pins
     end
   end
 
@@ -3196,6 +3241,9 @@ function M.ops(plan)
   for _, d in ipairs(projects.own) do
     add("projects", "this project's transcripts, writable", "--bind", d, d)
   end
+  for _, b in ipairs(plan.git_binds or {}) do
+    add("git", "git write mode: a mount point of its own, it cannot be renamed and rebuilt", "--bind", b, b)
+  end
   for _, r in ipairs(plan.readonly or {}) do
     add("readonly", r.why, "--ro-bind", r.path, r.path)
   end
@@ -3215,6 +3263,9 @@ function M.ops(plan)
   end
   for _, g in ipairs(plan.git_configs or {}) do
     add("git", "credentials removed from the copy", "--ro-bind", g.copy, g.src)
+  end
+  for _, g in ipairs(plan.git_pins or {}) do
+    add("git", "git write mode: commondir pinned to the directory itself", "--ro-bind", g.copy, g.src)
   end
   for _, m in ipairs(plan.masks or {}) do
     -- project-relative masks (.cargo, .claude) would hit $HOME's own when the project is $HOME;

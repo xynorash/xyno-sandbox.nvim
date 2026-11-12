@@ -87,6 +87,117 @@ describe("git write mode", function()
     end
   )
 
+  describe("what git write mode must not let the agent plant (the .git directory is rebuilt or redirected)", function()
+    -- the host's own check: an UNSANDBOXED git in the project must run nothing of the agent's
+    local function host_git_runs_nothing(project, canary)
+      vim.system({ "git", "-C", project, "status" }, { text = true }):wait()
+      H.eq(0, vim.fn.filereadable(canary), "an unsandboxed git status ran the agent's command")
+    end
+
+    it(".git itself is a mount point: it cannot be renamed and rebuilt with a hook and a config", function()
+      local project = H.fixture("basic", { git = true })
+      local canary = H.tmpdir() .. "/FSRAN"
+      local ino = vim.uv.fs_stat(project .. "/.git").ino
+      local script = table.concat({
+        "P=" .. project .. "; cd $P",
+        "mv .git .git.old 2>&1; echo mv=$?",
+        "mkdir .git 2>&1; echo mkdir=$?",
+        "cp -a .git.old/. .git/ 2>&1; echo cp=$?",
+        "printf '#!/bin/sh\\ntouch " .. canary .. "\\n' > .git/hooks/pre-commit 2>&1; echo hook=$?",
+        "git config core.fsmonitor 'touch " .. canary .. "' 2>&1; echo gitconfig=$?",
+        "rmdir .git 2>&1; echo rmdir=$?",
+      }, "\n")
+      local out = inside(script, project, { git_write = true })
+      H.no_match(out, "\nmv=0", true, "mv .git must be refused:\n" .. out)
+      H.eq(ino, vim.uv.fs_stat(project .. "/.git").ino, "the same .git directory is still there")
+      H.eq(0, vim.fn.isdirectory(project .. "/.git.old"), "no renamed copy on the host")
+      H.eq(0, vim.fn.filereadable(project .. "/.git/hooks/pre-commit"), "no planted hook")
+      H.no_match(table.concat(vim.fn.readfile(project .. "/.git/config"), "\n"), "fsmonitor", true)
+      host_git_runs_nothing(project, canary)
+    end)
+
+    it("commondir cannot be written: no other common directory (with its own config) can be pointed to", function()
+      local project = H.fixture("basic", { git = true })
+      local canary = H.tmpdir() .. "/FSRAN2"
+      local script = table.concat({
+        "P=" .. project .. "; cd $P",
+        "mkdir evilcommon && cp -a .git/objects .git/refs .git/HEAD evilcommon/",
+        "printf '[core]\\n\\tfsmonitor = touch " .. canary .. "\\n' > evilcommon/config",
+        "echo ../evilcommon > .git/commondir 2>&1; echo commondir=$?",
+        "rm -f .git/commondir 2>&1; echo rm=$?",
+        "git status >/dev/null 2>&1; echo gitstatus=$?",
+      }, "\n")
+      local out = inside(script, project, { git_write = true })
+      H.no_match(out, "\ncommondir=0", true, out)
+      H.no_match(out, "\nrm=0", true, out)
+      H.match(out, "gitstatus=0", true, "git still works inside the sandbox:\n" .. out)
+      H.eq(0, vim.fn.filereadable(project .. "/.git/commondir"), "no commondir on the host")
+      host_git_runs_nothing(project, canary)
+    end)
+
+    it("the state a later `git rebase --continue` would run cannot be created or entered", function()
+      local project = H.fixture("basic", { git = true })
+      local script = table.concat({
+        "P=" .. project .. "; cd $P",
+        "mkdir .git/rebase-merge 2>&1; echo rebase_merge=$?",
+        "mkdir .git/rebase-apply 2>&1; echo rebase_apply=$?",
+        "mkdir .git/sequencer 2>&1; echo sequencer=$?",
+        "mkdir .git/remotes 2>&1; echo remotes=$?",
+        "mkdir .git/branches 2>&1; echo branches=$?",
+        "mkdir .git/worktrees 2>&1; echo worktrees=$?",
+        "mkdir .git/modules 2>&1; echo modules=$?",
+        "mkdir .git/hooks.new && mv .git/hooks .git/hooks.old 2>&1; echo mvhooks=$?",
+      }, "\n")
+      local out = inside(script, project, { git_write = true })
+      for _, k in ipairs({ "rebase_merge", "rebase_apply", "sequencer", "remotes", "branches", "worktrees", "modules", "mvhooks" }) do
+        H.no_match(out, "\n" .. k .. "=0", true, k .. " must be refused:\n" .. out)
+      end
+      for _, d in ipairs({ "rebase-merge", "rebase-apply", "sequencer", "remotes", "branches", "worktrees", "modules" }) do
+        H.eq(0, vim.fn.isdirectory(project .. "/.git/" .. d), "nothing left behind on the host: " .. d)
+      end
+    end)
+
+    it("a submodule git directory is as locked as the main one, nested ones too, and cannot be renamed", function()
+      local project = H.fixture("basic", { git = true })
+      for _, d in ipairs({ "modules/a", "modules/a/modules/b" }) do
+        vim.fn.mkdir(project .. "/.git/" .. d .. "/hooks", "p")
+        vim.fn.mkdir(project .. "/.git/" .. d .. "/info", "p")
+        vim.fn.writefile({ "[core]" }, project .. "/.git/" .. d .. "/config")
+      end
+      local script = table.concat({
+        "P=" .. project .. "; cd $P/.git",
+        "mv modules modules.old 2>&1; echo mvmodules=$?",
+        "mv modules/a modules/a.old 2>&1; echo mva=$?",
+        "mv modules/a/modules modules/a/modules.old 2>&1; echo mvnested=$?",
+        "echo x > modules/a/hooks/pre-commit 2>&1; echo hooka=$?",
+        "echo x > modules/a/modules/b/hooks/pre-commit 2>&1; echo hookb=$?",
+        "echo x >> modules/a/modules/b/config 2>&1; echo configb=$?",
+        "echo ok > modules/a/HEAD 2>&1; echo headwrite=$?",
+      }, "\n")
+      local out = inside(script, project, { git_write = true })
+      for _, k in ipairs({ "mvmodules", "mva", "mvnested", "hooka", "hookb", "configb" }) do
+        H.no_match(out, "\n" .. k .. "=0", true, k .. " must be refused:\n" .. out)
+      end
+      H.match(out, "headwrite=0", true, "the rest of a submodule git dir stays writable:\n" .. out)
+    end)
+
+    it("the argv: every git directory is bound on its own, before the read-only parts, and commondir is pinned", function()
+      local project = H.fixture("basic", { git = true })
+      H.need_sandbox()
+      sb.config.policy = vim.tbl_extend("force", sb.config.policy or {}, { git_write = true })
+      local p = sb.plan({ "true" }, project, H.tmpdir())
+      H.ok(p, "a plan")
+      local argv = table.concat(sb.argv(p), " ")
+      local bind = argv:find("--bind " .. project .. "/.git " .. project .. "/.git", 1, true)
+      local ro = argv:find("--ro-bind " .. project .. "/.git/hooks", 1, true)
+      H.ok(bind and ro and bind < ro, "the .git bind comes before the read-only hooks")
+      H.match(argv, project .. "/.git/commondir", true)
+      sb.config.policy.git_write = nil
+      p = sb.plan({ "true" }, project, H.tmpdir())
+      H.no_match(table.concat(sb.argv(p), " "), "--bind " .. project .. "/.git ", true)
+    end)
+  end)
+
   it("the preview says so: a Git write mode section naming what stays read-only; absent by default", function()
     local project = H.fixture("basic", { git = true })
     H.need_sandbox()

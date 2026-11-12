@@ -114,7 +114,9 @@ end
 ---   keep_run    = { "/run/x" }           paths under the masked /run bound back read-only (no sockets!)
 ---   git_write   = false                  true: "git write mode" - the agent can git add / git commit. The project's .git
 ---                                        directories stay writable except hooks/, config, info/ and config.worktree
----                                        (read-only as before). It can still move refs and rewrite history. Shown in the preview.
+---                                        (read-only as before); each is a mount point (cannot be renamed), commondir is pinned,
+---                                        rebase/sequencer/remotes/branches/worktrees state is read-only (no rebase, am, worktree add).
+---                                        It can still move refs and rewrite history. Shown in the preview.
 ---   project_secrets = true               hide .env, *.pem, ... in the project (false: do not)
 ---   secret_files = { "*.secret" }        more project file name globs to hide
 ---   secret_allow = { ".env.test" }       project file names (or project-relative paths) never hidden
@@ -721,6 +723,9 @@ local function release(h)
       items[#items + 1] = { g.path, "file" }
     end
   end
+  for _, g in ipairs(h.plan.git_pins or {}) do
+    items[#items + 1] = { g.src, "file" } -- the empty mount point bwrap made for the pinned commondir
+  end
   table.sort(items, function(a, b)
     return #a[1] > #b[1] -- children first
   end)
@@ -805,6 +810,11 @@ local function stale(plan)
       return true
     end
   end
+  for _, g in ipairs(plan.git_pins or {}) do
+    if exists(g.src) then
+      return true
+    end
+  end
   return false
 end
 
@@ -851,7 +861,7 @@ local function prepare(plan)
       plan.claude_json = nil
     end
   end
-  if plan.needs.git_configs and #plan.needs.git_configs > 0 then
+  if plan.needs.git_dir then
     vim.fn.mkdir(plan.needs.git_dir, "p", tonumber("700", 8))
     temp[#temp + 1] = plan.needs.git_dir
     for _, g in ipairs(plan.needs.git_configs) do
@@ -868,6 +878,12 @@ local function prepare(plan)
       out:close()
       vim.uv.fs_chmod(g.copy, tonumber("600", 8))
     end
+  end
+  for _, g in ipairs(plan.needs.git_pins or {}) do
+    local out = assert(io.open(g.copy, "wb"))
+    out:write(g.text)
+    out:close()
+    vim.uv.fs_chmod(g.copy, tonumber("600", 8))
   end
   return temp
 end
@@ -1016,6 +1032,9 @@ function M.wrap(cmd, project, tmp_dir, opts)
     if g.cleanup then
       items[#items + 1] = { g.path, "file" }
     end
+  end
+  for _, g in ipairs(plan.git_pins or {}) do
+    items[#items + 1] = { g.src, "file" }
   end
   -- private copies and the socket directory: a next launch removes them when this nvim dies without
   -- running VimLeavePre (kill -9 leaves nvim's own tmpdir behind)

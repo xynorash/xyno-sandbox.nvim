@@ -142,6 +142,9 @@ function M.lines(plan, ctx)
     add(
       "  Read-only: hooks/, config, info/, config.worktree (no hook, fsmonitor, alias, filter or exclude can be planted)."
     )
+    add(
+      "  Not renamable (own mount): .git, modules/. Pinned: commondir. No state of rebase / am / worktree / submodule add (read-only or empty)."
+    )
     add("  It can still rewrite history and move refs of this repository (recover with git reflog).")
   end
   section("Read-only inside the writable paths, git directories locked", plan.git_locked, function(p)

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Ninth round: git write mode bypasses (fix round, red-team findings)
+
+- **`.git` rebuilt in git write mode (critical, reproduced by the verifier)**: `.git` was writable but not a mount point, so `mv .git .git.old && mkdir .git && cp -a .git.old/. .git/` followed by a planted `hooks/pre-commit` and `git config core.fsmonitor ...` left a host `.git` that ran the command on the next unsandboxed `git status`, with an empty release report (the sweep does not enter `.git`). Now every writable git directory, `modules/` and every submodule git directory (4 levels) is bound onto itself, so it cannot be renamed.
+- **`.git/commondir` (critical)**: writing `../evilcommon` made the host git read config from another directory. `commondir` is now pinned (a private file holding `.`, bound read-only over the absent name; the empty mount point bwrap leaves on the host is removed at release) or locked when it exists. Submodule git directories too.
+- **Same family, closed by reading git's behaviour and then by spec**: `rebase-merge/`, `rebase-apply/`, `sequencer/` (an `exec` todo line that a later `git rebase --continue` runs; the verifier wrote one but did not run a rebase, so this vector is closed but its exploit is not verified), `remotes/`, `branches/`, `worktrees/` are read-only when present and masked when absent. `hooks/` and `info/` are masked when absent. Cost: rebase, multi-commit cherry-pick, `am`, `worktree add` and `submodule add` fail inside the sandbox in this mode. The submodule lock now goes below the first level of `modules/`, which it did not before.
+- Specs (`tests/git_write_spec.lua`, new describe) failed first against the previous commit (5 of 5 new ones), and four mutants (no `--bind`, no pin, `rebase-merge` removed from the list, depth 1) are each killed.
+
 ### Git write mode and the target/ walk bound
 
 - **`policy.git_write`** (default false): the agent can `git add` / `git commit`; hooks/, config, info/ and config.worktree stay read-only (also in submodule git dirs); shown in the preview; `tests/git_write_spec.lua`. The README now says plainly that commits fail by default (the old `home_spec` title claimed a commit worked; it only ran `git log` / `git status`).
