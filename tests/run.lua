@@ -204,6 +204,42 @@ end
 
 local FILE_TIMEOUT_MS = tonumber(vim.env.XYNO_TEST_FILE_TIMEOUT_MS) or 240000
 
+-- The spec child runs in a process group of its own (detach = setsid), watched by a small shell process that is
+-- not a child of this runner: when this runner disappears (kill -9 cannot be caught) the watchdog kills the whole
+-- group and whatever still mentions the run's directories, so a spec that sleeps or hangs does not outlive it.
+-- (The environment, not the command line, carries the directories: pkill -f must not match the watchdog itself.)
+local WATCHDOG = [[
+rpid=$1; rstart=$2; pg=$3
+alive() {
+  set -- $(sed 's/^.*) //' "/proc/$rpid/stat" 2>/dev/null)
+  [ -n "$1" ] && [ "$1" != Z ] && [ "${20}" = "$rstart" ]
+}
+while alive; do
+  kill -0 -- "-$pg" 2>/dev/null || exit 0
+  sleep 0.5
+done
+kill -KILL -- "-$pg" 2>/dev/null
+for d in "$WD_ROOT" "$WD_TMP"; do
+  [ -n "$d" ] && pkill -KILL -f -- "$d" 2>/dev/null
+done
+exit 0
+]]
+
+local function run_child(argv, env, root)
+  local child = vim.system(argv, { text = true, env = env, detach = true })
+  local wd = vim.system(
+    { "sh", "-c", WATCHDOG, "xyno-watchdog", tostring(vim.uv.os_getpid()), tostring(reaper.proc_start(vim.uv.os_getpid())), tostring(child.pid) },
+    { detach = true, env = vim.tbl_extend("force", env, { WD_ROOT = root, WD_TMP = env.XYNO_TEST_SCRATCH }) }
+  )
+  local r = child:wait(FILE_TIMEOUT_MS)
+  if r.code == 124 or r.signal == 15 or r.signal == 9 then
+    pcall(vim.uv.kill, -child.pid, 9) -- what the hung spec started
+  end
+  pcall(vim.uv.kill, -wd.pid, 9)
+  pcall(wd.wait, wd, 2000)
+  return r
+end
+
 local function run_all(files)
   local reaped = reaper.reap_stale(reaper.bases(repo))
   if reaped > 0 then
@@ -224,9 +260,7 @@ local function run_all(files)
     table.sort(files)
   end
   for _, f in ipairs(files) do
-    local r = vim
-      .system({ vim.v.progpath, "--headless", "-l", repo .. "/tests/run.lua", f }, { text = true, env = env })
-      :wait(FILE_TIMEOUT_MS)
+    local r = run_child({ vim.v.progpath, "--headless", "-l", repo .. "/tests/run.lua", f }, env, root)
     if r.code == 124 or r.signal == 15 or r.signal == 9 then
       total.failed = total.failed + 1
       io.stdout:write(
