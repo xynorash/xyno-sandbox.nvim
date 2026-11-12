@@ -29,6 +29,7 @@ M.MAX_MS = 1500
 M.SKIP_MAX_DIRS = 4000
 M.SKIP_MAX_MS = 700
 M.REVIEW_MAX_BYTES = 128 * 1024
+M.CONTENT_MAX_BYTES = 8 * 1024 * 1024 -- content read inside protected names per snapshot (more: signature only)
 M.REVIEW_KEEP_BYTES = 4 * 1024 * 1024 -- text kept in memory for the diff summary (more: hashes only)
 M.QUARANTINE_FILE_MAX = 1024 * 1024
 M.QUARANTINE_ENTRIES_MAX = 300
@@ -67,8 +68,9 @@ local function list(path)
   return out
 end
 
--- signature of a protected directory: its whole listing (bounded), so a file planted inside changes it
-local function dir_sig(path)
+-- signature of a protected directory: its whole listing (bounded), so a file planted inside changes it.
+-- `collect(rel, st, path)` (optional) is called for every entry that is inside the bound (the content record uses it).
+local function dir_sig(path, collect)
   local parts, n = {}, 400
   local function rec(p, rel, d)
     for _, e in ipairs(list(p)) do
@@ -79,6 +81,9 @@ local function dir_sig(path)
       local st = vim.uv.fs_lstat(p .. "/" .. e[1])
       if st then
         parts[#parts + 1] = rel .. e[1] .. "=" .. sig_of(st)
+        if collect then
+          collect(rel .. e[1], st, p .. "/" .. e[1])
+        end
         if st.type == "directory" and d < 6 then
           rec(p .. "/" .. e[1], rel .. e[1] .. "/", d + 1)
         end
@@ -115,6 +120,7 @@ function M.snapshot(project)
   local snap = {
     protected = {},
     ino = {},
+    content = {},
     review = {},
     dirs = 0,
     skip_dirs = 0,
@@ -131,14 +137,51 @@ function M.snapshot(project)
     end
   end
   local kept = 0
+  local content_bytes = 0
+  -- what is IN a protected name: one record per file below it ({ id = hash of the content, text? }), so a changed
+  -- file is found whatever its size and mtime say, and a protected name that moved is compared by content
+  local function file_rec(path, st)
+    if st.type == "link" then
+      return { id = "link:" .. tostring(vim.uv.fs_readlink(path)) }
+    elseif st.type == "file" then
+      if st.size <= M.REVIEW_MAX_BYTES and content_bytes + st.size <= M.CONTENT_MAX_BYTES then
+        local data = read_small(path, M.REVIEW_MAX_BYTES)
+        if data then
+          content_bytes = content_bytes + #data
+          local rec = { id = "sha:" .. vim.fn.sha256(data) }
+          if kept + #data <= M.REVIEW_KEEP_BYTES then
+            rec.text = data
+            kept = kept + #data
+          end
+          return rec
+        end
+      end
+      return { id = "sig:" .. sig_of(st) } -- too big (or unreadable): the signature only
+    end
+    return { id = st.type }
+  end
   local function record_protected(path, noisy)
     local st = vim.uv.fs_lstat(path)
     if st then
       local sig = sig_of(st)
       if st.type == "directory" and not noisy then
-        sig = sig .. "#" .. dir_sig(path)
+        local files = { [""] = { id = "directory" } }
+        sig = sig .. "#" .. dir_sig(path, function(rel, est, epath)
+          files[rel] = file_rec(epath, est)
+        end)
+        snap.content[path] = { files = files }
       elseif noisy then
         sig = st.type -- appearance only
+      else
+        snap.content[path] = { files = { [""] = file_rec(path, st) } }
+      end
+      if snap.content[path] then
+        local ids = {}
+        for rel, f in pairs(snap.content[path].files) do
+          ids[#ids + 1] = rel .. "\0" .. f.id
+        end
+        table.sort(ids)
+        snap.content[path].hash = vim.fn.sha256(table.concat(ids, "\n"))
       end
       snap.protected[path] = sig
       snap.ino[path] = ident(st)
@@ -257,27 +300,102 @@ local function line_delta(a, b)
   return plus, minus
 end
 
+local function nlines(text)
+  if not text or text == "" then
+    return 0
+  end
+  local _, n = text:gsub("\n", "")
+  return n + (text:sub(-1) == "\n" and 0 or 1)
+end
+
+--- What changed between two content records of a protected name: lines added and removed (nil when a file's text
+--- was not kept) and the names (relative to the protected name) that differ.
+local function content_delta(b, a)
+  local plus, minus, names, known = 0, 0, {}, true
+  local function add(p, m)
+    if p and m then
+      plus, minus = plus + p, minus + m
+    else
+      known = false
+    end
+  end
+  local function lines_of(f)
+    if f.text then
+      return nlines(f.text)
+    end
+    return f.id:sub(1, 4) == "sha:" and nil or 0 -- (a directory, a link: no lines)
+  end
+  for rel, af in pairs(a.files) do
+    local bf = b.files[rel]
+    if not bf then
+      names[#names + 1] = rel == "" and "(itself)" or rel
+      add(lines_of(af), 0)
+    elseif bf.id ~= af.id then
+      names[#names + 1] = rel == "" and "(itself)" or rel
+      add(line_delta(bf.text, af.text))
+    end
+  end
+  for rel, bf in pairs(b.files) do
+    if not a.files[rel] then
+      names[#names + 1] = rel == "" and "(itself)" or rel
+      add(0, lines_of(bf))
+    end
+  end
+  table.sort(names)
+  return known and plus or nil, known and minus or nil, names
+end
+
 --- What differs between a launch snapshot and a snapshot taken now.
---- @return { planted: string[], modified: string[], removed: string[], moved: { from: string, to: string }[], incomplete: string[], partial: string[], review: { path: string, change: string, plus?: integer, minus?: integer }[] }
+--- `moved`: the same inode under a new path. `tampered`: of those, the ones whose CONTENT is not what it was at launch
+--- (a protected directory renamed and then given a new file). `modified`: a name that existed at launch and changed
+--- (signature or content); `details[path]` holds its lines added and removed.
+--- @return { planted: string[], modified: string[], removed: string[], moved: { from: string, to: string }[], tampered: { from: string, to: string, plus?: integer, minus?: integer, names: string[] }[], details: table<string, table>, incomplete: string[], partial: string[], review: { path: string, change: string, plus?: integer, minus?: integer }[] }
 function M.compare(before, after)
-  local res = { planted = {}, modified = {}, removed = {}, review = {}, moved = {}, incomplete = {}, partial = {} }
+  local res = {
+    planted = {},
+    modified = {},
+    removed = {},
+    review = {},
+    moved = {},
+    tampered = {},
+    details = {},
+    incomplete = {},
+    partial = {},
+  }
   -- a directory that was RENAMED during the run (mv sub sub_old) shows its protected names under a new path: they are the
-  -- same inodes as before, not new files
+  -- same inodes as before, not new files. Their CONTENT is still compared with what it was at launch.
   local gone = {}
   for p in pairs(before.protected) do
     if after.protected[p] == nil and before.ino and before.ino[p] then
       gone[before.ino[p]] = p
     end
   end
+  local function changed(p_before, p_after)
+    local bc = before.content and before.content[p_before]
+    local ac = after.content and after.content[p_after]
+    if bc and ac and bc.hash ~= ac.hash then
+      local plus, minus, names = content_delta(bc, ac)
+      return true, { plus = plus, minus = minus, names = names }
+    end
+    return false
+  end
   for p, sig in pairs(after.protected) do
     local from = before.protected[p] == nil and after.ino and gone[after.ino[p] or ""] or nil
     if from then
       res.moved[#res.moved + 1] = { from = from, to = p }
+      local diff, d = changed(from, p)
+      if diff then
+        res.tampered[#res.tampered + 1] = { from = from, to = p, plus = d.plus, minus = d.minus, names = d.names }
+      end
       gone[after.ino[p]] = nil
     elseif before.protected[p] == nil then
       res.planted[#res.planted + 1] = p
-    elseif before.protected[p] ~= sig then
-      res.modified[#res.modified + 1] = p
+    else
+      local diff, d = changed(p, p)
+      if diff or before.protected[p] ~= sig then
+        res.modified[#res.modified + 1] = p
+        res.details[p] = d or { plus = 0, minus = 0, names = {} }
+      end
     end
   end
   local moved_from = {}
@@ -322,6 +440,9 @@ function M.compare(before, after)
   table.sort(res.moved, function(x, y)
     return x.to < y.to
   end)
+  table.sort(res.tampered, function(x, y)
+    return x.to < y.to
+  end)
   table.sort(res.planted)
   table.sort(res.modified)
   table.sort(res.removed)
@@ -352,6 +473,9 @@ local function copy_tree(src, dest, budget, depth)
   elseif st.type == "directory" then
     vim.fn.mkdir(dest, "p")
     if depth < 8 then
+      if not vim.uv.fs_scandir(src) then
+        vim.uv.fs_chmod(src, bit.bor(st.mode, tonumber("700", 8))) -- (a 000 directory the agent made: it is ours)
+      end
       for _, e in ipairs(list(src)) do
         copy_tree(src .. "/" .. e[1], dest .. "/" .. e[1], budget, depth + 1)
       end
@@ -360,6 +484,10 @@ local function copy_tree(src, dest, budget, depth)
     vim.fn.mkdir(vim.fs.dirname(dest), "p")
     if st.size <= M.QUARANTINE_FILE_MAX then
       local data = read_small(src, M.QUARANTINE_FILE_MAX)
+      if not data and bit.band(st.mode, tonumber("400", 8)) == 0 then
+        vim.uv.fs_chmod(src, bit.bor(st.mode, tonumber("600", 8)))
+        data = read_small(src, M.QUARANTINE_FILE_MAX)
+      end
       if data then
         local f = io.open(dest, "wb")
         if f then
@@ -382,8 +510,60 @@ local function dirty_path(project)
   return store.dir() .. "/dirty/" .. safe_key(project) .. ".json"
 end
 
+M._delete = function(p)
+  return vim.fn.delete(p, "rf") -- (never follows a symlink)
+end
+
+--- Give the owner every permission on `p` and what is below it (a directory the agent made 555 or 000 cannot be
+--- emptied otherwise). Symlinks are left alone. Bounded.
+local function unlock_tree(p, budget)
+  local st = vim.uv.fs_lstat(p)
+  budget.n = budget.n - 1
+  if not st or budget.n < 0 then
+    return
+  end
+  if st.type == "directory" then
+    vim.uv.fs_chmod(p, bit.bor(st.mode, tonumber("700", 8)))
+    for _, e in ipairs(list(p)) do
+      unlock_tree(p .. "/" .. e[1], budget)
+    end
+  elseif st.type == "file" then
+    vim.uv.fs_chmod(p, bit.bor(st.mode, tonumber("600", 8)))
+  end
+end
+
+--- Remove `p`; when that fails (a 555 parent, a 555 directory inside) give the owner write access to the parents up to
+--- `root` and to everything below `p`, try again, and put the modes of the parents back. Returns the result of the delete
+--- (0 = removed).
+local function force_delete(root, p)
+  local rc = M._delete(p)
+  if rc == 0 then
+    return 0
+  end
+  local restore = {}
+  local dir = vim.fs.dirname(p)
+  while dir and #dir >= #root and dir ~= "/" do
+    local st = vim.uv.fs_lstat(dir)
+    if st and st.type == "directory" and bit.band(st.mode, tonumber("700", 8)) ~= tonumber("700", 8) then
+      restore[#restore + 1] = { dir, bit.band(st.mode, tonumber("7777", 8)) }
+      vim.uv.fs_chmod(dir, bit.bor(st.mode, tonumber("700", 8)))
+    end
+    if dir == root then
+      break
+    end
+    dir = vim.fs.dirname(dir)
+  end
+  unlock_tree(p, { n = 5000 })
+  rc = M._delete(p)
+  for _, r in ipairs(restore) do
+    vim.uv.fs_chmod(r[1], r[2])
+  end
+  return rc
+end
+
 --- Copy `paths` (planted names) into the quarantine and remove them from the project. Returns
---- { dir, moved = { { path, ok } }, cut }.
+--- { dir, moved = { { path, ok } }, cut }. A parent directory the agent made read-only (555, or 000) is opened up for
+--- the copy and the removal and put back afterwards; a name that still cannot be removed is reported (`ok = false`).
 function M.quarantine(project, paths)
   local stamp = os.date("!%Y%m%dT%H%M%SZ")
   local dir = ("%s/quarantine/%s/%s"):format(store.dir(), safe_key(project), stamp)
@@ -393,9 +573,23 @@ function M.quarantine(project, paths)
   for _, p in ipairs(paths) do
     local rel = p:sub(1, #project + 1) == project .. "/" and p:sub(#project + 2) or vim.fs.basename(p)
     local budget = { n = M.QUARANTINE_ENTRIES_MAX }
+    -- (a parent without x or r cannot even be looked into)
+    local opened = {}
+    local par = vim.fs.dirname(p)
+    while par and #par > #project do
+      local st = vim.uv.fs_lstat(par)
+      if st and st.type == "directory" and bit.band(st.mode, tonumber("500", 8)) ~= tonumber("500", 8) then
+        opened[#opened + 1] = { par, bit.band(st.mode, tonumber("7777", 8)) }
+        vim.uv.fs_chmod(par, bit.bor(st.mode, tonumber("700", 8)))
+      end
+      par = vim.fs.dirname(par)
+    end
     copy_tree(p, dir .. "/" .. rel, budget, 0)
     cut = cut or budget.cut or false
-    local rc = vim.fn.delete(p, "rf") -- (never follows a symlink)
+    local rc = force_delete(project, p)
+    for _, o in ipairs(opened) do
+      vim.uv.fs_chmod(o[1], o[2])
+    end
     moved[#moved + 1] = { path = p, ok = rc == 0 }
   end
   return { dir = dir, moved = moved, cut = cut }
@@ -410,6 +604,7 @@ function M.mark_dirty(project, info)
     quarantine = info.quarantine,
     failed = info.failed or {},
     modified = info.modified or {},
+    tampered = info.tampered or {},
     incomplete = info.incomplete or {},
   }
   local ok, text = pcall(vim.json.encode, rec)
@@ -475,15 +670,26 @@ function M.dirty_reason(rec)
         table.concat(rec.incomplete, "; ")
       )
   end
+  if rec.tampered and #rec.tampered > 0 then
+    local t = rec.tampered[1]
+    text = text
+      .. (text ~= "" and " " or "")
+      .. ("A protected name was moved and its content changed (%s -> %s%s)."):format(
+        tostring(t.from),
+        tostring(t.to),
+        #rec.tampered > 1 and (", and %d more"):format(#rec.tampered - 1) or ""
+      )
+  end
   if text == "" then
     text = "a previous sandbox run left this project marked for review."
   end
   return text .. " Review it (:XynoSandboxReview), then clear the mark with :XynoSandboxReview clear"
 end
 
---- The report text of a finished run (nil when nothing changed).
+--- The report text of a finished run (nil when nothing changed). The second result marks the lines that are about a
+--- protected name that was changed or moved-and-changed: those are shown as errors, not as hints.
 function M.report(res)
-  local lines = {}
+  local lines, loud = {}, {}
   if #res.review > 0 then
     local parts = {}
     for _, r in ipairs(res.review) do
@@ -495,11 +701,28 @@ function M.report(res)
     )
   end
   if #res.modified > 0 then
-    lines[#lines + 1] = ("existing files that act outside the sandbox changed: %s"):format(
-      table.concat(vim.list_slice(res.modified, 1, 8), ", ")
+    local parts = {}
+    for _, p in ipairs(res.modified) do
+      local d = res.details and res.details[p]
+      parts[#parts + 1] = p .. ((d and d.plus and d.minus) and (" +%d -%d"):format(d.plus, d.minus) or "")
+    end
+    lines[#lines + 1] = ("existing files that act outside the sandbox CHANGED (review them before you use this project): %s"):format(
+      table.concat(vim.list_slice(parts, 1, 8), ", ") .. (#parts > 8 and (", ... " .. #parts .. " in all") or "")
     )
+    loud[#lines] = true
   end
-  return lines
+  if res.tampered and #res.tampered > 0 then
+    local parts = {}
+    for _, t in ipairs(res.tampered) do
+      local d = (t.plus and t.minus) and (" +%d -%d"):format(t.plus, t.minus) or ""
+      parts[#parts + 1] = ("%s -> %s%s (%s)"):format(t.from, t.to, d, table.concat(vim.list_slice(t.names, 1, 4), ", "))
+    end
+    lines[#lines + 1] = ("protected names that were MOVED and whose content is not what it was (review them before you use this project): %s"):format(
+      table.concat(vim.list_slice(parts, 1, 8), "; ") .. (#parts > 8 and ("; ... " .. #parts .. " in all") or "")
+    )
+    loud[#lines] = true
+  end
+  return lines, loud
 end
 
 return M

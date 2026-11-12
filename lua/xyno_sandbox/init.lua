@@ -588,17 +588,19 @@ local function sweep(h)
   end
   local ok, err = pcall(function()
     local res = guard.compare(h.snapshot, guard.snapshot(h.plan.project))
-    h.planted, h.modified, h.review, h.moved, h.incomplete =
-      res.planted, res.modified, res.review, res.moved, res.incomplete
+    h.planted, h.modified, h.review, h.moved, h.incomplete, h.tampered =
+      res.planted, res.modified, res.review, res.moved, res.incomplete, res.tampered
     -- the empty placeholders bwrap mounted over an absent name stay behind when the directory holding them was RENAMED
     -- (mv sub sub_old): an empty read-only file or an empty directory, not something the agent created
     local planted = {}
     for _, p in ipairs(res.planted) do
       local st = vim.uv.fs_lstat(p)
-      if st and st.type == "directory" and is_empty_leftover(p, "dir") then
-        vim.uv.fs_rmdir(p)
-      elseif st and st.type == "file" and is_empty_leftover(p, "file") then
-        vim.uv.fs_unlink(p)
+      -- (an empty leftover that cannot be removed, a parent made 555, is handled like a planted name: the quarantine opens
+      -- the parent up)
+      if st and st.type == "directory" and is_empty_leftover(p, "dir") and vim.uv.fs_rmdir(p) then
+        -- removed
+      elseif st and st.type == "file" and is_empty_leftover(p, "file") and vim.uv.fs_unlink(p) then
+        -- removed
       else
         planted[#planted + 1] = p
       end
@@ -614,12 +616,13 @@ local function sweep(h)
       end
       h.quarantine = q.dir
     end
-    if #res.planted > 0 or #res.incomplete > 0 then
+    if #res.planted > 0 or #res.incomplete > 0 or #res.tampered > 0 then
       guard.mark_dirty(h.plan.project, {
         planted = res.planted,
         quarantine = q and q.dir,
         failed = failed,
         modified = res.modified,
+        tampered = res.tampered,
         incomplete = res.incomplete,
       })
     end
@@ -660,8 +663,9 @@ local function sweep(h)
         vim.log.levels.INFO
       )
     end
-    for _, line in ipairs(guard.report(res)) do
-      vim.notify("xyno-sandbox: " .. line, vim.log.levels.WARN)
+    local lines, loud = guard.report(res)
+    for i, line in ipairs(lines) do
+      vim.notify("xyno-sandbox: " .. line, loud[i] and vim.log.levels.ERROR or vim.log.levels.WARN)
     end
   end)
   if not ok then
