@@ -131,12 +131,25 @@ function M.lines(plan, ctx)
   section("Writable", plan.writable, function(w)
     return ("%s  [%s]"):format(short(w.path, home), w.why)
   end)
+  if plan.git_write and #plan.git_write > 0 then
+    add("")
+    add(
+      "Git write mode (policy.git_write = true): the agent CAN git add / git commit. Writable: index, objects, refs, HEAD, logs in"
+    )
+    for _, g in ipairs(plan.git_write) do
+      add("  " .. short(g, home))
+    end
+    add(
+      "  Read-only: hooks/, config, info/, config.worktree (no hook, fsmonitor, alias, filter or exclude can be planted)."
+    )
+    add("  It can still rewrite history and move refs of this repository (recover with git reflog).")
+  end
   section("Read-only inside the writable paths, git directories locked", plan.git_locked, function(p)
     return short(p, home)
   end)
   local other = {}
   for _, r in ipairs(plan.readonly) do
-    if r.why ~= "git" then
+    if r.why ~= "git" and r.why ~= "git (write mode)" then
       other[#other + 1] = r
     end
   end

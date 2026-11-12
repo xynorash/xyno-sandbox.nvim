@@ -314,19 +314,22 @@ describe("the allowlist view inside a real sandbox", function()
     end
   )
 
-  it("a git commit works with the user's git config from the allowlist", function()
-    if vim.fn.executable("git") ~= 1 then
-      return harness.skip("git not installed")
+  it(
+    "git log and git status work read-only inside the sandbox (commits need policy.git_write, see git_write_spec)",
+    function()
+      if vim.fn.executable("git") ~= 1 then
+        return harness.skip("git not installed")
+      end
+      local project = H.fixture("basic", { git = true })
+      local out, r = inside({
+        "bash",
+        "-c",
+        "git -C " .. project .. " log --oneline | head -3; git -C " .. project .. " status --short | head",
+      }, project)
+      H.eq(0, r.code, out)
+      H.match(out, "init", true, out)
     end
-    local project = H.fixture("basic", { git = true })
-    local out, r = inside({
-      "bash",
-      "-c",
-      "git -C " .. project .. " log --oneline | head -3; git -C " .. project .. " status --short | head",
-    }, project)
-    H.eq(0, r.code, out)
-    H.match(out, "init", true, out)
-  end)
+  )
 
   it("the installed agent CLI (claude) still starts: --version works inside the sandbox", function()
     if vim.fn.executable("claude") ~= 1 then

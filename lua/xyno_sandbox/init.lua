@@ -112,6 +112,9 @@ end
 ---   scan_depth  = 8                      how deep nested .git / members are looked for (1..32)
 ---   home_allow  = { "~/x" }              more $HOME paths shown read-only in home = "allowlist" mode
 ---   keep_run    = { "/run/x" }           paths under the masked /run bound back read-only (no sockets!)
+---   git_write   = false                  true: "git write mode" - the agent can git add / git commit. The project's .git
+---                                        directories stay writable except hooks/, config, info/ and config.worktree
+---                                        (read-only as before). It can still move refs and rewrite history. Shown in the preview.
 ---   project_secrets = true               hide .env, *.pem, ... in the project (false: do not)
 ---   secret_files = { "*.secret" }        more project file name globs to hide
 ---   secret_allow = { ".env.test" }       project file names (or project-relative paths) never hidden
@@ -184,6 +187,7 @@ function M.validate_opts(opts)
       local pknown = {
         scrub = true,
         scan_depth = true,
+        git_write = true,
         project_secrets = true,
         symlinks = true,
         content_scan = true,
@@ -242,6 +246,9 @@ function M.validate_opts(opts)
       end
       if p.secret_allow ~= nil then
         str_list("policy.secret_allow", p.secret_allow, errs)
+      end
+      if p.git_write ~= nil and type(p.git_write) ~= "boolean" then
+        errs[#errs + 1] = "policy.git_write must be a boolean"
       end
       if p.project_secrets ~= nil and type(p.project_secrets) ~= "boolean" then
         errs[#errs + 1] = "policy.project_secrets must be a boolean"

@@ -1014,6 +1014,10 @@ M.ENV_VALUE_SCAN = true
 -- ~/.claude/.credentials.json); with file-based login claude never reads them.
 M.ENV_CLAUDE_AUTH = { "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN" }
 
+-- Inside a project `.git` directory in git write mode (policy.git_write) these stay read-only: git runs hooks/*, reads
+-- core.fsmonitor / core.hooksPath / filter and alias definitions from config, and attributes and excludes from info/.
+M.GIT_WRITE_LOCKED = { "hooks", "config", "info", "config.worktree" }
+
 -- Skipped by the directory walk (still locked when they ARE the project's own .git).
 M.SCAN_SKIP = {
   target = true,
@@ -2476,8 +2480,35 @@ function M.build(input)
       .. " directories, secrets and symlinks are not handled"
     ):format(M.SCAN_MAX_DIRS)
   end
+  plan.git_write = {}
   for _, p in ipairs(w.gits) do
-    lock(p, "git")
+    -- git write mode (policy.git_write): a `.git` DIRECTORY of the project stays writable so `git add` / `git commit`
+    -- can write index, objects, refs, HEAD, logs, and only what makes git run code or change behaviour is
+    -- locked: hooks/, config, info/ (attributes, exclude), config.worktree, and the same four inside every
+    -- modules/<name>/ (submodule git dirs). Anything else (a gitdir outside the project, a `.git` file) is
+    -- locked whole as before.
+    if
+      policy.git_write == true
+      and not at_home
+      and not shared
+      and p:sub(1, #project + 1) == project .. "/"
+      and probes.stat_type(p) == "directory"
+    then
+      local bases = { p }
+      for _, mdir in ipairs(probes.glob(p .. "/modules/*")) do
+        if probes.stat_type(mdir) == "directory" then
+          bases[#bases + 1] = mdir
+        end
+      end
+      for _, base in ipairs(bases) do
+        for _, sub in ipairs(M.GIT_WRITE_LOCKED) do
+          lock(base .. "/" .. sub, "git (write mode)")
+        end
+      end
+      plan.git_write[#plan.git_write + 1] = p
+    else
+      lock(p, "git")
+    end
   end
   if not at_home then
     for _, rel in ipairs(M.PROJECT_READONLY) do
@@ -2626,7 +2657,7 @@ function M.build(input)
     end
     for _, r in ipairs(plan.readonly) do
       if inside(r.path, project) then
-        if r.why == "git" then
+        if r.why == "git" or r.why == "git (write mode)" then
           for _, sub in ipairs({ "/config", "/hooks", "/info", "/config.worktree" }) do
             visit(r.path .. sub, 0)
           end
@@ -2975,7 +3006,7 @@ function M.build(input)
   -- git directories locked (a view of readonly for the preview)
   plan.git_locked = {}
   for _, r in ipairs(plan.readonly) do
-    if r.why == "git" then
+    if r.why == "git" or r.why == "git (write mode)" then
       plan.git_locked[#plan.git_locked + 1] = r.path
     end
   end

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Git write mode and the target/ walk bound
+
+- **`policy.git_write`** (default false): the agent can `git add` / `git commit`; hooks/, config, info/ and config.worktree stay read-only (also in submodule git dirs); shown in the preview; `tests/git_write_spec.lua`. The README now says plainly that commits fail by default (the old `home_spec` title claimed a commit worked; it only ran `git log` / `git status`).
+- **Walk bound inside target/, node_modules/, virtualenvs**: reaching the second budget during a run (an ordinary first build) is INFO (`res.info`), no longer an incomplete check that refuses the next launch. A protected name found in the walked part still marks the project dirty. `tests/round7_spec.lua` updated and extended.
+
 ### Eighth hardening round (verifier findings on the seventh)
 
 Specs are in `tests/round8_spec.lua`, `tests/round8_net_spec.lua` and `tests/round8_scan_spec.lua`. The guard and runner specs were written first and failed against the previous commit (12 of the 17 first specs failed; the other 5 pin behaviour that already held, see items 5 and 6).
