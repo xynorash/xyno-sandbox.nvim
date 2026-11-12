@@ -648,8 +648,8 @@ function M.write_scrubbed_claude_json(src, dest, project)
   local raw = f:read("*a")
   f:close()
   local ok, data = pcall(vim.json.decode, raw)
-  if not ok or type(data) ~= "table" then
-    return false
+  if not ok or type(data) ~= "table" or vim.islist(data) and #data > 0 then
+    return false -- (a list, a number, null: not a config; the agent starts from a fresh one)
   end
   data = require("xyno_sandbox.sanitize").claude_json(data, { project, vim.uv.fs_realpath(project) })
   local out = assert(vim.uv.fs_open(dest, "w", tonumber("600", 8)))

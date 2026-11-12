@@ -528,7 +528,7 @@ describe("the ~/.claude.json copy keeps the login state and drops the rest", fun
     H.eq(nil, out.history)
     H.eq(nil, out.oauthAccount.emailAddress)
     H.eq(nil, out.oauthAccount.displayName)
-    H.eq("u-1", out.oauthAccount.accountUuid)
+    H.eq(nil, out.oauthAccount.accountUuid)
     H.eq(3, out.numStartups)
     H.eq({ "/p" }, vim.tbl_keys(out.projects))
   end)

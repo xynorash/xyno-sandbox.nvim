@@ -523,3 +523,59 @@ describe("a credential inside a read-only (locked) directory stays hidden", func
     H.ok(ro_at and hide_at and hide_at > ro_at, "hide (" .. tostring(hide_at) .. ") must follow the read-only bind (" .. tostring(ro_at) .. ")")
   end)
 end)
+
+-- ------------------------------------------------------------------ F5 + non-table JSON
+describe("F5: the ~/.claude.json copy drops what the agent does not need", function()
+  local sanitize = require("xyno_sandbox.sanitize")
+  local DATA = {
+    numStartups = 3, theme = "dark",
+    oauthAccount = { accountUuid = "u-1", organizationUuid = "o-1", emailAddress = "me@x.example", displayName = "Me", organizationRole = "admin" },
+    env = { AWS_PROFILE = "prod" }, awsAuthRefresh = "aws sso login --profile prod", awsCredentialExport = "aws-export",
+    apiKeyHelper = "/usr/local/bin/get-key", hooks = { PreToolUse = { { command = "curl evil" } } },
+    cachedGrowthBookFeatures = { f = true }, cachedStatsigGates = { g = true }, cachedDynamicConfigs = { c = 1 },
+    projects = { ["/p"] = { hasTrustDialogAccepted = true } },
+  }
+  it("drops account ids, the env map, auth-refresh commands, hooks and the feature caches", function()
+    local out = sanitize.claude_json(vim.deepcopy(DATA), { "/p" })
+    for _, k in ipairs({ "env", "awsAuthRefresh", "awsCredentialExport", "apiKeyHelper", "hooks", "cachedGrowthBookFeatures",
+      "cachedStatsigGates", "cachedDynamicConfigs" }) do
+      H.eq(nil, out[k], k)
+    end
+    H.eq(nil, out.oauthAccount.accountUuid)
+    H.eq(nil, out.oauthAccount.organizationUuid)
+    H.eq(nil, out.oauthAccount.emailAddress)
+    H.eq(nil, out.oauthAccount.displayName)
+    H.eq("admin", out.oauthAccount.organizationRole, "what is not an identifier stays")
+    H.eq(3, out.numStartups)
+    H.eq(true, out.projects["/p"].hasTrustDialogAccepted)
+  end)
+end)
+
+describe("a ~/.claude.json that is not a JSON object", function()
+  local sanitize = require("xyno_sandbox.sanitize")
+  it("sanitize.claude_json returns an empty object for anything that is not one", function()
+    for _, v in ipairs({ "text", 12, true, vim.NIL, { 1, 2, 3 } }) do
+      local ok, out = pcall(sanitize.claude_json, v, { "/p" })
+      H.ok(ok, "raised for " .. vim.inspect(v) .. ": " .. tostring(out))
+      H.eq("{}", vim.json.encode(out))
+    end
+  end)
+
+  it("the launcher shares none of: null, a number, a string, a list; odd members do not crash it", function()
+    local d = H.tmpdir()
+    local function try(text)
+      write(d .. "/in.json", text)
+      return pcall(sb.write_scrubbed_claude_json, d .. "/in.json", d .. "/out.json", "/p")
+    end
+    for _, t in ipairs({ "null", "123", '"s"', "true", "[1,2]", "", "{" }) do
+      local ok, shared = try(t)
+      H.ok(ok, "raised for " .. t)
+      H.eq(false, shared, "shared for " .. t)
+    end
+    for _, t in ipairs({ "{}", "[]", '{"projects":"x"}', '{"projects":[1]}', '{"mcpServers":"x"}', '{"oauthAccount":7}', '{"projects":{"/p":{"mcpServers":3}}}' }) do
+      local ok, shared = try(t)
+      H.ok(ok, "raised for " .. t)
+      H.eq(true, shared, t)
+    end
+  end)
+end)

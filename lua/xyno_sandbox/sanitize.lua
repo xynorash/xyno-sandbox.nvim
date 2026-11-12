@@ -66,6 +66,10 @@ end
 -- projects' repository paths, an anonymous id, and the old global prompt history.
 M.CLAUDE_JSON_DROP = {
   "githubRepoPaths", "primaryApiKey", "customApiKeyResponses", "userID", "anonymousId", "history", "apiKey",
+  -- the agent does not need these to work and each is either an identifier of the account, a command that
+  -- runs with the account's cloud credentials, or a cache keyed to the account
+  "env", "hooks", "awsAuthRefresh", "awsCredentialExport", "apiKeyHelper", "cachedGrowthBookFeatures",
+  "cachedStatsigGates", "cachedDynamicConfigs",
 }
 -- Keys (at any depth) whose value is removed when the key NAME says it is a credential.
 M.CLAUDE_JSON_SECRET_KEYS = { "token", "secret", "password", "passwd", "apikey", "api_key", "authorization", "credential", "bearer", "cookie" }
@@ -131,6 +135,9 @@ end
 --- @param project_keys string[] the project directory spellings
 --- @return table
 function M.claude_json(data, project_keys)
+  if type(data) ~= "table" or vim.islist(data) and #data > 0 then
+    return vim.empty_dict() -- not a JSON object (null, a number, a list...): nothing of it is kept
+  end
   if type(data.projects) == "table" then
     local keep = {}
     for _, key in ipairs(project_keys) do
@@ -152,7 +159,7 @@ function M.claude_json(data, project_keys)
   if type(data.oauthAccount) == "table" then
     for k in pairs(data.oauthAccount) do
       local low = tostring(k):lower()
-      if low:find("email", 1, true) or low:find("name", 1, true) then
+      if low:find("email", 1, true) or low:find("name", 1, true) or low:find("uuid", 1, true) then
         data.oauthAccount[k] = nil
       end
     end
