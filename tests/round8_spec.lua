@@ -1,6 +1,6 @@
 -- Eighth round: the sweep compares CONTENT (a moved protected name, an existing one changed deep in the tree),
--- more auto-exec names, a quarantine that survives chmod 555 parents, nested skipped directories, the runner that
--- takes its children with it, and the survivors of the mutation run that protect something.
+-- more auto-exec names, a quarantine that survives chmod 555 parents, nested skipped directories and the exact
+-- subdirectory mount budget (the runner, the proxy and the scan have their own round8_*_spec.lua files).
 local H = require("xynotest.helpers")
 local sb = require("xyno_sandbox")
 local plan = require("xyno_sandbox.plan")
@@ -31,53 +31,6 @@ local function rel_list(project, paths)
   end
   return out
 end
-
--- ------------------------------------------------------------------ (7) the runner
-describe("tests/run.lua when the runner itself is killed (kill -9)", function()
-  it("the spec child and what it started do not outlive it", function()
-    local dir = H.tmpdir()
-    local flag = dir .. "/started"
-    write(
-      dir .. "/hang_spec.lua",
-      ([[
-      it("starts a child and waits", function()
-        vim.system({ "sh", "-c", "sleep 1203; :", "r8-leak-marker" })
-        local f = io.open(%q, "w") f:write("1") f:close()
-        vim.wait(90000)
-      end)
-    ]]):format(flag)
-    )
-    local obj = vim.system(
-      { vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/hang_spec.lua" },
-      { text = true, env = { XYNO_TEST_WORKER = "0" } }
-    )
-    local started = vim.wait(30000, function()
-      return uv.fs_stat(flag) ~= nil
-    end, 50)
-    uv.kill(obj.pid, 9)
-    local nvim_left = {}
-    local gone = vim.wait(15000, function()
-      return #H.procs("r8-leak-marker") == 0 and #H.procs("sleep 1203") == 0
-    end, 100)
-    local left = {}
-    for _, p in ipairs(H.procs("r8-leak-marker")) do
-      left[#left + 1] = p
-    end
-    for _, p in ipairs(H.procs("sleep 1203")) do
-      left[#left + 1] = p
-    end
-    for _, p in ipairs(left) do
-      uv.kill(p[1], 9)
-    end
-    for _, p in ipairs(H.procs(dir .. "/hang_spec.lua")) do
-      nvim_left[#nvim_left + 1] = p
-      uv.kill(p[1], 9)
-    end
-    H.ok(started, "the spec started")
-    H.ok(gone, "left behind: " .. vim.inspect(left))
-    H.eq({}, nvim_left, "the spec's nvim is gone")
-  end)
-end)
 
 local function inside(project, script)
   H.need_sandbox()

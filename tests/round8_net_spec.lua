@@ -86,6 +86,10 @@ describe("is_public_ip: an IPv4 address inside an IPv6 one is judged by the same
     "8.8.8.8", "1.2.3.4", "10.9.8.7", "11.9.8.7", "100.64.5.6", "100.128.5.6", "127.9.8.7", "169.254.5.6",
     "172.16.5.4", "172.31.5.4", "172.32.5.4", "192.0.2.7", "192.0.3.7", "192.168.5.4", "198.18.5.6", "198.51.100.7",
     "198.51.101.7", "203.0.113.9", "203.0.114.9", "224.5.6.7", "223.5.6.7", "0.5.6.7", "93.184.216.34",
+    -- the last byte decides nothing for the verdict but moves the third one when the arithmetic is off by one
+    "192.0.2.0", "192.0.2.255", "192.0.3.0", "198.51.100.0", "198.51.100.255", "198.51.101.255", "203.0.113.0",
+    "203.0.113.255", "203.0.112.255", "172.16.0.0", "172.31.255.255", "100.64.0.0", "100.127.255.255", "192.168.255.255",
+    "192.0.0.255", "169.254.255.255", "198.19.255.255", "223.255.255.255", "1.255.255.255",
   }
   local function hex(ip)
     local a, b, c, d = ip:match("(%d+)%.(%d+)%.(%d+)%.(%d+)")
@@ -360,6 +364,275 @@ describe("the pumps move everything, in order, with back pressure", function()
       return c.eof
     end), "the client never saw the end")
     c.pipe:close()
+    p.close()
+  end)
+end)
+
+describe("is_public_ip: the reserved ::/8 is refused except the embedded IPv4 forms", function()
+  local net = require("xyno_sandbox.net")
+  it("each group after the NAT64 prefix must be zero for the prefix to count", function()
+    for _, ip in ipairs({
+      "64:ff9b:1::808:808", "64:ff9b:0:1::808:808", "64:ff9b:0:0:1:0:808:808", "64:ff9b::1:808:808",
+      "64:ff9b:0:0:0:1:808:808", "64:ff9a::808:808",
+    }) do
+      H.not_ok(net.is_public_ip(ip), ip)
+    end
+    H.ok(net.is_public_ip("64:ff9b::808:808"))
+    H.ok(net.is_public_ip("64:ff9b:0:0:0:0:808:808"))
+  end)
+  it("::a:b:c with a group before the last two that is neither 0 nor ffff is not an embedded address", function()
+    for _, ip in ipairs({ "::1:808:808", "::fffe:808:808", "::2:808:808", "0:0:0:0:2:0:808:808", "0:0:0:1::808:808" }) do
+      H.not_ok(net.is_public_ip(ip), ip)
+    end
+    H.ok(net.is_public_ip("::ffff:808:808"))
+    H.ok(net.is_public_ip("::808:808"))
+  end)
+  it("::/8 ends at 00ff: ff::1 is refused, 100::1 is not in it", function()
+    H.not_ok(net.is_public_ip("ff::1"))
+    H.not_ok(net.is_public_ip("fe::1"))
+    H.ok(net.is_public_ip("100::1"))
+  end)
+end)
+
+-- ------------------------------------------------------------------ request parsing and limits
+local function raw(p, data, until_)
+  local pipe = uv.new_pipe(false)
+  local r = { buf = "", eof = false }
+  pipe:connect(p.sock, function(err)
+    assert(not err, err)
+    pipe:read_start(function(_, chunk)
+      if chunk then
+        r.buf = r.buf .. chunk
+      else
+        r.eof = true
+      end
+    end)
+    if data then
+      pipe:write(data)
+    end
+  end)
+  r.pipe = pipe
+  return r
+end
+
+describe("the CONNECT target is validated", function()
+  local function refused(target)
+    local p = start_proxy({ "allowed.test" })
+    local r = raw(p, "CONNECT " .. target .. " HTTP/1.1\r\n\r\n")
+    H.ok(wait_for(function()
+      return r.eof
+    end), target .. ": " .. r.buf)
+    r.pipe:close()
+    p.close()
+    return r.buf, p.decisions
+  end
+
+  it("no port, a port of 0, 65536, letters or a raw IP: 403 and a refusal in the log", function()
+    for _, t in ipairs({ "allowed.test", "allowed.test:0", "allowed.test:65536", "allowed.test:99999", "allowed.test:x", "127.0.0.1:443", "[::1]:443", ":443", "a:443" }) do
+      local buf, decisions = refused(t)
+      H.match(buf, "HTTP/1.1 403", true, t .. ": " .. buf)
+      H.eq(false, decisions[1].allowed, t)
+    end
+  end)
+
+  it("the ports 1 and 65535 are valid ports (refused only for the allowlist)", function()
+    for _, port in ipairs({ 1, 65535 }) do
+      local buf, decisions = refused("other.test:" .. port)
+      H.match(buf, "not on the network allowlist", true, buf)
+      H.eq(port, decisions[1].port)
+    end
+  end)
+
+  it("a name that is not on the list is 403, with the host and port in the log", function()
+    local buf, decisions = refused("other.test:443")
+    H.match(buf, "HTTP/1.1 403", true)
+    H.eq("other.test", decisions[1].host)
+    H.eq(443, decisions[1].port)
+    H.match(decisions[1].reason, "allowlist", true)
+  end)
+
+  it("a method other than CONNECT is 405", function()
+    local p = start_proxy({ "allowed.test" })
+    local r = raw(p, "GET http://allowed.test/ HTTP/1.1\r\n\r\n")
+    H.ok(wait_for(function()
+      return r.eof
+    end))
+    H.match(r.buf, "HTTP/1.1 405", true)
+    H.eq("not CONNECT", p.decisions[1].reason)
+    H.eq(0, p.decisions[1].port)
+    r.pipe:close()
+    p.close()
+  end)
+
+  it("a target of more than 80 characters is cut in the log and in the answer", function()
+    local long = ("a"):rep(90) .. ".test:99999"
+    local p = start_proxy({ "allowed.test" })
+    local r = raw(p, "CONNECT " .. long .. " HTTP/1.1\r\n\r\n")
+    H.ok(wait_for(function()
+      return r.eof
+    end))
+    H.eq(80, #p.decisions[1].host)
+    H.match(r.buf, ("a"):rep(80) .. " is not", true, r.buf)
+    r.pipe:close()
+    p.close()
+  end)
+end)
+
+describe("resolution failures are told apart in the log", function()
+  it("a name that only resolves to a private address: 502 'resolves only to non-public addresses'", function()
+    net.resolver = function(_, cb)
+      cb({ "10.0.0.5" })
+    end
+    local p = start_proxy({ "allowed.test" })
+    local r = raw(p, "CONNECT allowed.test:443 HTTP/1.1\r\n\r\n")
+    H.ok(wait_for(function()
+      return r.eof
+    end))
+    H.match(r.buf, "HTTP/1.1 502", true)
+    H.match(p.decisions[1].reason, "non-public", true)
+    r.pipe:close()
+    p.close()
+  end)
+
+  it("a name that does not resolve: 502 'cannot resolve: <why>'", function()
+    net.resolver = function(_, cb)
+      cb(nil, "NXDOMAIN")
+    end
+    local p = start_proxy({ "allowed.test" })
+    local r = raw(p, "CONNECT allowed.test:443 HTTP/1.1\r\n\r\n")
+    H.ok(wait_for(function()
+      return r.eof
+    end))
+    H.match(r.buf, "HTTP/1.1 502", true)
+    H.eq("cannot resolve: NXDOMAIN", p.decisions[1].reason)
+    r.pipe:close()
+    p.close()
+  end)
+
+  it("an empty answer is 'cannot resolve', not 'non-public'", function()
+    net.resolver = function(_, cb)
+      cb({}, "no address")
+    end
+    local p = start_proxy({ "allowed.test" })
+    local r = raw(p, "CONNECT allowed.test:443 HTTP/1.1\r\n\r\n")
+    H.ok(wait_for(function()
+      return r.eof
+    end))
+    H.match(p.decisions[1].reason, "cannot resolve", true)
+    r.pipe:close()
+    p.close()
+  end)
+
+  it("every address refused to connect: 502 'cannot connect'", function()
+    local srv = uv.new_tcp()
+    assert(srv:bind("127.0.0.1", 0))
+    local port = srv:getsockname().port
+    srv:close() -- (nothing listens there any more)
+    net.allow_private = true
+    net.resolver = function(_, cb)
+      cb({ "127.0.0.1" })
+    end
+    local p = start_proxy({ "allowed.test:" .. port })
+    local r = raw(p, "CONNECT allowed.test:" .. port .. " HTTP/1.1\r\n\r\n")
+    H.ok(wait_for(function()
+      return r.eof
+    end))
+    H.match(r.buf, "HTTP/1.1 502", true)
+    H.match(r.buf, "cannot connect to allowed.test", true)
+    H.eq("connect failed", p.decisions[1].reason)
+    r.pipe:close()
+    p.close()
+  end)
+
+  it("the system resolver reports a name that does not exist as a refusal, not a crash", function()
+    local p = start_proxy({ "nonexistent-host.invalid" })
+    local r = raw(p, "CONNECT nonexistent-host.invalid:443 HTTP/1.1\r\n\r\n")
+    H.ok(wait_for(function()
+      return r.eof
+    end, 20000))
+    H.match(r.buf, "HTTP/1.1 502", true)
+    H.match(p.decisions[1].reason, "cannot resolve", true)
+    r.pipe:close()
+    p.close()
+  end)
+end)
+
+describe("the proxy's own limits", function()
+  it("a socket path of 100 bytes binds, 101 is refused with the length in the message", function()
+    local dir = H.tmpdir()
+    local pad = 100 - #dir - 1
+    if pad < 1 then
+      return
+    end
+    local ok100, err100 = net.start({ sock = dir .. "/" .. ("s"):rep(pad), hosts = { "allowed.test" } })
+    H.ok(ok100, err100)
+    ok100.close()
+    local no, err = net.start({ sock = dir .. "/" .. ("s"):rep(pad + 1), hosts = { "allowed.test" } })
+    H.eq(nil, no)
+    H.match(err, "too long (101 bytes)", true)
+  end)
+
+  it("the socket is 0600", function()
+    local p = start_proxy({ "allowed.test" })
+    H.eq(tonumber("600", 8), bit.band(uv.fs_stat(p.sock).mode, tonumber("777", 8)))
+    p.close()
+  end)
+
+  it("the log keeps the last 200 decisions, oldest dropped first", function()
+    local p = start_proxy({ "allowed.test" })
+    for i = 1, 203 do
+      local r = raw(p, ("CONNECT h%d.test:443 HTTP/1.1\r\n\r\n"):format(i))
+      H.ok(wait_for(function()
+        return r.eof
+      end), "request " .. i)
+      r.pipe:close()
+    end
+    H.eq(200, #p.decisions)
+    H.eq("h4.test", p.decisions[1].host)
+    H.eq("h203.test", p.decisions[200].host)
+    p.close()
+  end)
+
+  it("a head of exactly 8192 bytes is waited for, 8193 is 431", function()
+    local p = start_proxy({ "allowed.test" })
+    local r = raw(p, ("A"):rep(8192))
+    vim.wait(400)
+    H.eq("", r.buf, "8192 bytes: still waiting")
+    r.pipe:write("A")
+    H.ok(wait_for(function()
+      return r.eof
+    end))
+    H.match(r.buf, "HTTP/1.1 431", true)
+    r.pipe:close()
+    p.close()
+  end)
+
+  it("a head that never completes is answered with 408 after the head timeout", function()
+    local p = start_proxy({ "allowed.test" })
+    local r = raw(p, "CONNECT allowed.test:443 HTTP/1.1\r\n")
+    H.ok(wait_for(function()
+      return r.eof
+    end, 16000), "no timeout answer: " .. r.buf)
+    H.match(r.buf, "HTTP/1.1 408", true)
+    r.pipe:close()
+    p.close()
+  end)
+
+  it("a request in two packets is put together", function()
+    local port = listen(nil, nil)
+    net.allow_private = true
+    net.resolver = function(_, cb)
+      cb({ "127.0.0.1" })
+    end
+    local p = start_proxy({ "allowed.test:" .. port })
+    local r = raw(p, ("CONNECT allowed.test:%d HTTP/1.1\r\nHost: x"):format(port))
+    vim.wait(200)
+    H.eq("", r.buf)
+    r.pipe:write("\r\n\r\n")
+    H.ok(wait_for(function()
+      return r.buf:find("HTTP/1.1 200", 1, true) ~= nil
+    end), r.buf)
+    r.pipe:close()
     p.close()
   end)
 end)
