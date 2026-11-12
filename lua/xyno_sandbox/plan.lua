@@ -102,18 +102,75 @@ M.HIDDEN = {
 }
 -- Globs under $HOME (shell and tool histories).
 M.HIDDEN_GLOBS = { "/.*_history*", "/.lesshst", "/.config/fish/fish_history" }
--- Absolute system paths: container/dbus sockets are root-equivalent (the user is in group
--- docker) or reach other services; /run/user holds the gpg/ssh agent, keyring, wayland and
--- session-bus sockets.
-function M.hidden_system(uid)
-  return {
-    "/run/user/" .. uid,
-    "/run/docker.sock", "/run/docker", "/run/containerd", "/run/podman", "/run/libvirt",
-    "/run/dbus", "/run/snapd.socket", "/run/snapd-snap.socket",
-    -- tailscaled.sock is mode 0666: `tailscale status` listed the peers and RunSSH was on
-    "/run/tailscale", "/run/seatd.sock",
-  }
-end
+-- Host directories replaced by an empty tmpfs: pathname unix sockets (ssh-agent, systemd varlink,
+-- polkit, journal, dbus, docker, the user session in /run/user/<uid>, tmux, X11) bypass the network
+-- filter and are not governed by file permissions the way the sandbox is, so none of these
+-- directories is visible at all. Only what is explicitly kept (M.RUN_KEEP, policy.keep_run) is
+-- bound back, read-only. /tmp is always an empty tmpfs (see M.argv).
+M.MASKED_SYSTEM = { "/run", "/var/tmp" }
+-- /var/run is a symlink to /run nearly everywhere; when it is a real directory it is masked too.
+M.MASKED_IF_DIR = { "/var/run" }
+-- Re-bound read-only under the masked /run when present (they hold no sockets): the NixOS system
+-- profile that PATH points into, and its graphics drivers.
+M.RUN_KEEP = { "/run/current-system", "/run/booted-system", "/run/opengl-driver" }
+-- Environment variables that name a socket or directory the agent could be reached through; the
+-- path is hidden as well when it lives outside the masked directories.
+M.SOCKET_ENV = { "SSH_AUTH_SOCK", "GPG_AGENT_INFO", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "WAYLAND_DISPLAY", "NVIM", "NVIM_LISTEN_ADDRESS" }
+
+-- $HOME in "allowlist" mode (the default): $HOME is an empty tmpfs and only these paths (when they
+-- exist) are bound back read-only, plus the project, the scratch directory, the writable agent and
+-- cargo caches, the directory of the agent binary and the directories on $PATH that live under
+-- $HOME. Credentials inside them (~/.cargo/credentials, ~/.config/git/credentials) stay hidden.
+M.HOME_ALLOW = {
+  "/.cargo", "/.rustup", -- toolchains (registry and git are writable, see WRITABLE)
+  "/.local/share/claude", -- the agent binary
+  "/.gitconfig", "/.config/git", -- git identity and settings
+}
+
+-- Toolchain directories named by environment variables; shown read-only (when they are under $HOME).
+M.HOME_ALLOW_ENV = {
+  "CARGO_HOME", "RUSTUP_HOME", "GOROOT", "GOPATH", "GOBIN", "NVM_DIR", "PYENV_ROOT", "VOLTA_HOME", "BUN_INSTALL",
+  "DENO_INSTALL", "SDKMAN_DIR", "JAVA_HOME", "ANDROID_HOME", "ASDF_DIR", "ASDF_DATA_DIR", "MISE_DATA_DIR",
+  "N_PREFIX", "PNPM_HOME", "RBENV_ROOT", "FNM_DIR", "NPM_CONFIG_PREFIX", "DOTNET_ROOT", "FLUTTER_ROOT",
+}
+
+-- Project secrets (matched against the lower-cased base name, `*` = any characters): hidden with
+-- an empty read-only file. Templates (.env.example ...) are not secrets and stay readable.
+M.PROJECT_SECRET_GLOBS = {
+  ".env", ".env.*", "*.env", ".envrc.local", ".npmrc", ".yarnrc.yml", ".pypirc", ".netrc", "_netrc",
+  ".git-credentials", ".dockercfg", ".htpasswd", "credentials", "credentials.*", "secrets", "secrets.*",
+  "secret.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.kdbx", "id_rsa", "id_dsa",
+  "id_ecdsa", "id_ed25519", "service-account*.json", "service_account*.json", "client_secret*.json",
+  "*.tfvars", "terraform.tfstate", "terraform.tfstate.*", "*.tfstate", "kubeconfig", "*.kubeconfig",
+}
+M.PROJECT_SECRET_EXCEPT = {
+  ".env.example", ".env.sample", ".env.template", ".env.dist", ".env.defaults", ".env.schema", ".env.tpl",
+  ".env.local.example", ".env.test.example", "example.env", "sample.env", "template.env",
+}
+-- Directories of that kind inside a project (hidden with an empty tmpfs).
+M.PROJECT_SECRET_DIRS = { ".aws", ".ssh", ".gnupg", ".kube", ".azure" }
+
+-- Exceptions that are refused outright (a decision, not a policy knob).
+M.WRITABLE_FORBIDDEN = { "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/boot", "/proc", "/sys", "/dev", "/run", "/var/run", "/root" }
+-- Under $HOME: files and directories that run, or steer tools, outside the sandbox later.
+M.WRITABLE_FORBIDDEN_HOME = {
+  "/.bashrc", "/.bash_profile", "/.bash_login", "/.bash_logout", "/.profile", "/.zshrc", "/.zshenv", "/.zprofile",
+  "/.zlogin", "/.zlogout", "/.inputrc", "/.xinitrc", "/.xprofile", "/.xsession", "/.xsessionrc", "/.gitconfig",
+  "/.ssh", "/.gnupg", "/.pam_environment", "/.config/autostart", "/.config/systemd", "/.config/environment.d",
+  "/.config/fish", "/.config/nvim", "/.config/git", "/.config/plasma-workspace", "/.local/bin", "/.cargo/bin",
+  "/.cargo/config", "/.cargo/config.toml", "/.local/share/applications", "/.config/Code", "/.vscode",
+}
+-- System secrets that "unhide" never reveals.
+M.UNHIDE_FORBIDDEN = { "/etc/shadow", "/etc/gshadow", "/etc/shadow-", "/etc/gshadow-", "/etc/sudoers", "/etc/sudoers.d", "/etc/ssh", "/etc/security", "/root" }
+-- Environment variables that decide which code runs; "env" exceptions for them need the expert flag.
+M.ENV_DANGEROUS_EXACT = {
+  PATH = true, LD_PRELOAD = true, LD_LIBRARY_PATH = true, LD_AUDIT = true, LD_DEBUG_OUTPUT = true, BASH_ENV = true,
+  ENV = true, PYTHONPATH = true, PYTHONSTARTUP = true, PYTHONHOME = true, NODE_OPTIONS = true, NODE_PATH = true,
+  PERL5OPT = true, PERL5LIB = true, RUBYOPT = true, RUBYLIB = true, GIT_SSH_COMMAND = true, GIT_EXEC_PATH = true,
+  CARGO_BUILD_RUSTC_WRAPPER = true, RUSTC_WRAPPER = true, RUSTC_WORKSPACE_WRAPPER = true, RUSTFLAGS = true,
+  SHELLOPTS = true, PS4 = true, PROMPT_COMMAND = true, IFS = true, HOME = true, SHELL = true,
+}
+M.ENV_DANGEROUS_PREFIX = { "LD_", "DYLD_", "BASH_FUNC_" }
 
 -- Environment scrub: any variable whose name contains one of these ...
 M.ENV_CONTAINS = {
@@ -129,6 +186,7 @@ M.ENV_PREFIX = {
 M.ENV_EXACT = {
   DATABASE_URL = true, DBUS_SESSION_BUS_ADDRESS = true, DISPLAY = true, WAYLAND_DISPLAY = true,
   XAUTHORITY = true, SSH_AUTH_SOCK = true, GPG_AGENT_INFO = true, KUBECONFIG = true,
+  NVIM = true, NVIM_LISTEN_ADDRESS = true, -- the editor's RPC socket: full control of the editor
   MYSQL_PWD = true, SSHPASS = true, -- not a "PASSWORD" by name; a bare PWD would also be the cwd
 }
 -- Variables claude itself authenticates with. Kept only when login is NOT file based (no
@@ -142,9 +200,6 @@ M.SCAN_SKIP = {
 }
 M.SCAN_DEPTH = 8 -- nested .git and workspace members are found down to this depth
 M.SCAN_MAX_DIRS = 20000 -- the walk stops here and the plan says so (plan.notes)
-
--- Host name resolution services reachable over unix sockets; hidden when the network is filtered.
-M.HIDDEN_RESOLVERS = { "/run/systemd/resolve", "/run/nscd", "/run/avahi-daemon", "/run/dnsmasq", "/run/NetworkManager", "/run/unbound" }
 
 M.SKIP_PERMISSIONS_FLAGS = { "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions" }
 
@@ -165,6 +220,11 @@ function M.real_probes()
   return {
     stat_type = function(p)
       local st = uv.fs_stat(p)
+      return st and st.type or nil
+    end,
+    --- like stat_type, but a symlink is "link" (not followed)
+    lstat_type = function(p)
+      local st = uv.fs_lstat(p)
       return st and st.type or nil
     end,
     exists = function(p)
@@ -303,17 +363,47 @@ local function resolve_gitfile(probes, dotgit, dir)
   return out
 end
 
+--- Lua pattern of a glob (`*` = any characters), anchored.
+local function glob_pattern(g)
+  return "^" .. g:gsub("[%^%$%(%)%%%.%[%]%+%-%?]", "%%%0"):gsub("%*", ".*") .. "$"
+end
+
+--- Does base name `name` match a secret glob in `globs` (and no exception)? Case-insensitive.
+function M.is_secret_name(name, globs, except)
+  local n = name:lower()
+  for _, e in ipairs(except or {}) do
+    if n == e:lower() then
+      return false
+    end
+  end
+  for _, g in ipairs(globs) do
+    if n:match(glob_pattern(g:lower())) then
+      return true
+    end
+  end
+  return false
+end
+
 --- One walk of the project down to `depth`: every `.git` (dir or file, plus the real gitdirs
---- behind `.git` files) and every workspace-member candidate (non-hidden directory).
---- @return { gits: string[], members: { dir: string, cargo: boolean }[], truncated: boolean }
-local function walk(probes, project, depth)
+--- behind `.git` files), every workspace-member candidate (non-hidden directory), the secret files
+--- and sockets, and the symlinks.
+--- @param opts? { secrets?: string[], except?: string[], secret_dirs?: string[] }
+--- @return { gits: string[], members: { dir: string, cargo: boolean }[], secrets: { path: string, kind: string }[],
+---   links: string[], truncated: boolean }
+local function walk(probes, project, depth, opts)
+  opts = opts or {}
   local gits, gseen, members = {}, {}, {}
+  local secrets, links = {}, {}
   local visited, truncated = 0, false
   local function addgit(p)
     if not gseen[p] and probes.exists(p) then
       gseen[p] = true
       gits[#gits + 1] = p
     end
+  end
+  local sdirs = {}
+  for _, d in ipairs(opts.secret_dirs or {}) do
+    sdirs[d] = true
   end
   local function scan(dir, d)
     local dotgit = dir .. "/.git"
@@ -326,12 +416,27 @@ local function walk(probes, project, depth)
       end
       addgit(dotgit)
     end
+    local entries = probes.list(dir)
+    for _, e in ipairs(entries) do
+      local name, ty = e[1], e[2]
+      if ty == "file" or ty == "link" then
+        if opts.secrets and M.is_secret_name(name, opts.secrets, opts.except) then
+          secrets[#secrets + 1] = { path = dir .. "/" .. name, kind = "file" }
+        elseif ty == "link" then
+          links[#links + 1] = dir .. "/" .. name
+        end
+      elseif ty == "socket" then
+        secrets[#secrets + 1] = { path = dir .. "/" .. name, kind = "socket" }
+      elseif ty == "directory" and sdirs[name] then
+        secrets[#secrets + 1] = { path = dir .. "/" .. name, kind = "dir" }
+      end
+    end
     if d >= depth then
       return
     end
-    for _, e in ipairs(probes.list(dir)) do
+    for _, e in ipairs(entries) do
       local name, ty = e[1], e[2]
-      if ty == "directory" and not M.SCAN_SKIP[name] then
+      if ty == "directory" and not M.SCAN_SKIP[name] and not sdirs[name] then
         visited = visited + 1
         if visited > M.SCAN_MAX_DIRS then
           truncated = true
@@ -349,7 +454,7 @@ local function walk(probes, project, depth)
     end
   end
   scan(project, 0)
-  return { gits = gits, members = members, truncated = truncated }
+  return { gits = gits, members = members, secrets = secrets, links = links, truncated = truncated }
 end
 
 local function own_project_dirs(probes, home, project, cwd)
@@ -377,7 +482,66 @@ end
 
 M.EXCEPTION_KINDS = { env = true, unhide = true, writable = true, host = true }
 
---- May this exception be applied? Pure. `ctx` = { home, state_dir?, probes }.
+local function dirname(p)
+  local d = p:gsub("/[^/]*$", "")
+  return d == "" and "/" or d
+end
+
+--- The overlay of `plan` (a read-only, hidden, masked or ephemeral mount applied AFTER the
+--- writable binds) that covers `p`, or nil. A writable bind of such a path has no effect: the later
+--- mount wins.
+function M.shadow(plan, p)
+  for _, list in ipairs({ plan.hidden or {}, plan.readonly or {}, plan.masks or {}, plan.guard_files or {} }) do
+    for _, e in ipairs(list) do
+      if inside(p, e.path) then
+        return e.path
+      end
+    end
+  end
+  for _, e in ipairs(plan.ephemeral or {}) do
+    if inside(p, e) then
+      return e
+    end
+  end
+end
+
+--- Why `p` must never be made writable (a string), or nil. Both directions count: the path
+--- itself, or a parent that contains one of the protected places.
+function M.writable_forbidden(p, home)
+  for _, d in ipairs(M.WRITABLE_FORBIDDEN) do
+    if inside(p, d) then
+      return d .. " is a system path"
+    end
+  end
+  if inside(home, p) then
+    return "it contains $HOME"
+  end
+  for _, rel in ipairs(M.WRITABLE_FORBIDDEN_HOME) do
+    local f = home .. rel
+    if inside(p, f) or inside(f, p) then
+      return f .. " would run, or steer tools, outside the sandbox later"
+    end
+  end
+end
+
+local function is_dangerous_env(name)
+  local u = name:upper()
+  if M.ENV_DANGEROUS_EXACT[u] then
+    return true
+  end
+  for _, pre in ipairs(M.ENV_DANGEROUS_PREFIX) do
+    if u:sub(1, #pre) == pre then
+      return true
+    end
+  end
+  return false
+end
+
+--- May this exception be applied, and would it change anything? Pure.
+--- ctx = { home, state_dir?, probes, baseline?, expert?, scrub?, file_login? }; `baseline` is a plan
+--- built without exceptions: with it, "unhide" needs a path the policy really hides and "writable"
+--- one that no later read-only mount covers (an approval that cannot take effect is refused, not
+--- logged as approved).
 --- @return boolean ok, string? reason
 function M.validate_exception(exc, ctx)
   if type(exc) ~= "table" or not M.EXCEPTION_KINDS[exc.kind] then
@@ -398,6 +562,12 @@ function M.validate_exception(exc, ctx)
     if not v:match("^[%a_][%w_]*$") then
       return false, "not an environment variable name: " .. v
     end
+    if is_dangerous_env(v) and not ctx.expert then
+      return false, v .. " decides which code runs inside the sandbox; refused (setup({ expert_exceptions = true }) allows it)"
+    end
+    if #M.scrub_names({ [v] = "x" }, ctx.file_login == true, ctx.scrub) == 0 then
+      return false, v .. " is not stripped by the policy: there is nothing to let through"
+    end
     return true
   end
   local p = M.normalize(v)
@@ -407,12 +577,49 @@ function M.validate_exception(exc, ctx)
   if p == "/" or p == ctx.home then
     return false, "refusing to expose " .. p .. " as a whole"
   end
-  if exc.kind == "writable" then
-    if not ctx.probes.exists(p) then
-      return false, "does not exist: " .. p
+  local real = ctx.probes.realpath and ctx.probes.realpath(p) or nil
+  local candidates = { p }
+  if real and real ~= p then
+    candidates[#candidates + 1] = real
+  end
+  if exc.kind == "unhide" then
+    for _, q in ipairs(candidates) do
+      for _, f in ipairs(M.UNHIDE_FORBIDDEN) do
+        if inside(q, f) then
+          return false, "never revealed: " .. f
+        end
+      end
     end
-    if ctx.state_dir and (inside(p, ctx.state_dir) or inside(ctx.state_dir, p)) then
-      return false, "the approvals and the log live there: " .. p
+    if ctx.baseline then
+      local hit = false
+      for _, h in ipairs(ctx.baseline.hidden or {}) do
+        hit = hit or h.path == p
+      end
+      if not hit then
+        return false, "the policy does not hide " .. p .. " (nothing to show"
+          .. (ctx.baseline.home_mode == "allowlist" and "; outside the home allowlist it is not visible anyway, see policy.home_allow" or "")
+          .. ")"
+      end
+    end
+    return true
+  end
+  -- writable
+  if not ctx.probes.exists(p) then
+    return false, "does not exist: " .. p
+  end
+  if ctx.state_dir and (inside(p, ctx.state_dir) or inside(ctx.state_dir, p)) then
+    return false, "the approvals and the log live there: " .. p
+  end
+  for _, q in ipairs(candidates) do
+    local why = M.writable_forbidden(q, ctx.home)
+    if why then
+      return false, "refused" .. (q ~= p and (" (" .. p .. " resolves to " .. q .. ")") or "") .. ": " .. why
+    end
+    if ctx.baseline then
+      local sh = M.shadow(ctx.baseline, q)
+      if sh then
+        return false, "no effect: " .. sh .. " is mounted read-only afterwards and wins over a writable " .. p
+      end
     end
   end
   return true
@@ -429,6 +636,28 @@ local function resolve_user_path(p, home, project)
   return project .. "/" .. p
 end
 
+local function basename(p)
+  return p:match("([^/]*)$")
+end
+
+-- Project directories that are not a project: the sandbox never mounts them writable and never
+-- leaves placeholders in them (a stray empty .git in /tmp made unrelated tools think /tmp is a
+-- repository).
+M.SHARED_ROOTS = {
+  "/", "/tmp", "/var/tmp", "/dev/shm", "/run", "/var", "/usr", "/etc", "/opt", "/srv", "/mnt", "/media",
+  "/home", "/root", "/boot", "/sys", "/proc", "/dev", "/bin", "/sbin", "/lib", "/lib64", "/nix",
+}
+
+--- Is `project` a shared system directory (or a parent of $HOME)?
+function M.is_shared_root(project, home, uid)
+  for _, r in ipairs(M.SHARED_ROOTS) do
+    if project == r then
+      return true
+    end
+  end
+  return project == "/run/user/" .. tostring(uid or -1) or (home ~= project and inside(home, project))
+end
+
 --- Build the plan. Pure: see the file header.
 --- @param input table
 --- @return table plan
@@ -442,26 +671,35 @@ function M.build(input)
   local policy = cfg.policy or {}
   local aux = input.aux or {}
   local exists = probes.exists
+  local lstat_type = probes.lstat_type or probes.stat_type
   local cwd = input.cwd or project
-  local at_home = project == home or project == "/"
+  local shared = M.is_shared_root(project, home, input.uid)
+  local at_home = project == home or shared
   local net_mode = cfg.network == "open" and "open" or "filtered" -- anything but "open" is filtered
+  local home_mode = cfg.home == "denylist" and "denylist" or "allowlist" -- anything but "denylist" is the allowlist
 
   local plan = {
-    version = 1,
+    version = 2,
     mode = "bwrap",
     project = project,
     tmp_dir = tmp_dir,
     home = home,
+    home_mode = home_mode,
     flags = copy_list(M.ISOLATION_FLAGS),
     network = net_mode,
     writable = {},
     hidden = {},
     readonly = {},
     masks = {},
+    masked = {},
+    run_keep = {},
+    home_allow = {},
+    symlinks = {},
     guard_files = {},
     ephemeral = {},
     env_strip = {},
     env_kept = {},
+    env_pass = {},
     exceptions = {},
     rejected = {},
     notes = {},
@@ -469,6 +707,10 @@ function M.build(input)
     projects = nil,
     claude_json = nil,
   }
+  if shared then
+    plan.notes[#plan.notes + 1] = project .. " is a shared system directory (or contains $HOME): it is not mounted writable"
+      .. " and no guard placeholders are created in it; start the agent in a project directory"
+  end
 
   -- network: filtered = private network namespace + the proxy's unix socket; open = untouched
   if net_mode == "filtered" then
@@ -491,9 +733,40 @@ function M.build(input)
     }
   end
 
+  -- the agent command
+  local cmd = copy_list(input.cmd or {})
+  local skip = {}
+  for _, f in ipairs(M.SKIP_PERMISSIONS_FLAGS) do
+    skip[f] = true
+  end
+  local has_flag = M.skip_flag(cmd)
+  plan.agent = { cmd = cmd, skip_permissions = has_flag ~= nil, flag = has_flag, stripped = false }
+  if has_flag and cfg.strip_skip_permissions == true then
+    local kept = {}
+    for _, a in ipairs(cmd) do
+      if not skip[a] then
+        kept[#kept + 1] = a
+      end
+    end
+    plan.agent.cmd = kept
+    plan.agent.skip_permissions = false
+    plan.agent.stripped = true
+  end
+
+  -- ~/.claude is created by the launcher (the masks inside it need the parent)
+  plan.needs.mkdir[#plan.needs.mkdir + 1] = home .. "/.claude"
+  local claude_dir = exists(home .. "/.claude") or input.assume_claude_dir ~= false
+  local file_login = input.file_login
+  if file_login == nil then
+    file_login = exists(home .. "/.claude/.credentials.json")
+  end
+
   -- applicable exceptions
   local exc_by = { env = {}, unhide = {}, writable = {}, host = {} }
-  local vctx = { home = home, state_dir = input.state_dir, probes = probes }
+  local vctx = {
+    home = home, state_dir = input.state_dir, probes = probes, file_login = file_login, scrub = policy.scrub,
+    expert = cfg.expert_exceptions == true,
+  }
   for _, e in ipairs(input.exceptions or {}) do
     local ok, why = M.validate_exception(e, vctx)
     if ok then
@@ -534,48 +807,35 @@ function M.build(input)
     plan.exceptions = keep
   end
 
-  -- ~/.claude is created by the launcher (the masks inside it need the parent)
-  plan.needs.mkdir[#plan.needs.mkdir + 1] = home .. "/.claude"
-  local claude_dir = exists(home .. "/.claude") or input.assume_claude_dir ~= false
-
-  -- the agent command
-  local cmd = copy_list(input.cmd or {})
-  local skip = {}
-  for _, f in ipairs(M.SKIP_PERMISSIONS_FLAGS) do
-    skip[f] = true
-  end
-  local has_flag = M.skip_flag(cmd)
-  plan.agent = { cmd = cmd, skip_permissions = has_flag ~= nil, flag = has_flag, stripped = false }
-  if has_flag and cfg.strip_skip_permissions == true then
-    local kept = {}
-    for _, a in ipairs(cmd) do
-      if not skip[a] then
-        kept[#kept + 1] = a
-      end
-    end
-    plan.agent.cmd = kept
-    plan.agent.skip_permissions = false
-    plan.agent.stripped = true
-  end
-
-  -- environment
-  local file_login = input.file_login
-  if file_login == nil then
-    file_login = exists(home .. "/.claude/.credentials.json")
-  end
+  -- environment: the scrubbed names are neither passed to bwrap nor set in the sandbox. The launch
+  -- starts bwrap with ONLY env_pass (`env -i`), so a stripped value never exists in any process of
+  -- the sandbox (bwrap's own environment, /proc/1/environ, included).
+  local strip_set = {}
   for _, n in ipairs(M.scrub_names(env, file_login, policy.scrub)) do
     if exc_by.env[n] then
       plan.env_kept[#plan.env_kept + 1] = n
     else
       plan.env_strip[#plan.env_strip + 1] = n
+      strip_set[n] = true
     end
+  end
+  local pass = {}
+  for name, value in pairs(env) do
+    if not strip_set[name] and name ~= "" and not name:find("=", 1, true) then
+      pass[#pass + 1] = name
+    end
+  end
+  table.sort(pass)
+  for _, name in ipairs(pass) do
+    plan.env_pass[#plan.env_pass + 1] = { name, tostring(env[name]) }
   end
 
   -- writable
   local function writable(p, why)
     -- ~/.claude is created by the launcher before bwrap runs, so it counts as present
     if exists(p) or (p == home .. "/.claude" and claude_dir) then
-      plan.writable[#plan.writable + 1] = { path = p, why = why }
+      plan.writable[#plan.writable + 1] = { path = p, why = why, exception = why == "approved exception" or nil,
+        policy = why == "policy.writable" or nil }
     end
   end
   if not at_home then
@@ -584,6 +844,12 @@ function M.build(input)
   writable(tmp_dir, "scratch")
   for _, rel in ipairs(M.WRITABLE) do
     writable(home .. rel, "agent/cargo cache")
+  end
+  local cargo_home = type(env.CARGO_HOME) == "string" and M.normalize(env.CARGO_HOME) or nil
+  if cargo_home and cargo_home ~= home .. "/.cargo" then
+    for _, sub in ipairs({ "/registry", "/git", "/.package-cache", "/.package-cache-mutate" }) do
+      writable(cargo_home .. sub, "agent/cargo cache")
+    end
   end
   for _, p in ipairs(policy.writable or {}) do
     local rp = resolve_user_path(p, home, project)
@@ -597,10 +863,118 @@ function M.build(input)
     end
   end
 
-  -- hidden
+  -- masked host directories (pathname sockets) and the home view
+  for _, p in ipairs(M.MASKED_SYSTEM) do
+    if exists(p) then
+      plan.masked[#plan.masked + 1] = { path = p, why = "host sockets and services" }
+    end
+  end
+  for _, p in ipairs(M.MASKED_IF_DIR) do
+    if lstat_type(p) == "directory" then
+      plan.masked[#plan.masked + 1] = { path = p, why = "host sockets and services" }
+    end
+  end
+  local function kept(p, why)
+    for _, m in ipairs(plan.masked) do
+      if inside(p, m.path) and exists(p) then
+        plan.run_keep[#plan.run_keep + 1] = { path = p, why = why }
+        return
+      end
+    end
+  end
+  for _, p in ipairs(M.RUN_KEEP) do
+    kept(p, "kept read-only (no sockets)")
+  end
+  for _, p in ipairs(policy.keep_run or {}) do
+    local rp = resolve_user_path(p, home, project)
+    if rp then
+      kept(rp, "policy.keep_run")
+    end
+  end
+
+  if home_mode == "allowlist" then
+    local aseen = {}
+    local function allow(p, why)
+      if p and p ~= home and inside(p, home) and not aseen[p] and exists(p) then
+        aseen[p] = true
+        plan.home_allow[#plan.home_allow + 1] = { path = p, why = why }
+      end
+    end
+    for _, rel in ipairs(M.HOME_ALLOW) do
+      allow(home .. rel, "toolchain / git")
+    end
+    for _, p in ipairs(policy.home_allow or {}) do
+      allow(resolve_user_path(p, home, project), "policy.home_allow")
+    end
+    for _, name in ipairs(M.HOME_ALLOW_ENV) do
+      local v = type(env[name]) == "string" and M.normalize(env[name]) or nil
+      if v then
+        allow(v, "$" .. name)
+      end
+    end
+    local not_roots = { [home .. "/.local"] = true, [home .. "/.config"] = true, [home .. "/.cache"] = true,
+      [home .. "/.local/share"] = true, [home .. "/.local/state"] = true }
+    for dir in (env.PATH or ""):gmatch("[^:]+") do
+      local d = M.normalize(dir)
+      if d and inside(d, home) and d ~= home then
+        allow(d, "on $PATH")
+        local parent = dirname(d)
+        if basename(d) == "bin" and parent ~= home and not not_roots[parent] then
+          allow(parent, "toolchain of a $PATH entry")
+        end
+      end
+    end
+    -- the agent binary itself
+    local exe = cmd[1]
+    if exe then
+      local found
+      if exe:find("/", 1, true) then
+        found = exe:sub(1, 1) == "/" and M.normalize(exe) or nil
+      else
+        for dir in (env.PATH or ""):gmatch("[^:]+") do
+          local c = dir .. "/" .. exe
+          if exists(c) and lstat_type(c) ~= "directory" then
+            found = c
+            break
+          end
+        end
+      end
+      if found then
+        allow(found, "agent command")
+        local real = probes.realpath and probes.realpath(found)
+        if real and real ~= found then
+          allow(real, "agent command")
+        end
+      end
+    end
+  end
+
+  -- hidden. In allowlist mode only what is mounted at all (the allowed trees) can be hidden.
+  local function reachable(p)
+    if home_mode == "denylist" or not inside(p, home) then
+      return true
+    end
+    for _, w in ipairs(plan.writable) do
+      if inside(p, w.path) then
+        return true
+      end
+    end
+    for _, a in ipairs(plan.home_allow) do
+      if inside(p, a.path) then
+        return true
+      end
+    end
+    return false
+  end
+  local hseen, unhide_used = {}, {}
   local function hide(p, why)
     local ty = probes.stat_type(p)
-    if ty and not exc_by.unhide[p] then
+    if ty and not hseen[p] and reachable(p) then
+      if exc_by.unhide[p] then
+        unhide_used[p] = true
+        return
+      end
+      hseen[p] = true
       local kind = ty == "directory" and "dir" or "file"
       plan.hidden[#plan.hidden + 1] = { path = p, kind = kind, why = why }
       if kind == "file" then
@@ -608,18 +982,48 @@ function M.build(input)
       end
     end
   end
-  for _, p in ipairs(M.hidden_system(input.uid or -1)) do
-    hide(p, "system socket / session")
+  local in_masked = function(p)
+    if inside(p, "/tmp") then
+      return true
+    end
+    for _, m in ipairs(plan.masked) do
+      if inside(p, m.path) then
+        return true
+      end
+    end
+    return false
   end
-  if plan.net then
-    -- name resolution must not leave through a host service: nss-resolve talks to systemd-resolved
-    -- over a unix socket (a DNS exfiltration channel), nscd and avahi do the same
-    for _, p in ipairs(M.HIDDEN_RESOLVERS) do
-      hide(p, "DNS resolver socket")
+  -- sockets named by the environment that live outside the masked directories
+  for _, name in ipairs(M.SOCKET_ENV) do
+    local val = env[name]
+    if type(val) == "string" and val ~= "" then
+      local cands = {}
+      if name == "GPG_AGENT_INFO" then
+        cands[1] = val:match("^([^:]+)")
+      elseif name == "DBUS_SESSION_BUS_ADDRESS" then
+        for path in val:gmatch("unix:path=([^,;]+)") do
+          cands[#cands + 1] = path
+        end
+      elseif name == "WAYLAND_DISPLAY" then
+        local xdg = env.XDG_RUNTIME_DIR
+        cands[1] = val:sub(1, 1) == "/" and val or (xdg and xdg ~= "" and (xdg .. "/" .. val)) or nil
+      else
+        cands[1] = val
+      end
+      for _, c in ipairs(cands) do
+        local p = c and M.normalize(c)
+        if p and p ~= "/" and p ~= home and not in_masked(p) and not inside(project, p) and not inside(tmp_dir, p) then
+          hide(p, "socket named by $" .. name)
+        end
+      end
     end
   end
   for _, p in ipairs(M.HIDDEN) do
     hide(home .. p, "credentials")
+  end
+  if cargo_home and cargo_home ~= home .. "/.cargo" then
+    hide(cargo_home .. "/credentials", "credentials")
+    hide(cargo_home .. "/credentials.toml", "credentials")
   end
   for _, g in ipairs(M.HIDDEN_GLOBS) do
     for _, p in ipairs(probes.glob(home .. g)) do
@@ -656,10 +1060,26 @@ function M.build(input)
       plan.readonly[#plan.readonly + 1] = { path = p, why = why }
     end
   end
-  local w = walk(probes, project, tonumber(policy.scan_depth) or M.SCAN_DEPTH)
+  local w = { gits = {}, members = {}, secrets = {}, links = {}, truncated = false }
+  if not shared then
+    local want_secrets = policy.project_secrets ~= false and not at_home
+    local globs, except
+    if want_secrets then
+      globs = vim.list_extend(copy_list(M.PROJECT_SECRET_GLOBS), policy.secret_files or {})
+      except = copy_list(M.PROJECT_SECRET_EXCEPT)
+      for _, a in ipairs(policy.secret_allow or {}) do
+        if not a:find("/", 1, true) then
+          except[#except + 1] = a
+        end
+      end
+    end
+    w = walk(probes, project, tonumber(policy.scan_depth) or M.SCAN_DEPTH, {
+      secrets = globs, except = except, secret_dirs = want_secrets and M.PROJECT_SECRET_DIRS or nil,
+    })
+  end
   if w.truncated then
     plan.notes[#plan.notes + 1] = ("directory walk stopped after %d directories: deeper .git and member"
-      .. " directories are not locked"):format(M.SCAN_MAX_DIRS)
+      .. " directories, secrets and symlinks are not handled"):format(M.SCAN_MAX_DIRS)
   end
   for _, p in ipairs(w.gits) do
     lock(p, "git")
@@ -679,6 +1099,19 @@ function M.build(input)
       if rel:sub(1, 1) == "/" or rel:sub(1, 2) == "~/" then
         lock(resolve_user_path(rel, home, project), "policy.readonly")
       end
+    end
+  end
+  -- project secrets and sockets (after the credentials, so a policy exception can show one)
+  local rel_allow = {}
+  for _, a in ipairs(policy.secret_allow or {}) do
+    if a:find("/", 1, true) then
+      rel_allow[a] = true
+    end
+  end
+  for _, s in ipairs(w.secrets) do
+    local rel = s.path:sub(#project + 2)
+    if not rel_allow[rel] then
+      hide(s.path, s.kind == "socket" and "project socket" or "project secret")
     end
   end
   local masks = {}
@@ -754,6 +1187,94 @@ function M.build(input)
     end
   end
 
+  -- approved but ineffective: a writable path that a later read-only/hidden mount covers (the
+  -- writable <project>/.git under the --ro-bind of .git), an unhide of a path the policy does not
+  -- hide. Never reported as approved.
+  local drop = {}
+  for _, e in ipairs(plan.exceptions) do
+    if e.kind == "writable" then
+      local sh = M.shadow(plan, e.value)
+      if sh then
+        drop[e] = ("no effect: %s is mounted read-only afterwards and wins over a writable %s"):format(sh, e.value)
+      end
+    elseif e.kind == "unhide" and not unhide_used[e.value] then
+      drop[e] = "the policy does not hide " .. e.value .. " (nothing to show)"
+    end
+  end
+  if next(drop) then
+    local keep = {}
+    for _, e in ipairs(plan.exceptions) do
+      if drop[e] then
+        plan.rejected[#plan.rejected + 1] = { kind = e.kind, value = e.value, reason = drop[e] }
+        if e.kind == "writable" then
+          for i = #plan.writable, 1, -1 do
+            if plan.writable[i].exception and plan.writable[i].path == e.value then
+              table.remove(plan.writable, i)
+            end
+          end
+        end
+      else
+        keep[#keep + 1] = e
+      end
+    end
+    plan.exceptions = keep
+  end
+  for i = #plan.writable, 1, -1 do
+    local wr = plan.writable[i]
+    local sh = wr.policy and M.shadow(plan, wr.path)
+    if sh then
+      plan.notes[#plan.notes + 1] = ("policy.writable %s has no effect: %s is mounted read-only afterwards"):format(wr.path, sh)
+      table.remove(plan.writable, i)
+    end
+  end
+
+  -- symlinks that leave the project: listed with what the sandbox would let through
+  local function visible(p)
+    for _, h in ipairs(plan.hidden) do
+      if inside(p, h.path) then
+        return false
+      end
+    end
+    for _, list in ipairs({ plan.writable, plan.home_allow, plan.run_keep }) do
+      for _, e in ipairs(list) do
+        if inside(p, e.path) then
+          return true
+        end
+      end
+    end
+    if inside(p, "/tmp") then
+      return false
+    end
+    for _, m in ipairs(plan.masked) do
+      if inside(p, m.path) then
+        return false
+      end
+    end
+    if home_mode == "allowlist" and inside(p, home) then
+      return false
+    end
+    return true
+  end
+  local real_project = probes.realpath(project) or project
+  local readable = 0
+  for _, l in ipairs(w.links) do
+    if not hseen[l] then
+      local target = probes.realpath(l)
+      if target and not inside(target, project) and not inside(target, real_project) and not inside(target, tmp_dir) then
+        local r = visible(target)
+        readable = readable + (r and 1 or 0)
+        plan.symlinks[#plan.symlinks + 1] = { path = l, target = target, readable = r }
+      end
+    end
+  end
+  if readable > 0 and policy.symlinks == "refuse" then
+    local first = vim.tbl_filter(function(s)
+      return s.readable
+    end, plan.symlinks)[1]
+    plan.blocked = ("%d project symlink(s) point outside the project and their targets are readable in the sandbox"
+      .. " (first: %s -> %s); policy.symlinks = \"refuse\""):format(readable, first.path, first.target)
+  end
+
   -- git directories locked (a view of readonly for the preview)
   plan.git_locked = {}
   for _, r in ipairs(plan.readonly) do
@@ -773,6 +1294,7 @@ function M.build(input)
   plan.empty_file = plan.needs.empty_file
   return plan
 end
+
 
 -- -------------------------------------------------------------------- argv
 
@@ -805,65 +1327,109 @@ function M.probe_argv(net)
   return a
 end
 
---- The bwrap command line of a plan. Pure and deterministic: the same plan gives the same list.
+--- Every bwrap option of a plan, in the order bwrap applies them, as { section, why, args } records.
+--- This is the ONE place the arguments are decided: argv() flattens it and the preview renders it,
+--- so what is shown is what runs (a spec diffs the preview against the real command line).
+--- @param plan table
+--- @return { section: string, why: string, args: string[] }[]
+function M.ops(plan)
+  local ops = {}
+  local function add(section, why, ...)
+    ops[#ops + 1] = { section = section, why = why, args = { ... } }
+  end
+  ops[#ops + 1] = { section = "isolation", why = "namespaces, capabilities, no controlling terminal", args = copy_list(plan.flags or {}) }
+  add("base", "the whole filesystem, read-only", "--ro-bind", "/", "/")
+  add("base", "private device nodes", "--dev", "/dev")
+  add("base", "fresh /proc of the sandbox's own pid namespace", "--proc", "/proc")
+  add("base", "empty /tmp: the host's /tmp is invisible", "--tmpfs", "/tmp")
+  for _, m in ipairs(plan.masked or {}) do
+    add("sockets", m.why, "--tmpfs", m.path)
+  end
+  for _, k in ipairs(plan.run_keep or {}) do
+    add("sockets", k.why, "--ro-bind", k.path, k.path)
+  end
+  if plan.home_mode == "allowlist" then
+    add("home", "empty $HOME: only the paths below are visible", "--tmpfs", plan.home)
+    for _, a in ipairs(plan.home_allow or {}) do
+      add("home", a.why, "--ro-bind", a.path, a.path)
+    end
+  end
+  for _, n in ipairs(plan.env_strip or {}) do
+    add("env", "stripped", "--unsetenv", n)
+  end
+  for _, w in ipairs(plan.writable or {}) do
+    add("writable", w.why, "--bind", w.path, w.path)
+  end
+  -- after the writable binds: hides inside ~/.claude must sit on top of it
+  for _, h in ipairs(plan.hidden or {}) do
+    if h.kind == "dir" then
+      add("hidden", h.why, "--tmpfs", h.path)
+    else
+      add("hidden", h.why, "--ro-bind", plan.empty_file, h.path)
+    end
+  end
+  if plan.claude_json then
+    add("claude_json", "private copy of the agent's user config", "--bind", plan.claude_json.copy, plan.claude_json.src)
+  end
+  -- ~/.claude/projects is read-only except this project's own transcript dirs: a bind mount
+  -- point cannot be renamed, so `mv projects/<name> ...; mkdir -p projects/<name>/memory`
+  -- cannot get round the memory mask
+  local projects = plan.projects or { dir = (plan.home or "") .. "/.claude/projects", own = {} }
+  add("projects", "agent transcripts of all projects, read-only", "--ro-bind", projects.dir, projects.dir)
+  for _, d in ipairs(projects.own) do
+    add("projects", "this project's transcripts, writable", "--bind", d, d)
+  end
+  for _, r in ipairs(plan.readonly or {}) do
+    add("readonly", r.why, "--ro-bind", r.path, r.path)
+  end
+  for _, m in ipairs(plan.masks or {}) do
+    -- project-relative masks (.cargo, .claude) would hit $HOME's own when the project is $HOME;
+    -- the planner already left those out
+    add("masks", m.why, "--tmpfs", m.path, "--remount-ro", m.path)
+  end
+  for _, g in ipairs(plan.guard_files or {}) do
+    add("guards", g.why, "--ro-bind", plan.empty_file, g.path)
+  end
+  for _, p in ipairs(plan.ephemeral or {}) do
+    add("ephemeral", "claude sources these before running commands", "--tmpfs", p)
+  end
+  if plan.net then
+    local n = plan.net
+    -- the only way out: the proxy's socket directory (read-only), reached through the relay on the
+    -- sandbox's own loopback
+    add("net", "the proxy's socket directory (the only way out)", "--ro-bind", n.dir, n.dir)
+    local url = "http://127.0.0.1:" .. n.port
+    for _, name in ipairs({ "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy" }) do
+      add("setenv", "route through the local relay", "--setenv", name, url)
+    end
+    add("setenv", "no direct connections", "--setenv", "NO_PROXY", "")
+    add("setenv", "no direct connections", "--setenv", "no_proxy", "")
+  end
+  return ops
+end
+
+--- The command line of a plan. Pure and deterministic: the same plan gives the same list.
+--- bwrap itself is started with an EMPTY environment plus env_pass (`env -i`): the stripped names
+--- never exist in any process of the sandbox, not even in bwrap's own (/proc/1/environ).
 --- @param plan table
 --- @return string[]
 function M.argv(plan)
   assert(plan.mode == "bwrap", "plan.argv: not a bwrap plan")
   assert(plan.empty_file or (#plan.guard_files == 0 and not plan.needs.empty_file), "plan.argv: aux.empty is missing")
-  local a = { "bwrap" }
-  vim.list_extend(a, plan.flags)
-  vim.list_extend(a, { "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp" })
-  for _, n in ipairs(plan.env_strip) do
-    vim.list_extend(a, { "--unsetenv", n })
+  local a = { "env", "-i" }
+  for _, kv in ipairs(plan.env_pass) do
+    a[#a + 1] = kv[1] .. "=" .. kv[2]
   end
-  for _, w in ipairs(plan.writable) do
-    vim.list_extend(a, { "--bind", w.path, w.path })
-  end
-  -- after the writable binds: hides inside ~/.claude must sit on top of it
-  for _, h in ipairs(plan.hidden) do
-    vim.list_extend(a, h.kind == "dir" and { "--tmpfs", h.path } or { "--ro-bind", plan.empty_file, h.path })
-  end
-  if plan.claude_json then
-    vim.list_extend(a, { "--bind", plan.claude_json.copy, plan.claude_json.src })
-  end
-  -- ~/.claude/projects is read-only except this project's own transcript dirs: a bind mount
-  -- point cannot be renamed, so `mv projects/<name> ...; mkdir -p projects/<name>/memory`
-  -- cannot get round the memory mask
-  vim.list_extend(a, { "--ro-bind", plan.projects.dir, plan.projects.dir })
-  for _, d in ipairs(plan.projects.own) do
-    vim.list_extend(a, { "--bind", d, d })
-  end
-  for _, r in ipairs(plan.readonly) do
-    vim.list_extend(a, { "--ro-bind", r.path, r.path })
-  end
-  for _, m in ipairs(plan.masks) do
-    -- project-relative masks (.cargo, .claude) would hit $HOME's own when the project is $HOME;
-    -- the planner already left those out
-    vim.list_extend(a, { "--tmpfs", m.path, "--remount-ro", m.path })
-  end
-  for _, g in ipairs(plan.guard_files) do
-    vim.list_extend(a, { "--ro-bind", plan.empty_file, g.path })
-  end
-  for _, p in ipairs(plan.ephemeral) do
-    vim.list_extend(a, { "--tmpfs", p })
+  a[#a + 1] = "bwrap"
+  for _, op in ipairs(M.ops(plan)) do
+    vim.list_extend(a, op.args)
   end
   local cmd = plan.agent.cmd
+  vim.list_extend(a, { "--chdir", plan.chdir, "--" })
   if plan.net then
     local n = plan.net
-    -- the only way out: the proxy's socket directory (read-only), reached through the relay on the
-    -- sandbox's own loopback
-    vim.list_extend(a, { "--ro-bind", n.dir, n.dir })
-    local url = "http://127.0.0.1:" .. n.port
-    for _, name in ipairs({ "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy" }) do
-      vim.list_extend(a, { "--setenv", name, url })
-    end
-    vim.list_extend(a, { "--setenv", "NO_PROXY", "", "--setenv", "no_proxy", "" })
-    vim.list_extend(a, { "--chdir", plan.chdir, "--" })
     vim.list_extend(a, { "sh", "-c", M.NET_SCRIPT, "xyno-net", n.nvim, n.dir, tostring(n.port) })
-    return vim.list_extend(a, cmd)
   end
-  vim.list_extend(a, { "--chdir", plan.chdir, "--" })
   return vim.list_extend(a, cmd)
 end
 

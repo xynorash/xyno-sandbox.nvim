@@ -40,6 +40,8 @@ M.config = {
   commands = true,
   preview = "once", -- the policy preview before a launch: "always" | "once" (per project) | "never"
   strip_skip_permissions = false, -- true: remove --dangerously-skip-permissions from the command
+  home = "allowlist", -- "allowlist": $HOME is empty except explicitly allowed paths | "denylist": all of $HOME readable except the hidden credential paths
+  expert_exceptions = false, -- true: "env" exceptions for variables that decide which code runs (LD_PRELOAD, PATH, ...) may be approved
   network = "filtered", -- "filtered" (default-deny egress, allowlist) | "open" (no restriction, shown as OPEN)
   allow_hosts = nil, -- nil: the default list (xyno_sandbox.default_hosts); a list REPLACES it
   policy = {}, -- additive policy lists, see validate_opts()
@@ -52,7 +54,8 @@ local uid = pwd and pwd.uid or -1
 
 -- ------------------------------------------------------------------ options
 
-local POLICY_LISTS = { "readonly", "writable", "hidden", "guard_dirs", "guard_files" }
+local POLICY_LISTS = { "readonly", "writable", "hidden", "guard_dirs", "guard_files", "home_allow", "keep_run",
+  "secret_files", "secret_allow" }
 local PREVIEW = { always = true, once = true, never = true }
 
 local function str_list(name, v, errs, check)
@@ -96,12 +99,20 @@ end
 ---   guard_files = { "rel" }              files bound read-only (empty) when absent
 ---   scrub       = { contains = {}, prefix = {}, exact = {} }  more env var names to strip
 ---   scan_depth  = 8                      how deep nested .git / members are looked for (1..32)
+---   home_allow  = { "~/x" }              more $HOME paths shown read-only in home = "allowlist" mode
+---   keep_run    = { "/run/x" }           paths under the masked /run bound back read-only (no sockets!)
+---   project_secrets = true               hide .env, *.pem, ... in the project (false: do not)
+---   secret_files = { "*.secret" }        more project file name globs to hide
+---   secret_allow = { ".env.test" }       project file names (or project-relative paths) never hidden
+---   symlinks    = "warn"                 "warn" (list them in the preview) | "refuse" (do not start when a
+---                                        symlink leaves the project and its target is readable)
 --- }
 --- The lists only ADD to the built-in policy; nothing can be removed from it.
 function M.validate_opts(opts)
   local errs = {}
   local known = { sandbox = true, allow_unsandboxed = true, keymaps = true, commands = true, preview = true,
-    strip_skip_permissions = true, policy = true, agent_cmd = true, network = true, allow_hosts = true }
+    strip_skip_permissions = true, policy = true, agent_cmd = true, network = true, allow_hosts = true,
+    home = true, expert_exceptions = true }
   for k in pairs(opts) do
     if not known[k] then
       errs[#errs + 1] = "unknown option " .. tostring(k)
@@ -115,6 +126,12 @@ function M.validate_opts(opts)
   end
   if opts.network ~= nil and opts.network ~= "filtered" and opts.network ~= "open" then
     errs[#errs + 1] = 'network must be "filtered" or "open"'
+  end
+  if opts.home ~= nil and opts.home ~= "allowlist" and opts.home ~= "denylist" then
+    errs[#errs + 1] = 'home must be "allowlist" or "denylist"'
+  end
+  if opts.expert_exceptions ~= nil and type(opts.expert_exceptions) ~= "boolean" then
+    errs[#errs + 1] = "expert_exceptions must be a boolean"
   end
   if opts.allow_hosts ~= nil then
     str_list("allow_hosts", opts.allow_hosts, errs, function(e)
@@ -136,7 +153,7 @@ function M.validate_opts(opts)
     if type(p) ~= "table" then
       errs[#errs + 1] = "policy must be a table"
     else
-      local pknown = { scrub = true, scan_depth = true }
+      local pknown = { scrub = true, scan_depth = true, project_secrets = true, symlinks = true }
       for _, k in ipairs(POLICY_LISTS) do
         pknown[k] = true
       end
@@ -150,6 +167,32 @@ function M.validate_opts(opts)
       if p.hidden ~= nil then str_list("policy.hidden", p.hidden, errs, path_check(false, true)) end
       if p.guard_dirs ~= nil then str_list("policy.guard_dirs", p.guard_dirs, errs, path_check(true, true)) end
       if p.guard_files ~= nil then str_list("policy.guard_files", p.guard_files, errs, path_check(true, true)) end
+      if p.home_allow ~= nil then str_list("policy.home_allow", p.home_allow, errs, path_check(false, true)) end
+      if p.keep_run ~= nil then
+        str_list("policy.keep_run", p.keep_run, errs, function(e)
+          local why = path_check(false, true)(e)
+          if why then
+            return why
+          end
+          if not (e:sub(1, 5) == "/run/" or e:sub(1, 9) == "/var/tmp/") then
+            return "must be below /run or /var/tmp (the masked directories)"
+          end
+        end)
+      end
+      if p.secret_files ~= nil then
+        str_list("policy.secret_files", p.secret_files, errs, function(e)
+          if e:find("/", 1, true) then
+            return "a file name glob, without a directory"
+          end
+        end)
+      end
+      if p.secret_allow ~= nil then str_list("policy.secret_allow", p.secret_allow, errs) end
+      if p.project_secrets ~= nil and type(p.project_secrets) ~= "boolean" then
+        errs[#errs + 1] = "policy.project_secrets must be a boolean"
+      end
+      if p.symlinks ~= nil and p.symlinks ~= "warn" and p.symlinks ~= "refuse" then
+        errs[#errs + 1] = 'policy.symlinks must be "warn" or "refuse"'
+      end
       if p.scan_depth ~= nil and not (type(p.scan_depth) == "number" and p.scan_depth >= 1 and p.scan_depth <= 32
         and p.scan_depth == math.floor(p.scan_depth)) then
         errs[#errs + 1] = "policy.scan_depth must be an integer from 1 to 32"
@@ -221,6 +264,8 @@ local function cfg_view()
     allow_hosts = flag("allow_hosts"),
     policy = M.config.policy or {},
     strip_skip_permissions = M.config.strip_skip_permissions == true,
+    home = flag("home") == "denylist" and "denylist" or "allowlist",
+    expert_exceptions = flag("expert_exceptions") == true,
   }
 end
 
@@ -310,7 +355,9 @@ end
 --- @param cmd string[]
 --- @param project string
 --- @param tmp_dir string
---- @param opts? { exceptions?: table[], aux?: table, cwd?: string }  exceptions: extra approvals (this launch only)
+--- @param opts? { exceptions?: table[], aux?: table, cwd?: string, env?: table<string,string> }  exceptions:
+---   extra approvals (this launch only); env: variables set or overridden on top of Neovim's own
+---   environment (a false value removes one)
 --- @return table? plan, string? reason  (a refused status gives nil, reason)
 function M.plan(cmd, project, tmp_dir, opts)
   opts = opts or {}
@@ -332,8 +379,12 @@ function M.plan(cmd, project, tmp_dir, opts)
   for _, e in ipairs(opts.exceptions or {}) do
     excs[#excs + 1] = e
   end
+  local env = vim.fn.environ()
+  for k, v in pairs(opts.env or {}) do
+    env[k] = v or nil
+  end
   return plan_mod.build({
-    cmd = cmd, project = project, tmp_dir = tmp_dir, cwd = opts.cwd or vim.uv.cwd(), env = vim.fn.environ(),
+    cmd = cmd, project = project, tmp_dir = tmp_dir, cwd = opts.cwd or vim.uv.cwd(), env = env,
     home = home, uid = uid, config = cfg_view(), aux = opts.aux or aux_paths(), exceptions = excs, nvim = vim.v.progpath,
     state_dir = store.dir(),
   })
@@ -342,6 +393,25 @@ end
 --- The bwrap command line of a plan (pure).
 function M.argv(plan)
   return plan_mod.argv(plan)
+end
+
+--- The plan of `project` without any exception: what an exception would be measured against (is
+--- the path hidden at all, does a later read-only mount cover it).
+function M.baseline(project)
+  return plan_mod.build({
+    project = project, tmp_dir = "/nonexistent-xyno-baseline", cwd = project, env = vim.fn.environ(), home = home,
+    uid = uid, config = cfg_view(), cmd = { "agent" }, assume_claude_dir = false, state_dir = store.dir(),
+  })
+end
+
+--- Validation context of exception decisions (see xyno_sandbox.exceptions).
+function M.exception_context(project, kind)
+  return {
+    home = home, state_dir = store.dir(), probes = plan_mod.real_probes(),
+    baseline = (kind == "unhide" or kind == "writable") and M.baseline(project) or nil,
+    expert = cfg_view().expert_exceptions, scrub = (M.config.policy or {}).scrub,
+    file_login = exists(home .. "/.claude/.credentials.json"),
+  }
 end
 
 -- ---------------------------------------------------------------- exceptions
@@ -437,6 +507,27 @@ local function release(h)
       end
     end
   end
+end
+
+--- Remove the empty placeholders that a sandbox of a Neovim that has since died left in a project
+--- (it could not release them), unless another live sandbox of that project still mounts them.
+--- Only empty files and empty directories recorded by wrap() are touched. Returns how many.
+function M.reap_orphans()
+  local n = 0
+  local list = store.live_orphans()
+  table.sort(list, function(a, b)
+    return #a[1] > #b[1]
+  end)
+  for _, it in ipairs(list) do
+    if is_empty_leftover(it[1], it[2]) and not store.live_others(it[3], nil) then
+      if it[2] == "dir" then
+        n = n + (vim.uv.fs_rmdir(it[1]) and 1 or 0)
+      else
+        n = n + (vim.uv.fs_unlink(it[1]) and 1 or 0)
+      end
+    end
+  end
+  return n
 end
 
 --- Release every live sandbox (temp files, empty leftovers). Runs at VimLeavePre.
@@ -563,6 +654,7 @@ end
 function M.wrap(cmd, project, tmp_dir, opts)
   assert(type(tmp_dir) == "string" and tmp_dir ~= "", "xyno_sandbox.wrap: tmp_dir is required")
   opts = opts or {}
+  pcall(M.reap_orphans)
   local st = M.status_blocking()
   if st.mode == "refused" then
     return nil, st.reason .. (st.hint and (" (" .. st.hint .. ")") or "")
@@ -578,7 +670,10 @@ function M.wrap(cmd, project, tmp_dir, opts)
     end, plan.exceptions or {}))
     plan = nil
   end
-  plan = plan or M.plan(cmd, project, tmp_dir, { exceptions = excs })
+  plan = plan or M.plan(cmd, project, tmp_dir, { exceptions = excs, env = opts.env })
+  if plan.blocked then
+    return nil, plan.blocked
+  end
   local netf
   if plan.net then
     local why
@@ -593,7 +688,18 @@ function M.wrap(cmd, project, tmp_dir, opts)
   if netf then
     h.proxy, h.net_dir = netf.proxy, netf.net_dir
   end
-  h.reg = store.live_add(project, tostring(next_id) .. "-" .. tostring(vim.uv.hrtime()))
+  local items = {}
+  for _, m in ipairs(plan.masks) do
+    if m.cleanup then
+      items[#items + 1] = { m.path, "dir" }
+    end
+  end
+  for _, g in ipairs(plan.guard_files) do
+    if g.cleanup then
+      items[#items + 1] = { g.path, "file" }
+    end
+  end
+  h.reg = store.live_add(project, tostring(next_id) .. "-" .. tostring(vim.uv.hrtime()), items)
   h.release = function()
     release(h)
   end

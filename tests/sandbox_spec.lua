@@ -55,13 +55,16 @@ local function load_for(home)
   local m = require(MOD)
   vim.uv.os_setenv("HOME", old)
   package.loaded[MOD] = real_mod
+  -- the older behaviour specs below pin the denylist view of $HOME (everything readable except the hidden
+  -- credentials); the default allowlist view has its own specs in home_spec.lua
+  m.config.home = "denylist"
   return m
 end
 
 --- wrap() with nvim's cwd set to `cwd` (default project), restoring it after.
-local function wrap(m, cmd, project, tmp, cwd)
+local function wrap(m, cmd, project, tmp, cwd, env)
   local prev = vim.fn.chdir(cwd or project)
-  local ok, a = pcall(m.wrap, cmd, project, tmp)
+  local ok, a = pcall(m.wrap, cmd, project, tmp, env and { env = env } or nil)
   vim.fn.chdir(prev)
   assert(ok, a)
   return a
@@ -111,11 +114,12 @@ end
 local function sb(m, home, script, project, opts)
   H.need_sandbox()
   local tmp = H.tmpdir()
-  local cmd = wrap(m, { "bash", "-c", script }, project, tmp)
   local env = { HOME = home }
   for k, v in pairs((opts or {}).env or {}) do
     env[k] = v
   end
+  -- bwrap starts with an empty environment (`env -i`): what the script should see goes into the plan
+  local cmd = wrap(m, { "bash", "-c", script }, project, tmp, nil, env)
   local r = vim.system(cmd, { cwd = project, text = true, env = env }):wait((opts or {}).timeout or 60000)
   return r, tmp
 end
@@ -214,7 +218,10 @@ describe("opt-out", function()
     with_g("sandbox", nil, function()
       with_g("allow_unsandboxed", true, function()
         H.eq("bwrap", real_mod.status().mode)
-        H.eq("bwrap", real_mod.wrap({ "true" }, H.tmpdir(), H.tmpdir())[1])
+        local got, _, h = real_mod.wrap({ "true" }, H.tmpdir(), H.tmpdir())
+        H.eq("env", got[1])
+        H.has(got, "bwrap")
+        h.release()
       end)
     end)
   end)
@@ -257,6 +264,9 @@ describe("wrapped command layout", function()
     local cwd = project .. "/sub"
     mkdir(cwd)
     local a = wrap(m, { "echo", "hi there" }, project, tmp, cwd)
+    local at = find_seq(a, "bwrap")
+    H.eq({ "env", "-i" }, vim.list_slice(a, 1, 2), "bwrap starts with an empty environment")
+    a = vim.list_slice(a, at)
     local prefix = {
       "bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--disable-userns", "--unshare-pid",
       "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--cap-drop", "ALL", "--unshare-net", "--ro-bind", "/", "/",
@@ -549,33 +559,19 @@ describe("hidden credentials", function()
     end
   end)
 
-  it("hides the existing system sockets and /run/user/<uid>", function()
+  it("masks the host's /run (system sockets, /run/user/<uid>) and /var/tmp with an empty tmpfs", function()
     if vim.fn.executable("bwrap") ~= 1 then
       return harness.skip("bwrap not found")
     end
     local a = wrap(load_for(fake_home()), { "true" }, H.tmpdir(), H.tmpdir())
-    local sys = {
-      "/run/user/" .. uid, "/run/docker.sock", "/run/docker", "/run/containerd", "/run/podman", "/run/libvirt",
-      "/run/dbus", "/run/snapd.socket", "/run/snapd-snap.socket", "/run/tailscale", "/run/seatd.sock",
-    }
-    local seen = 0
-    for _, p in ipairs(sys) do
-      local st = vim.uv.fs_stat(p)
-      if st then
-        seen = seen + 1
-        if st.type == "directory" then
-          expect_seq(a, "--tmpfs", p)
-        else
-          H.ok(hidden_file(a, p), "socket not hidden: " .. p)
-        end
+    for _, p in ipairs({ "/run", "/var/tmp" }) do
+      if vim.uv.fs_stat(p) then
+        expect_seq(a, "--tmpfs", p)
       else
         expect_no_seq(a, "--tmpfs", p)
-        H.not_ok(hidden_file(a, p))
       end
     end
-    if seen == 0 then
-      harness.skip("none of the system paths exist on this machine (list was checked for absence only)")
-    end
+    expect_seq(a, "--tmpfs", "/tmp")
   end)
 
   it("really hides credentials inside the sandbox (dir empty, file empty)", function()

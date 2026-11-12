@@ -55,15 +55,16 @@ local function input(over, fs_entries, lines)
   end
   local probes = fakefs(entries, lines)
   over = over or {}
-  if over.config and over.config.network == nil then
-    over.config = vim.tbl_extend("force", { network = "open" }, over.config) -- these specs pin the filesystem policy
+  if over.config then
+    -- these specs pin the filesystem policy of the (older) denylist view; the allowlist has its own specs
+    over.config = vim.tbl_extend("force", { network = "open", home = "denylist" }, over.config)
   end
   return vim.tbl_extend("force", {
     project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, probes = probes,
     env = { PATH = "/bin", HOME = HOME, GITHUB_TOKEN = "SECRET-VALUE-1", MY_API_KEY = "SECRET-VALUE-2" },
     cmd = { "agent", "--dangerously-skip-permissions", "-p", "do it" },
     aux = { empty = "/aux/empty", claude_json = "/aux/claude.json" },
-    config = { network = "open" },
+    config = { network = "open", home = "denylist" },
   }, over)
 end
 
@@ -146,7 +147,12 @@ describe("plan contents", function()
   it("the argv is the plan: every section shows up in it", function()
     local p = plan.build(input({}, { [HOME .. "/.ssh"] = "directory" }))
     local a = plan.argv(p)
-    H.eq("bwrap", a[1])
+    -- bwrap starts with an empty environment plus the allowed variables only
+    H.eq({ "env", "-i" }, vim.list_slice(a, 1, 2))
+    H.has(a, "bwrap")
+    H.has(a, "PATH=/bin")
+    H.no_match(table.concat(a, "\0"), "SECRET-VALUE", true, "stripped values must not appear anywhere in the command line")
+    H.no_match(table.concat(a, "\0"), "GITHUB_TOKEN=", true)
     for _, w in ipairs(p.writable) do
       H.has(table.concat(a, "\0"), "--bind\0" .. w.path .. "\0" .. w.path)
     end

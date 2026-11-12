@@ -35,6 +35,12 @@ function M.should_confirm(project)
   return mode == "always" or not store.seen(project)
 end
 
+--- What the terminal the agent runs in provides (bwrap starts with an empty environment, so the
+--- terminal's own variables are given explicitly).
+local function terminal_env()
+  return { TERM = "xterm-256color" }
+end
+
 --- The launch-time preview. `cb(ok, plan_or_reason, once)`: ok is false when the operator cancelled
 --- or nothing may start; otherwise plan is the plan that was shown (pass it to wrap as
 --- opts.plan). Without a UI, with preview = "never", or when this project was shown already
@@ -56,14 +62,14 @@ function M.confirm(cmd, project, tmp_dir, cb)
     return cb(false, st.reason .. (st.hint and (" (" .. st.hint .. ")") or ""))
   end
   if not M.should_confirm(project) then
-    return cb(true, sandbox.plan(cmd, project, tmp_dir), {})
+    return cb(true, sandbox.plan(cmd, project, tmp_dir, { env = terminal_env() }), {})
   end
   require("xyno_sandbox.ui").show({
     project = project,
     confirm = true,
     status = sandbox.status,
     build = function(once)
-      return sandbox.plan(cmd, project, tmp_dir, { exceptions = once })
+      return sandbox.plan(cmd, project, tmp_dir, { exceptions = once, env = terminal_env() })
     end,
     on_done = function(go, plan, once)
       if go then
@@ -85,9 +91,23 @@ local function close_new_split(win, buf)
   end
 end
 
+--- Is the program itself there? Checked BEFORE anything is mounted or opened: the sandbox starts
+--- fine around a missing agent (bwrap only fails inside), which used to leave an empty terminal
+--- split with an error in it.
+local function agent_missing(cmd)
+  if vim.fn.executable(cmd[1]) ~= 1 then
+    notify("could not start " .. cmd[1] .. ": no such executable (not a file, or not on PATH)", vim.log.levels.ERROR)
+    return true
+  end
+  return false
+end
+
 local function launch(cmd, project, tmp_dir, plan, opts)
   local sandbox = require("xyno_sandbox")
-  local wrapped, err, handle = sandbox.wrap(cmd, project, tmp_dir, { plan = plan })
+  if agent_missing(cmd) then
+    return nil
+  end
+  local wrapped, err, handle = sandbox.wrap(cmd, project, tmp_dir, { plan = plan, env = terminal_env() })
   if not wrapped then
     local hint = ". Set allow_unsandboxed = true in setup() to run it anyway."
     notify("refused to start " .. cmd[1] .. ": " .. tostring(err) .. hint, vim.log.levels.ERROR)
@@ -152,6 +172,9 @@ function M.run(cmd, opts)
   local tmp_dir = opts.tmp_dir or (vim.fn.stdpath("cache") .. "/xyno-sandbox")
   vim.fn.mkdir(tmp_dir, "p")
   local sandbox = require("xyno_sandbox")
+  if agent_missing(cmd) then
+    return nil -- before the preview: nothing to confirm for a program that is not there
+  end
   if sandbox.status().mode == "unsandboxed" or not M.should_confirm(project) then
     return launch(cmd, project, tmp_dir, nil, opts)
   end

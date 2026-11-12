@@ -184,11 +184,45 @@ local function alive(pid)
   return r == 0
 end
 
---- Register a live sandbox of this nvim; returns its file name.
-function M.live_add(project, id)
+--- Register a live sandbox of this nvim; returns its file name. `items` = the empty placeholders
+--- the launch may leave in the project ({ path, "dir"|"file" } pairs): when this nvim dies before
+--- it can remove them, the next launch does (see live_orphans).
+function M.live_add(project, id, items)
   local name = ("%d-%s"):format(vim.uv.os_getpid(), id)
-  write_file(live_dir() .. "/" .. name, project .. "\n")
+  local lines = { project }
+  for _, it in ipairs(items or {}) do
+    lines[#lines + 1] = it[2] .. "\t" .. it[1]
+  end
+  write_file(live_dir() .. "/" .. name, table.concat(lines, "\n") .. "\n")
   return name
+end
+
+--- Placeholders recorded by sandboxes whose nvim no longer runs: { { path, kind, project } ... }.
+--- Their registry files are dropped; the caller removes the leftovers that are still empty.
+function M.live_orphans()
+  local out = {}
+  local ok, iter = pcall(vim.fs.dir, live_dir())
+  if not ok then
+    return out
+  end
+  for name in iter do
+    local pid = tonumber(name:match("^(%d+)%-"))
+    if pid and not alive(pid) then
+      local f = io.open(live_dir() .. "/" .. name, "r")
+      if f then
+        local project = f:read("l")
+        for l in f:lines() do
+          local kind, path = l:match("^(%a+)\t(.+)$")
+          if kind and path then
+            out[#out + 1] = { path, kind, project }
+          end
+        end
+        f:close()
+      end
+      vim.uv.fs_unlink(live_dir() .. "/" .. name)
+    end
+  end
+  return out
 end
 
 function M.live_remove(name)

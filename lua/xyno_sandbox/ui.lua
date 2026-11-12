@@ -56,12 +56,48 @@ function M.lines(plan, ctx)
     return out
   end
 
+  local ops = require("xyno_sandbox.plan").ops(plan)
+  local function op_text(op)
+    local out = {}
+    for i, t in ipairs(op.args) do
+      if op.args[1] == "--setenv" and i == 3 then
+        t = "<value not shown>"
+      elseif plan.empty_file and t == plan.empty_file then
+        t = "<empty file>"
+      elseif t:sub(1, #home + 1) == home .. "/" then
+        t = short(t, home)
+      end
+      out[#out + 1] = t
+    end
+    return table.concat(out, " ")
+  end
+  local function op_section(title, name)
+    local list = vim.tbl_filter(function(o)
+      return o.section == name
+    end, ops)
+    if #list == 0 then
+      return
+    end
+    section(title, list, function(o)
+      return ("%s  [%s]"):format(op_text(o), o.why)
+    end)
+  end
+
   local st = ctx.status
   add("sandbox   bubblewrap" .. (st and st.ready == "pending" and " (readiness check running)" or ""))
   if plan.network == "open" then
     add("network   OPEN (not restricted: the agent reaches the internet and local services)")
   else
     add("network   FILTERED: no direct network; HTTPS only through a local proxy, by host name (no DNS from the sandbox)")
+  end
+  if plan.home_mode == "allowlist" then
+    add("home      EMPTY: $HOME shows only the paths listed under Home view, the project and the writable paths")
+  else
+    add("home      READABLE except the hidden credential paths below (home = \"denylist\")")
+  end
+  if plan.blocked then
+    add("")
+    add("BLOCKED: " .. plan.blocked)
   end
   add("")
   if plan.agent.stripped then
@@ -78,6 +114,9 @@ function M.lines(plan, ctx)
       return ("%s  [%s]"):format(h.host, h.why)
     end)
   end
+  op_section("Base view (every sandbox)", "base")
+  op_section("Host sockets and services masked (empty tmpfs, nothing connectable; kept read-only below it)", "sockets")
+  op_section("Home view", "home")
   section("Writable", plan.writable, function(w)
     return ("%s  [%s]"):format(short(w.path, home), w.why)
   end)
@@ -103,12 +142,37 @@ function M.lines(plan, ctx)
   section("Absent files and directories guarded (cannot be created)", guards, function(g)
     return ("%s  [%s]"):format(short(g.path, home), g.why)
   end)
-  section("Hidden credential paths (replaced with empty ones)", plan.hidden, function(h)
-    return ("%s  [%s]"):format(short(h.path, home), h.kind)
+  section("Hidden credential, secret and socket paths (replaced with empty ones)", plan.hidden, function(h)
+    return ("%s  [%s, %s]"):format(short(h.path, home), h.kind, h.why)
   end)
+  op_section("Other mounts", "ephemeral")
+  op_section("Agent config copy", "claude_json")
+  op_section("Agent transcripts", "projects")
+  op_section("Network socket directory", "net")
   section("Stripped environment variables (names only, values are never shown)", plan.env_strip, function(n)
     return n
   end)
+  add("")
+  add(("Environment: bwrap starts with `env -i` and %d variables; stripped values never exist in the sandbox"):format(#(plan.env_pass or {})))
+  if ctx.full then
+    local names = {}
+    for _, kv in ipairs(plan.env_pass or {}) do
+      names[#names + 1] = kv[1]
+    end
+    add("  passed (names): " .. table.concat(names, " "))
+  end
+  op_section("Set inside the sandbox (values not shown)", "setenv")
+  local iso = vim.tbl_filter(function(o)
+    return o.section == "isolation"
+  end, ops)[1]
+  add("")
+  add("Isolation  " .. table.concat(iso.args, " "))
+  if #(plan.symlinks or {}) > 0 then
+    section("Project symlinks that leave the project", plan.symlinks, function(l)
+      return ("%s -> %s  [%s]"):format(short(l.path, home), short(l.target, home),
+        l.readable and "target READABLE in the sandbox" or "target not visible in the sandbox")
+    end)
+  end
 
   if #plan.env_kept > 0 or #plan.exceptions > 0 or #plan.rejected > 0 then
     add("")
@@ -124,6 +188,14 @@ function M.lines(plan, ctx)
     add("")
     for _, n in ipairs(plan.notes) do
       add("Note: " .. n)
+    end
+  end
+  if ctx.full then
+    -- the exact mount order bwrap applies (a later mount wins over an earlier one)
+    add("")
+    add(("Mount order (%d options, top to bottom)"):format(#ops))
+    for i, o in ipairs(ops) do
+      add(("  %d. %s"):format(i, op_text(o)))
     end
   end
   return out

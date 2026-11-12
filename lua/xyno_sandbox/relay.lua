@@ -3,6 +3,13 @@
 -- filtering proxy outside. It decides nothing. It is copied next to the socket at launch, so it
 -- must not require any plugin module. READY is created once the listener is up.
 local uv = vim.uv
+-- nvim starts an RPC server of its own (a unix socket $XDG_RUNTIME_DIR/nvim.<pid>.0): the relay needs
+-- none, and nothing inside the sandbox should be able to connect to it
+pcall(function()
+  for _, addr in ipairs(vim.fn.serverlist()) do
+    vim.fn.serverstop(addr)
+  end
+end)
 local sock, port, ready = arg[1], tonumber(arg[2]), arg[3]
 if not sock or not port or not ready then
   io.stderr:write("usage: relay.lua SOCK PORT READY\n")
