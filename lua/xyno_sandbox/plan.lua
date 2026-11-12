@@ -722,6 +722,7 @@ function M.build(input)
     masks = {},
     masked = {},
     run_keep = {},
+    homes = { masked = {}, allow = {}, rebind_home = false },
     home_allow = {},
     symlinks = {},
     guard_files = {},
@@ -924,6 +925,40 @@ function M.build(input)
     end
   end
 
+  -- other users' homes (and the real passwd home when it is not $HOME): an empty tmpfs. Whatever
+  -- the sandbox needs from them (the project and the writable paths come later; toolchains,
+  -- $PATH entries and the agent binary are re-bound read-only below) is shown again.
+  local home_roots = {}
+  do
+    local seen_root = {}
+    local function root(p, why)
+      if not p or p == "/" or seen_root[p] or not exists(p) then
+        return
+      end
+      if lstat_type(p) == "link" then
+        p = probes.realpath and probes.realpath(p) or nil
+        if not p or p == "/" or seen_root[p] then
+          return
+        end
+      end
+      seen_root[p] = true
+      home_roots[#home_roots + 1] = p
+      plan.homes.masked[#plan.homes.masked + 1] = { path = p, why = why }
+    end
+    root("/home", "other users' homes")
+    local pw = input.passwd_home and M.normalize(input.passwd_home)
+    if pw and pw ~= home and not inside(pw, "/home") then
+      root(pw, "the account's own home, which is not $HOME")
+    end
+  end
+  local function in_home_root(p)
+    for _, r in ipairs(home_roots) do
+      if inside(p, r) then
+        return r
+      end
+    end
+  end
+  plan.homes.rebind_home = home_mode == "denylist" and in_home_root(home) ~= nil
   if home_mode == "allowlist" then
     local aseen = {}
     local function allow(p, why)
@@ -995,8 +1030,128 @@ function M.build(input)
     end
   end
 
+  -- toolchains and binaries that live in a hidden home but are named by $PATH, the environment or
+  -- the command: shown read-only (their owner's credentials inside them stay hidden, see hide_creds)
+  local other_owner = {}
+  do
+    local oseen = {}
+    --- a directory below an owner's home that may be shown as a toolchain (not the home itself, not ~/.local ...)
+    local function toolchain_root(p)
+      local r = in_home_root(p)
+      if not r or inside(p, home) then
+        return false
+      end
+      local owner = r == "/home" and ("/home/" .. (p:match("^/home/([^/]+)") or "")) or r
+      if p == owner or p == r then
+        return false
+      end
+      for _, sub in ipairs({ "/.local", "/.config", "/.cache", "/.local/share", "/.local/state" }) do
+        if p == owner .. sub then
+          return false
+        end
+      end
+      return true
+    end
+    local function allow_other(p, why)
+      if not p or inside(p, home) or not in_home_root(p) or not exists(p) then
+        return
+      end
+      if lstat_type(p) == "link" then
+        local real = probes.realpath and probes.realpath(p)
+        if real and real ~= p then
+          return allow_other(real, why)
+        end
+        return
+      end
+      for covered in pairs(oseen) do
+        if inside(p, covered) then
+          return
+        end
+      end
+      oseen[p] = true
+      plan.homes.allow[#plan.homes.allow + 1] = { path = p, why = why }
+      local r = in_home_root(p)
+      local owner = r
+      if r == "/home" then
+        owner = "/home/" .. (p:match("^/home/([^/]+)") or "")
+      end
+      other_owner[owner] = true
+    end
+    for _, name in ipairs(M.HOME_ALLOW_ENV) do
+      local v = type(env[name]) == "string" and M.normalize(env[name]) or nil
+      if v then
+        allow_other(v, "$" .. name)
+      end
+    end
+    for dir in (env.PATH or ""):gmatch("[^:]+") do
+      local d = M.normalize(dir)
+      if d and in_home_root(d) and not inside(d, home) then
+        allow_other(d, "on $PATH")
+        -- symlinks in a $PATH directory (~/.local/bin/claude -> ~/.local/share/claude/versions/x)
+        for _, e in ipairs(probes.list(d)) do
+          if e[2] == "link" then
+            local real = probes.realpath and probes.realpath(d .. "/" .. e[1])
+            if real and in_home_root(real) then
+              allow_other(real, "target of a $PATH link")
+            end
+          end
+        end
+        local parent = dirname(d)
+        if basename(d) == "bin" and toolchain_root(parent) then
+          allow_other(parent, "toolchain of a $PATH entry")
+        end
+      end
+    end
+    local exe = cmd[1]
+    if exe then
+      local found
+      if exe:find("/", 1, true) then
+        found = exe:sub(1, 1) == "/" and M.normalize(exe) or nil
+      else
+        for dir in (env.PATH or ""):gmatch("[^:]+") do
+          local c = dir .. "/" .. exe
+          if exists(c) and lstat_type(c) ~= "directory" then
+            found = c
+            break
+          end
+        end
+      end
+      if found then
+        allow_other(found, "agent command")
+        local real = probes.realpath and probes.realpath(found)
+        if real and real ~= found then
+          allow_other(real, "agent command")
+        end
+      end
+    end
+    if plan.net and plan.net.nvim and plan.net.nvim:sub(1, 1) == "/" then
+      allow_other(plan.net.nvim, "the network relay's nvim")
+      local real = probes.realpath and probes.realpath(plan.net.nvim)
+      if real then
+        allow_other(real, "the network relay's nvim")
+        local bin = dirname(real)
+        if basename(bin) == "bin" and toolchain_root(dirname(bin)) then
+          allow_other(dirname(bin), "the network relay's nvim")
+        end
+      end
+    end
+  end
+
   -- hidden. In allowlist mode only what is mounted at all (the allowed trees) can be hidden.
   local function reachable(p)
+    if not inside(p, home) and in_home_root(p) then
+      for _, w in ipairs(plan.writable) do
+        if inside(p, w.path) then
+          return true
+        end
+      end
+      for _, a in ipairs(plan.homes.allow) do
+        if inside(p, a.path) then
+          return true
+        end
+      end
+      return false
+    end
     if home_mode == "denylist" or not inside(p, home) then
       return true
     end
@@ -1064,17 +1219,23 @@ function M.build(input)
       end
     end
   end
-  for _, p in ipairs(M.HIDDEN) do
-    hide(home .. p, "credentials")
+  local function hide_creds(base)
+    for _, p in ipairs(M.HIDDEN) do
+      hide(base .. p, "credentials")
+    end
+    for _, g in ipairs(M.HIDDEN_GLOBS) do
+      for _, p in ipairs(probes.glob(base .. g)) do
+        hide(p, "history")
+      end
+    end
+  end
+  hide_creds(home)
+  for owner in pairs(other_owner) do
+    hide_creds(owner)
   end
   if cargo_home and cargo_home ~= home .. "/.cargo" then
     hide(cargo_home .. "/credentials", "credentials")
     hide(cargo_home .. "/credentials.toml", "credentials")
-  end
-  for _, g in ipairs(M.HIDDEN_GLOBS) do
-    for _, p in ipairs(probes.glob(home .. g)) do
-      hide(p, "history")
-    end
   end
   for _, p in ipairs(policy.hidden or {}) do
     local rp = resolve_user_path(p, home, project)
@@ -1299,6 +1460,14 @@ function M.build(input)
     if home_mode == "allowlist" and inside(p, home) then
       return false
     end
+    if in_home_root(p) and not inside(p, home) then
+      for _, a in ipairs(plan.homes.allow) do
+        if inside(p, a.path) then
+          return true
+        end
+      end
+      return false
+    end
     return true
   end
   local real_project = probes.realpath(project) or project
@@ -1410,6 +1579,16 @@ function M.ops(plan)
   end
   for _, k in ipairs(plan.run_keep or {}) do
     add("sockets", k.why, "--ro-bind", k.path, k.path)
+  end
+  local homes = plan.homes or { masked = {}, allow = {} }
+  for _, h in ipairs(homes.masked) do
+    add("homes", h.why .. ": hidden (empty tmpfs)", "--tmpfs", h.path)
+  end
+  if homes.rebind_home then
+    add("homes", "your own home, read-only again (home = \"denylist\")", "--ro-bind", plan.home, plan.home)
+  end
+  for _, a in ipairs(homes.allow) do
+    add("homes", a.why .. " (read-only)", "--ro-bind", a.path, a.path)
   end
   if plan.home_mode == "allowlist" then
     add("home", "empty $HOME: only the paths below are visible", "--tmpfs", plan.home)

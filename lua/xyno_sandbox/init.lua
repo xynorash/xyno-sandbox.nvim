@@ -385,7 +385,7 @@ function M.plan(cmd, project, tmp_dir, opts)
   end
   return plan_mod.build({
     cmd = cmd, project = project, tmp_dir = tmp_dir, cwd = opts.cwd or vim.uv.cwd(), env = env,
-    home = home, uid = uid, config = cfg_view(), aux = opts.aux or aux_paths(), exceptions = excs, nvim = vim.v.progpath,
+    home = home, passwd_home = pwd and pwd.homedir, uid = uid, config = cfg_view(), aux = opts.aux or aux_paths(), exceptions = excs, nvim = vim.v.progpath,
     state_dir = store.dir(),
   })
 end
@@ -400,7 +400,8 @@ end
 function M.baseline(project)
   return plan_mod.build({
     project = project, tmp_dir = "/nonexistent-xyno-baseline", cwd = project, env = vim.fn.environ(), home = home,
-    uid = uid, config = cfg_view(), cmd = { "agent" }, assume_claude_dir = false, state_dir = store.dir(),
+    uid = uid, passwd_home = pwd and pwd.homedir, config = cfg_view(), cmd = { "agent" }, assume_claude_dir = false,
+    state_dir = store.dir(),
   })
 end
 

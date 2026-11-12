@@ -124,6 +124,7 @@ function M.lines(plan, ctx)
   end
   op_section("Base view (every sandbox)", "base")
   op_section("Host sockets and services masked (empty tmpfs, nothing connectable; kept read-only below it)", "sockets")
+  op_section("Other users' homes hidden (empty tmpfs; toolchains kept read-only)", "homes")
   op_section("Home view", "home")
   section("Writable", plan.writable, function(w)
     return ("%s  [%s]"):format(short(w.path, home), w.why)
