@@ -79,6 +79,16 @@ describe("tests/run.lua when the runner itself is killed (kill -9)", function()
   end)
 end)
 
+local function inside(project, script)
+  H.need_sandbox()
+  sb.config.network = "open"
+  local cmd, err, h = sb.wrap({ "bash", "-c", script }, project, H.tmpdir())
+  H.ok(cmd, err)
+  local r = vim.system(cmd, { cwd = project, text = true }):wait(60000)
+  h.release()
+  return (r.stdout or "") .. (r.stderr or "")
+end
+
 -- a wrap() whose launch snapshot is taken, then the project is changed from outside (what a run could have done
 -- below the mask depth), then the run ends
 local function launch(project)
@@ -345,5 +355,65 @@ describe("a skipped directory nested in a skipped directory is entered in the se
     vim.fn.mkdir(project .. "/node_modules/a/node_modules/b", "p")
     local snap = guard.snapshot(project)
     H.eq(4, snap.skip_dirs) -- node_modules, a, node_modules, b
+  end)
+end)
+
+-- ------------------------------------------------------------------ (2) more auto-exec names
+describe("round 8 names: covered or reviewed", function()
+  local LOCKED = {
+    ".devcontainer.json", ".bazelrc", ".bazelversion", ".bazeliskrc", ".lefthook", ".cargo-husky", ".sbtopts", ".jvmopts", ".bundle",
+  }
+  local REVIEW = {
+    "lefthook-local.yml", "gradle.properties", "gradle-wrapper.properties", "build.gradle", "build.gradle.kts",
+    "settings.gradle", "pom.xml", "build.sbt", "Gemfile", "Rakefile", ".rspec", "Procfile", ".nvmrc", ".node-version",
+    ".python-version", ".ruby-version", ".gitattributes", ".tmuxp.yaml", ".tmuxinator.yml", "gradlew", "mvnw",
+  }
+  it("the tables name them (written out here)", function()
+    for _, n in ipairs(LOCKED) do
+      H.ok(vim.tbl_contains(plan.PROJECT_READONLY, n), "PROJECT_READONLY " .. n)
+      H.ok(vim.tbl_contains(plan.MEMBER_READONLY, n), "MEMBER_READONLY " .. n)
+      H.ok(vim.tbl_contains(plan.WATCH_NAMES, n), "WATCH_NAMES " .. n)
+    end
+    H.ok(vim.tbl_contains(plan.MEMBER_READONLY, ".gitmodules"))
+    for _, n in ipairs(REVIEW) do
+      H.ok(vim.tbl_contains(plan.REVIEW_NAMES, n), "REVIEW_NAMES " .. n)
+    end
+  end)
+
+  it("real run: a present one is read-only at the root and in a subdirectory", function()
+    H.need_sandbox()
+    local project = H.tmpdir()
+    local lines = {}
+    for _, n in ipairs(LOCKED) do
+      local dir = (n == ".lefthook" or n == ".cargo-husky" or n == ".bundle")
+      for _, base in ipairs({ project, project .. "/sub" }) do
+        if dir then
+          vim.fn.mkdir(base .. "/" .. n, "p")
+          write(base .. "/" .. n .. "/x")
+          lines[#lines + 1] = ("echo pwn > '%s/%s/new' 2>/dev/null && echo WRITABLE:%s/%s"):format(base, n, base, n)
+        else
+          write(base .. "/" .. n, "orig\n")
+          lines[#lines + 1] = ("echo pwn >> '%s/%s' 2>/dev/null && echo WRITABLE:%s/%s"):format(base, n, base, n)
+        end
+      end
+    end
+    local out = inside(project, table.concat(lines, "\n") .. "\necho DONE")
+    H.match(out, "DONE", true, out)
+    H.no_match(out, "WRITABLE", true, out)
+  end)
+
+  it("a copy planted in a deep directory is found by the sweep", function()
+    local project = H.tmpdir()
+    vim.fn.mkdir(project .. "/a/b/c/d", "p")
+    local before = guard.snapshot(project)
+    for _, n in ipairs({ ".bazelrc", ".devcontainer.json", ".sbtopts" }) do
+      write(project .. "/a/b/c/d/" .. n, "evil\n")
+    end
+    vim.fn.mkdir(project .. "/a/b/c/d/.lefthook/pre-commit", "p")
+    local res = guard.compare(before, guard.snapshot(project))
+    H.eq(
+      { "a/b/c/d/.bazelrc", "a/b/c/d/.devcontainer.json", "a/b/c/d/.lefthook", "a/b/c/d/.sbtopts" },
+      rel_list(project, res.planted)
+    )
   end)
 end)

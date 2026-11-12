@@ -33,6 +33,9 @@ local DIRS = {
   [".git"] = true,
   [".githooks"] = true,
   [".mvn"] = true,
+  [".lefthook"] = true,
+  [".cargo-husky"] = true,
+  [".bundle"] = true,
 }
 local function is_dir_entry(rel, project_names)
   rel = rel:gsub("^/", "")

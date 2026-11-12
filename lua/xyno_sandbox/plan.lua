@@ -104,6 +104,19 @@ M.PROJECT_READONLY = {
   ".pnpmfile.cjs",
   ".dir-locals.el",
   ".lvimrc",
+  -- round 8: devcontainer.json's initializeCommand runs on the host, bazel reads the workspace .bazelrc (.bazelversion /
+  -- .bazeliskrc pick the binary bazelisk downloads and runs), lefthook runs scripts from .lefthook/, cargo-husky copies
+  -- .cargo-husky/hooks into .git/hooks on the next build, sbt and the JVM tools read .sbtopts / .jvmopts (JVM arguments, so a
+  -- -javaagent), bundler reads .bundle/config
+  ".devcontainer.json",
+  ".bazelrc",
+  ".bazelversion",
+  ".bazeliskrc",
+  ".lefthook",
+  ".cargo-husky",
+  ".sbtopts",
+  ".jvmopts",
+  ".bundle",
 }
 -- Locked in every subdirectory the project walk found (when PRESENT there): cargo reads .cargo/config from
 -- every ancestor of the directory it runs in, direnv the nearest .envrc, claude the .claude of its
@@ -141,6 +154,16 @@ M.MEMBER_READONLY = {
   ".pnpmfile.cjs",
   ".dir-locals.el",
   ".lvimrc",
+  ".devcontainer.json",
+  ".bazelrc",
+  ".bazelversion",
+  ".bazeliskrc",
+  ".lefthook",
+  ".cargo-husky",
+  ".sbtopts",
+  ".jvmopts",
+  ".bundle",
+  ".gitmodules",
 }
 -- Names that are only guarded while ABSENT and watched (never locked as such): the package managers' own config files
 -- (.npmrc script-shell, .yarnrc.yml yarnPath run a program of the project's choosing). When they exist they are hidden
@@ -176,6 +199,33 @@ M.REVIEW_NAMES = {
   "lefthook.yaml",
   ".lefthook.yml",
   ".lefthook.yaml",
+  -- round 8: read by tools you run (version selectors, JVM / Ruby / Procfile based projects, the git attribute file that
+  -- names filter drivers), edited by the agent for a reason
+  "lefthook-local.yml",
+  "lefthook-local.yaml",
+  "gradle.properties",
+  "gradle-wrapper.properties",
+  "build.gradle",
+  "build.gradle.kts",
+  "settings.gradle",
+  "settings.gradle.kts",
+  "gradlew",
+  "mvnw",
+  "pom.xml",
+  "build.sbt",
+  "Gemfile",
+  "Rakefile",
+  ".rspec",
+  "Procfile",
+  "Procfile.dev",
+  ".tmuxp.yaml",
+  ".tmuxp.yml",
+  ".tmuxinator.yml",
+  ".nvmrc",
+  ".node-version",
+  ".python-version",
+  ".ruby-version",
+  ".gitattributes",
 }
 -- Absent directories that are masked (an empty read-only directory is mounted there, so the agent cannot
 -- create them) in the SHALLOWEST subdirectories, at most this many mounts: a mount per directory and name for
