@@ -734,8 +734,14 @@ describe("F4: the in-sandbox relay", function()
     H.ok(vim.wait(10000, function()
       return uv.fs_stat(ready) ~= nil
     end, 50), "the relay did not come up")
-    local pid = H.procs(sock)[1] and H.procs(sock)[1][1]
-    H.ok(pid, "relay process")
+    local found = H.procs(sock)
+    local pid
+    for _, pr in ipairs(found) do
+      if pr[2]:find("%-l ") and pr[2]:find("relay.lua", 1, true) and not pr[2]:find("^sh ") then
+        pid = pr[1]
+      end
+    end
+    H.ok(pid, "relay process among " .. vim.inspect(found))
     local function fds()
       local n = 0
       for _ in vim.fs.dir("/proc/" .. pid .. "/fd") do
@@ -844,5 +850,65 @@ describe("F4: ENV_DANGEROUS_EXACT", function()
         H.match(why, "decides which code runs", true, spelled)
       end
     end
+  end)
+end)
+
+-- ---------------------------------------------- survivors of the first mutation run
+describe("round 6 survivors", function()
+  it("no mount point is planned below a path the policy mounts read-only", function()
+    local entries = {
+      [PROJECT .. "/vendor"] = "directory", [PROJECT .. "/vendor/lib"] = "directory", [PROJECT .. "/src"] = "directory",
+    }
+    local fs = fakefs(vim.tbl_extend("force", {
+      [FHOME] = "directory", [FHOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory", [PROJECT .. "/.git"] = "directory",
+    }, entries))
+    local p = plan.build({
+      project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = FHOME, uid = 1000, probes = fs, env = { PATH = "/usr/bin" }, cmd = { "agent" },
+      aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" }, config = { network = "open", policy = { readonly = { "vendor" } } },
+    })
+    local below, outside = 0, 0
+    for _, list in ipairs({ p.masks, p.guard_files }) do
+      for _, m in ipairs(list) do
+        if m.path:find(PROJECT .. "/vendor/", 1, true) == 1 then
+          below = below + 1
+        elseif m.path:find(PROJECT .. "/src/", 1, true) == 1 then
+          outside = outside + 1
+        end
+      end
+    end
+    H.eq(0, below, "a mount point below the read-only vendor/ cannot be created")
+    H.ok(outside > 0, "an ordinary directory still gets its masks")
+  end)
+
+  it("a deleted Makefile is reported as deleted with the lines that went", function()
+    local project = H.tmpdir()
+    write(project .. "/Makefile", "a:\n\tx\n\ty\n")
+    local before = guard.snapshot(project)
+    uv.fs_unlink(project .. "/Makefile")
+    local res = guard.compare(before, guard.snapshot(project))
+    H.eq(1, #res.review)
+    H.eq("deleted", res.review[1].change)
+    H.eq({ 0, 3 }, { res.review[1].plus, res.review[1].minus })
+    H.match(table.concat(guard.report(res), "\n"), "deleted " .. project .. "/Makefile +0 -3", true)
+  end)
+
+  it("a review mark that cannot be read still refuses the launch", function()
+    local project = H.tmpdir()
+    guard.mark_dirty(project, { planted = { project .. "/x/.envrc" }, quarantine = "/q" })
+    local f = assert(io.open(store.dir() .. "/dirty/" .. vim.fn.glob(store.dir() .. "/dirty/*"):match("([^/]+)$"), "wb"))
+    f:write("{ not json")
+    f:close()
+    local rec = guard.dirty(project)
+    H.ok(rec and rec.unreadable, "an unreadable mark is still a mark")
+    local c, why = sb.wrap({ "true" }, project, H.tmpdir())
+    H.eq(nil, c)
+    H.match(why, "XynoSandboxReview", true)
+    guard.clear_dirty(project)
+  end)
+
+  it("every file in .github/workflows is listed in the preview as editable-and-runs-later", function()
+    local p = build({ [PROJECT .. "/.github"] = "directory", [PROJECT .. "/.github/workflows"] = "directory",
+      [PROJECT .. "/.github/workflows/ci.yml"] = "file", [PROJECT .. "/.github/workflows/sub"] = "directory" })
+    H.eq({ PROJECT .. "/.github/workflows/ci.yml" }, p.runs_later)
   end)
 end)
