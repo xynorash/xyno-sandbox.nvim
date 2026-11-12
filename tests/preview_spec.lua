@@ -28,9 +28,11 @@ local TAKES = {
 --- `bwrap` and the `--chdir`, flags without arguments grouped as { "--x" }.
 local function parse(argv)
   local i = 1
-  while argv[i] ~= "bwrap" do
+  -- (bwrap is named by its absolute path in a real launch: the first token whose base name is bwrap)
+  while i <= #argv and vim.fs.basename(argv[i]) ~= "bwrap" do
     i = i + 1
   end
+  assert(i <= #argv, "no bwrap in the command line")
   i = i + 1
   local ops = {}
   while i <= #argv and argv[i] ~= "--chdir" do

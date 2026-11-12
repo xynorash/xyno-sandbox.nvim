@@ -169,6 +169,12 @@ is `setup({ allow_unsandboxed = true })`.
                         the cursor). `revoke {id}` revokes by id, `log` opens
                         the decision log.
 
+                                                         *:XynoSandboxReview*
+:XynoSandboxReview [clear] [dir]
+                        Show the files a run planted (moved into the quarantine
+                        when it ended). `clear` removes the mark so that the
+                        next launch is allowed again.
+
                                                              *:XynoSandboxRun*
 :XynoSandboxRun {cmd} [args...]
                         Run the command in a terminal split, wrapped. The
@@ -242,7 +248,8 @@ as sanitized copies (URL tokens, credential helpers and auth headers removed).
 bwrap, the agent and the network relay end with Neovim (--die-with-parent; the
 relay also exits on SIGTERM, on parent loss and when the proxy socket is gone).
 Environment variables that look like secrets are removed: bwrap itself starts
-with `env -i` and only the allowed variables, so /proc/1/environ has none of
+with `env -i` and only the allowed variables (the bwrap found by the readiness
+check is named by its absolute path), so /proc/1/environ has none of
 them. /run, /var/tmp and /tmp are empty tmpfs (no host unix sockets). $HOME is
 an allowlist by default. Project secrets (.env, *.pem, ...) are hidden. The
 preview is rendered from the same options as the command line.
@@ -287,8 +294,9 @@ hostname allowlist.
   - sockets in the project are hidden everywhere (also target/, node_modules/,
     .git/, 24 levels, 30000 directories); beyond that budget they stay
     connectable and the plan says so.
-  - the ~/.claude.json copy drops API keys, the e-mail address, MCP server env
-    and headers and token-looking strings; a user-scope MCP server that needs
+  - the ~/.claude.json copy drops API keys, the e-mail address, account ids,
+    its env map, hooks, auth helpers, MCP server env and headers and
+    token-looking strings; a user-scope MCP server that needs
     a token from its config does not work inside.
   - after kill -9 of Neovim its private copies, the empty file of the
     launch and Neovim's emptied temporary directory stay until the next
@@ -297,12 +305,18 @@ hostname allowlist.
     policy.symlinks = "refuse").
   - with network = "open", loopback services and abstract sockets are reachable.
   - cargo's `registry/src` and `git` are writable.
-  - a nested `.git` deeper than 8 levels (policy.scan_depth) is not locked,
-    nor one the agent creates in a new directory. The same holds for
-    .cargo/config.toml, .envrc, .claude/settings.json, .mcp.json, .vscode,
-    .zed, .idea, .helix, .husky ... that the agent creates in a SUBDIRECTORY
-    (the ones that exist there are read-only): the plan says so, and release()
-    warns about every new one (handle.planted). It does not prevent or remove them.
+  - a nested `.git` deeper than 8 levels (policy.scan_depth) is not locked.
+    What is ABSENT in a subdirectory: the shallowest ones (at most 360 mounts)
+    get .cargo/.claude/.vscode/.git (directories) and
+    .envrc/.mcp.json/.nvim.lua/.mise.toml/.exrc (files) masked, so they cannot
+    be created. Anywhere else the agent can create them during the run; when
+    the run ends every NEW protected name in the tree is copied into the
+    quarantine (stdpath("state")/xyno-sandbox/quarantine), removed from the
+    project and the project is marked: the next launch is refused until
+    |:XynoSandboxReview| `clear`. Nothing is swept after kill -9 of Neovim.
+    Build and CI files (Makefile, package.json, Cargo.toml, build.rs,
+    .github/workflows ...) cannot be locked; the end of the run reports which
+    changed, with lines added and removed.
   - filtered mode: the agent can read its own token and send it to an allowed
     host; allowed hosts that accept uploads are exfiltration channels; the
     check is on the CONNECT name (no TLS interception, SNI is not compared);

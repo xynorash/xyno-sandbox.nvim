@@ -912,3 +912,54 @@ describe("round 6 survivors", function()
     H.eq({ PROJECT .. "/.github/workflows/ci.yml" }, p.runs_later)
   end)
 end)
+
+-- ------------------------------------------------------------------ docs match the code
+describe("round 6: README, help and changelog say what the code does", function()
+  local readme = io.open(H.repo .. "/README.md"):read("*a")
+  local help = io.open(H.repo .. "/doc/xyno-sandbox.txt"):read("*a")
+  local changelog = io.open(H.repo .. "/CHANGELOG.md"):read("*a")
+
+  it("the documented numbers are the real ones", function()
+    H.eq(360, plan.SUBDIR_MASK_MAX)
+    H.eq(20000, guard.MAX_DIRS)
+    H.eq(16, guard.MAX_DEPTH)
+    H.eq(1500, guard.MAX_MS)
+    H.eq(128 * 1024, guard.REVIEW_MAX_BYTES)
+    H.match(readme, "360 mounts", true)
+    H.match(readme, "20000 directories, 16 levels, 1.5 s", true)
+    H.match(readme, "128 KB", true)
+    H.match(help, "360 mounts", true)
+  end)
+
+  it("every name in the mask lists is named in the README", function()
+    for _, n in ipairs(plan.SUBDIR_MASK_DIRS) do
+      H.match(readme, "`" .. n .. "`", true, n)
+    end
+    for _, n in ipairs(plan.SUBDIR_GUARD_FILES) do
+      H.match(readme, "`" .. n .. "`", true, n)
+    end
+  end)
+
+  it("the new command is in the README, the help file and the lazy.nvim example, and exists", function()
+    H.match(readme, ":XynoSandboxReview", true)
+    H.match(readme, '"XynoSandboxReview"', true)
+    H.match(help, "*:XynoSandboxReview*", true)
+    require("xyno_sandbox.run").register({ commands = true })
+    H.eq(2, vim.fn.exists(":XynoSandboxReview"))
+    for _, c in ipairs({ "XynoSandboxStatus", "XynoSandboxPolicy", "XynoSandboxApprovals", "XynoSandboxReview", "XynoSandboxRun" }) do
+      pcall(vim.api.nvim_del_user_command, c)
+    end
+  end)
+
+  it("the README no longer claims the scan skips files by extension or that nothing is removed", function()
+    H.no_match(readme, "image/archive/lock file extension", true)
+    H.no_match(readme, "it neither prevents nor removes them", true)
+    H.no_match(help, "It does not prevent or remove them", true)
+    H.no_match(readme, "it still keeps `oauthAccount.accountUuid`", true)
+  end)
+
+  it("the changelog has a sixth-round section with a mutation table", function()
+    H.match(changelog, "### Sixth hardening round", true)
+    H.match(changelog, "Mutation check, round 6", true)
+  end)
+end)
