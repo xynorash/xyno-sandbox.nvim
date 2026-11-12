@@ -151,3 +151,172 @@ describe("state files", function()
     H.eq(1, #sb.approvals(project))
   end)
 end)
+
+-- ------------------------------------------------- never approved, never ineffective
+
+describe("approvals that cannot take effect", function()
+  local function last_log()
+    local log = store.read_log()
+    return log[#log], #log
+  end
+
+  it("a writable <project>/.git is refused: the later --ro-bind of .git would override it", function()
+    skip_no_backend()
+    vim.fn.mkdir(project .. "/.git", "p")
+    local e, why = sb.approve(project, "writable", project .. "/.git", "project")
+    H.eq(nil, e)
+    H.match(why, "no effect", true)
+    H.match(why, project .. "/.git", true)
+    local rec = last_log()
+    H.eq("refused", rec.decision, "never logged as approved")
+    H.eq(project .. "/.git", rec.path)
+    H.ok(rec.reason)
+    H.eq({}, sb.approvals(project), "and not remembered")
+    -- also files and sub-paths below a read-only lock
+    vim.fn.writefile({}, project .. "/.git/config")
+    local e2, why2 = sb.approve(project, "writable", project .. "/.git/config", "once")
+    H.eq(nil, e2)
+    H.match(why2, "no effect", true)
+  end)
+
+  it("the build refuses it too, whatever called it: IGNORED in the plan, not writable, not an exception", function()
+    skip_no_backend()
+    vim.fn.mkdir(project .. "/.git", "p")
+    local p = plan_for({ { kind = "writable", value = project .. "/.git", scope = "once" } })
+    H.eq(0, #p.exceptions)
+    H.eq(1, #p.rejected)
+    H.match(p.rejected[1].reason, "no effect", true)
+    for _, w in ipairs(p.writable) do
+      H.not_ok(w.path == project .. "/.git" and w.exception, "writable exception applied")
+    end
+    local text = table.concat(require("xyno_sandbox.ui").lines(p), "\n")
+    H.match(text, "IGNORED writable", true)
+  end)
+
+  it("a hidden path other than the exact one cannot be 'shown' (a child of a hidden dir, an unhidden path)", function()
+    skip_no_backend()
+    local home = vim.uv.os_homedir()
+    local e, why = sb.approve(project, "unhide", home .. "/.ssh/id_ed25519", "once")
+    H.eq(nil, e)
+    H.match(why, "does not hide", true)
+    local e2, why2 = sb.approve(project, "unhide", project, "once")
+    H.eq(nil, e2)
+    H.match(why2, "does not hide", true)
+  end)
+
+  it("an env approval for a variable the policy does not strip is refused", function()
+    local e, why = sb.approve(project, "env", "XYNO_HARMLESS_VAR", "once")
+    H.eq(nil, e)
+    H.match(why, "not stripped", true)
+  end)
+end)
+
+describe("approve() validation", function()
+  local function refused(kind, value, pat)
+    local e, why = sb.approve(project, kind, value, "project")
+    H.eq(nil, e, kind .. " " .. value .. " must be refused")
+    H.match(why, pat, false, kind .. " " .. value)
+    local log = store.read_log()
+    H.eq("refused", log[#log].decision)
+    H.eq(value, log[#log].path or log[#log].name)
+    H.ok(log[#log].reason, "the reason is logged")
+    H.eq({}, sb.approvals(project))
+  end
+
+  it("refuses writable shell startup files, /etc, /proc, /run/user, $HOME's autostart and bin dirs", function()
+    local home = vim.uv.os_homedir()
+    refused("writable", "/etc", "system path")
+    refused("writable", "/proc/self", "system path")
+    refused("writable", "/proc", "system path")
+    refused("writable", "/usr/bin", "system path")
+    refused("writable", "/run", "system path")
+    refused("writable", "/home", "contains %$HOME")
+    for _, rel in ipairs({ "/.bashrc", "/.zshrc", "/.profile", "/.ssh", "/.local/bin", "/.config/autostart", "/.config/nvim", "/.gitconfig" }) do
+      local p = home .. rel
+      -- the check is on the path, so it also holds when the file does not exist (then "does not exist" comes first)
+      local ok, why = plan.validate_exception({ kind = "writable", value = p },
+        { home = home, probes = { exists = function() return true end, realpath = function(x) return x end } })
+      H.not_ok(ok, rel)
+      H.match(why, "would run, or steer tools, outside the sandbox later", true, rel)
+    end
+    local uid = vim.uv.os_get_passwd().uid
+    if vim.uv.fs_stat("/run/user/" .. uid) then
+      refused("writable", "/run/user/" .. uid, "system path")
+    end
+  end)
+
+  it("refuses a symlink that resolves into a forbidden place, and says where it leads", function()
+    local link = data .. "/innocent"
+    vim.uv.fs_symlink("/etc", link)
+    local e, why = sb.approve(project, "writable", link, "project")
+    H.eq(nil, e)
+    H.match(why, "resolves to /etc", true)
+    local link2 = data .. "/proc-link"
+    vim.uv.fs_symlink("/proc/self", link2)
+    local e2, why2 = sb.approve(project, "writable", link2, "once")
+    H.eq(nil, e2)
+    H.match(why2, "resolves to", true)
+    local log = store.read_log()
+    H.eq(2, #log)
+    H.eq("refused", log[1].decision)
+    H.eq("refused", log[2].decision)
+  end)
+
+  it("never reveals /etc/shadow & co. (unhide)", function()
+    for _, p in ipairs({ "/etc/shadow", "/etc/gshadow", "/etc/sudoers", "/etc/sudoers.d", "/etc/ssh/ssh_host_ed25519_key" }) do
+      refused("unhide", p, "never revealed")
+    end
+    local link = data .. "/shadow-link"
+    vim.uv.fs_symlink("/etc/shadow", link)
+    local e, why = sb.approve(project, "unhide", link, "once")
+    H.eq(nil, e)
+    H.ok(why)
+  end)
+
+  it("refuses LD_PRELOAD, PATH, LD_LIBRARY_PATH & co. unless the expert flag is set, and logs it either way", function()
+    for _, name in ipairs({ "LD_PRELOAD", "PATH", "LD_LIBRARY_PATH", "LD_AUDIT", "BASH_ENV", "PYTHONPATH", "NODE_OPTIONS", "RUSTC_WRAPPER" }) do
+      local e, why = sb.approve(project, "env", name, "project")
+      H.eq(nil, e, name)
+      H.match(why, "decides which code runs", true, name)
+    end
+    local log = store.read_log()
+    H.eq(8, #log, "every decision is logged")
+    for _, rec in ipairs(log) do
+      H.eq("refused", rec.decision)
+      H.ok(rec.reason)
+    end
+    H.eq({}, sb.approvals(project))
+  end)
+
+  it("the expert flag lifts the code-selection refusal, but only for a variable the policy actually strips", function()
+    sb.config.expert_exceptions = true
+    sb.config.policy = { scrub = { exact = { "LD_PRELOAD" } } }
+    local e = sb.approve(project, "env", "LD_PRELOAD", "once")
+    H.eq({ kind = "env", value = "LD_PRELOAD", scope = "once" }, e)
+    local e2, why2 = sb.approve(project, "env", "PATH", "once")
+    H.eq(nil, e2)
+    H.match(why2, "not stripped", true, "PATH is not scrubbed, so there is nothing to let through")
+    local log = store.read_log()
+    H.eq("approved", log[1].decision)
+    H.eq("refused", log[2].decision)
+    sb.config.expert_exceptions = false
+    local e3, why3 = sb.approve(project, "env", "LD_PRELOAD", "once")
+    H.eq(nil, e3)
+    H.match(why3, "decides which code runs", true)
+  end)
+
+  it("a valid exception still works and is logged as approved with its scope", function()
+    local e = sb.approve(project, "writable", data, "once")
+    H.ok(e)
+    local log = store.read_log()
+    H.eq("approved", log[#log].decision)
+    H.eq(data, log[#log].path)
+    H.eq(nil, log[#log].reason)
+  end)
+
+  it("setup() takes expert_exceptions as a boolean only", function()
+    H.throws(function() sb.setup({ expert_exceptions = "yes" }) end, "expert_exceptions")
+    sb.setup({ preview = "never", expert_exceptions = true })
+    H.eq(true, sb.config.expert_exceptions)
+  end)
+end)

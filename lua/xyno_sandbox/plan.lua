@@ -140,7 +140,7 @@ M.PROJECT_SECRET_GLOBS = {
   ".env", ".env.*", "*.env", ".envrc.local", ".npmrc", ".yarnrc.yml", ".pypirc", ".netrc", "_netrc",
   ".git-credentials", ".dockercfg", ".htpasswd", "credentials", "credentials.*", "secrets", "secrets.*",
   "secret.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.kdbx", "id_rsa", "id_dsa",
-  "id_ecdsa", "id_ed25519", "service-account*.json", "service_account*.json", "client_secret*.json",
+  "id_ecdsa", "id_ed25519", "*service-account*.json", "*service_account*.json", "client_secret*.json", "*-credentials.json",
   "*.tfvars", "terraform.tfstate", "terraform.tfstate.*", "*.tfstate", "kubeconfig", "*.kubeconfig",
 }
 M.PROJECT_SECRET_EXCEPT = {
@@ -895,10 +895,24 @@ function M.build(input)
   if home_mode == "allowlist" then
     local aseen = {}
     local function allow(p, why)
-      if p and p ~= home and inside(p, home) and not aseen[p] and exists(p) then
-        aseen[p] = true
-        plan.home_allow[#plan.home_allow + 1] = { path = p, why = why }
+      if not (p and p ~= home and inside(p, home) and exists(p)) then
+        return
       end
+      if lstat_type(p) == "link" then
+        -- bwrap cannot mount on a symlink: show what it points to (the link itself is not recreated)
+        local real = probes.realpath and probes.realpath(p)
+        if real and real ~= p then
+          return allow(real, why)
+        end
+        return
+      end
+      for covered in pairs(aseen) do
+        if inside(p, covered) then
+          return
+        end
+      end
+      aseen[p] = true
+      plan.home_allow[#plan.home_allow + 1] = { path = p, why = why }
     end
     for _, rel in ipairs(M.HOME_ALLOW) do
       allow(home .. rel, "toolchain / git")
@@ -1325,6 +1339,23 @@ function M.probe_argv(net)
   end
   vim.list_extend(a, { "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "true" })
   return a
+end
+
+-- Number of arguments of the bwrap options the plan uses (for splitting an op into its options).
+M.FLAG_ARITY = {
+  ["--bind"] = 2, ["--ro-bind"] = 2, ["--setenv"] = 2, ["--unsetenv"] = 1, ["--tmpfs"] = 1, ["--dev"] = 1, ["--proc"] = 1,
+  ["--remount-ro"] = 1, ["--chdir"] = 1, ["--cap-drop"] = 1,
+}
+
+--- Split the arguments of an op into single bwrap options: { { "--tmpfs", "/x" }, { "--remount-ro", "/x" } }.
+function M.split_options(args)
+  local out, i = {}, 1
+  while i <= #args do
+    local n = M.FLAG_ARITY[args[i]] or 0
+    out[#out + 1] = vim.list_slice(args, i, i + n)
+    i = i + 1 + n
+  end
+  return out
 end
 
 --- Every bwrap option of a plan, in the order bwrap applies them, as { section, why, args } records.

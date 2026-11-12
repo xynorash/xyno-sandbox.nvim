@@ -95,6 +95,9 @@ end
 --- fine around a missing agent (bwrap only fails inside), which used to leave an empty terminal
 --- split with an error in it.
 local function agent_missing(cmd)
+  if require("xyno_sandbox").status().mode == "refused" then
+    return false -- the refusal (no sandbox) is the more useful message
+  end
   if vim.fn.executable(cmd[1]) ~= 1 then
     notify("could not start " .. cmd[1] .. ": no such executable (not a file, or not on PATH)", vim.log.levels.ERROR)
     return true

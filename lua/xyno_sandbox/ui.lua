@@ -56,11 +56,12 @@ function M.lines(plan, ctx)
     return out
   end
 
-  local ops = require("xyno_sandbox.plan").ops(plan)
-  local function op_text(op)
+  local plan_mod = require("xyno_sandbox.plan")
+  local ops = plan_mod.ops(plan)
+  local function opt_text(args)
     local out = {}
-    for i, t in ipairs(op.args) do
-      if op.args[1] == "--setenv" and i == 3 then
+    for i, t in ipairs(args) do
+      if args[1] == "--setenv" and i == 3 then
         t = "<value not shown>"
       elseif plan.empty_file and t == plan.empty_file then
         t = "<empty file>"
@@ -70,6 +71,13 @@ function M.lines(plan, ctx)
       out[#out + 1] = t
     end
     return table.concat(out, " ")
+  end
+  local function op_text(op)
+    local parts = {}
+    for _, o in ipairs(plan_mod.split_options(op.args)) do
+      parts[#parts + 1] = opt_text(o)
+    end
+    return table.concat(parts, " ")
   end
   local function op_section(title, name)
     local list = vim.tbl_filter(function(o)
@@ -142,9 +150,15 @@ function M.lines(plan, ctx)
   section("Absent files and directories guarded (cannot be created)", guards, function(g)
     return ("%s  [%s]"):format(short(g.path, home), g.why)
   end)
-  section("Hidden credential, secret and socket paths (replaced with empty ones)", plan.hidden, function(h)
+  local proj_hidden, cred_hidden = {}, {}
+  for _, h in ipairs(plan.hidden) do
+    table.insert(h.why:match("^project ") and proj_hidden or cred_hidden, h)
+  end
+  local function hfmt(h)
     return ("%s  [%s, %s]"):format(short(h.path, home), h.kind, h.why)
-  end)
+  end
+  section("Hidden project secrets and sockets (replaced with empty ones; e approves one)", proj_hidden, hfmt)
+  section("Hidden credential paths (replaced with empty ones)", cred_hidden, hfmt)
   op_section("Other mounts", "ephemeral")
   op_section("Agent config copy", "claude_json")
   op_section("Agent transcripts", "projects")
@@ -192,10 +206,16 @@ function M.lines(plan, ctx)
   end
   if ctx.full then
     -- the exact mount order bwrap applies (a later mount wins over an earlier one)
+    local options = {}
+    for _, o in ipairs(ops) do
+      if o.section ~= "isolation" then
+        vim.list_extend(options, plan_mod.split_options(o.args))
+      end
+    end
     add("")
-    add(("Mount order (%d options, top to bottom)"):format(#ops))
-    for i, o in ipairs(ops) do
-      add(("  %d. %s"):format(i, op_text(o)))
+    add(("Mount order (%d options, top to bottom)"):format(#options))
+    for i, o in ipairs(options) do
+      add(("  %d. %s"):format(i, opt_text(o)))
     end
   end
   return out

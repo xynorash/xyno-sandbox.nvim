@@ -43,7 +43,7 @@ describe("preview text", function()
     H.match(text, "Writable (", true)
     H.match(text, project, true)
     H.match(text, "Read-only", true)
-    H.match(text, "Hidden credential, secret and socket paths", true)
+    H.match(text, "Hidden credential paths", true)
     H.match(text, "Stripped environment variables (names only, values are never shown)", true)
     H.match(text, "XS_TEST_API_KEY", true)
     H.match(text, "git directories locked", true)
@@ -349,6 +349,78 @@ describe("run()", function()
     H.eq(1, #errs)
     H.match(errs[1][1], "could not start", true)
   end)
+
+  local function placeholders_gone()
+    for _, rel in ipairs({ ".envrc", ".vscode", ".cargo", ".mise.toml", ".git", ".claude", ".nvim.lua", ".nvimrc", ".exrc", ".mcp.json" }) do
+      H.eq(nil, vim.uv.fs_stat(project .. "/" .. rel), rel .. " placeholder left behind")
+    end
+  end
+
+  it("sandbox = true and an agent path that does not exist: no job, no split, no buffer, nothing mounted", function()
+    H.need_sandbox()
+    sb.setup({ preview = "never" })
+    local w0, b0 = wins()
+    local r0 = sb.running()
+    local job
+    local got = H.capture_notify(function()
+      job = sb.run({ project .. "/no/such/agent", "--flag" }, { project = project, tmp_dir = tmp })
+    end)
+    H.eq(nil, job)
+    local w1, b1 = wins()
+    H.eq(w0, w1, "no split left behind")
+    H.eq(b0, b1, "no buffer left behind")
+    H.eq(r0, sb.running(), "no sandbox handle left behind")
+    local errs = vim.tbl_filter(function(g) return g[2] == vim.log.levels.ERROR end, got)
+    H.eq(1, #errs)
+    H.match(errs[1][1], "no such executable", true)
+    placeholders_gone()
+  end)
+
+  it("sandbox = true and an agent that cannot run INSIDE the sandbox: the handle is released and the placeholders removed", function()
+    H.need_sandbox()
+    sb.setup({ preview = "never", network = "open" })
+    local agent = project .. "/broken-agent"
+    vim.fn.writefile({ "#!/nonexistent/interpreter", "echo never" }, agent) -- executable on the host, exec fails in bwrap
+    vim.uv.fs_chmod(agent, tonumber("755", 8))
+    local job = sb.run({ agent }, { project = project, tmp_dir = tmp })
+    H.ok(job and job > 0, "bwrap itself starts")
+    H.ok(vim.fn.jobwait({ job }, 20000)[1] ~= 0, "and the agent fails")
+    H.ok(vim.wait(2000, function() return sb.running() == 0 end, 20), "handle released after the failed start")
+    placeholders_gone()
+    vim.cmd("silent! bwipeout!")
+  end)
+
+  for name, stub in pairs({
+    ["returns 0"] = function() return 0 end,
+    ["returns -1"] = function() return -1 end,
+    ["raises"] = function() error("E475: simulated jobstart failure") end,
+  }) do
+    it(("a jobstart that %s closes the new split and buffer and releases the sandbox"):format(name), function()
+      H.need_sandbox()
+      sb.setup({ preview = "never", network = "open" })
+      local w0, b0 = wins()
+      local real = vim.fn.jobstart
+      vim.fn.jobstart = stub
+      local job
+      local got = H.capture_notify(function()
+        local ok, err = pcall(function()
+          job = sb.run({ "true" }, { project = project, tmp_dir = tmp })
+        end)
+        vim.fn.jobstart = real
+        assert(ok, err)
+      end)
+      vim.fn.jobstart = real
+      H.eq(nil, job)
+      local w1, b1 = wins()
+      H.eq(w0, w1, "the split opened for the terminal is closed again")
+      H.eq(b0, b1, "and its buffer deleted")
+      H.eq(0, sb.running(), "the sandbox handle is released")
+      local errs = vim.tbl_filter(function(g) return g[2] == vim.log.levels.ERROR end, got)
+      H.eq(1, #errs)
+      H.match(errs[1][1], "could not start", true)
+      placeholders_gone()
+    end)
+  end
 
   it("with a sandbox: releases the private copy and the placeholders when the job ends", function()
     H.need_sandbox()

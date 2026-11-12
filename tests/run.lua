@@ -9,7 +9,21 @@ if repo == "" or repo == "." then
   repo = vim.uv.cwd()
 end
 
+-- Names that sandbox guards create in a project directory. A spec that leaves one in /tmp breaks
+-- every unrelated spec and tool that looks for a repository or an .envrc there, so a new one fails the run.
+local STRAYS = { ".git", ".envrc", ".exrc", ".mcp.json", ".mise.toml", ".nvim.lua", ".nvimrc", ".cargo", ".claude", ".vscode" }
+local function strays()
+  local out = {}
+  for _, n in ipairs(STRAYS) do
+    if vim.uv.fs_lstat("/tmp/" .. n) then
+      out[n] = true
+    end
+  end
+  return out
+end
+
 local function run_all()
+  local before = strays()
   local total = { passed = 0, failed = 0, skipped = 0, xfailed = 0 }
   local files = vim.fn.glob(repo .. "/tests/*_spec.lua", true, true)
   table.sort(files)
@@ -22,6 +36,13 @@ local function run_all()
     end
     if r.code ~= 0 and not (r.stdout or ""):find("RESULT", 1, true) then
       total.failed = total.failed + 1
+    end
+    for n in pairs(strays()) do
+      if not before[n] then
+        before[n] = true
+        total.failed = total.failed + 1
+        io.stdout:write(("FAIL %s left /tmp/%s behind (a sandbox placeholder leaked into a shared directory)\n"):format(vim.fs.basename(f), n))
+      end
     end
   end
   io.stdout:write(("RESULT passed=%d failed=%d skipped=%d xfailed=%d\n"):format(total.passed, total.failed, total.skipped, total.xfailed))

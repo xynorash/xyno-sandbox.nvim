@@ -131,7 +131,8 @@ describe("documentation", function()
     for _, w in ipairs({
       "preview", "strip_skip_permissions", "agent_cmd", "guard_files", "guard_dirs", "scan_depth",
       ":XynoSandboxPolicy", ":XynoSandboxApprovals", "exceptions.log", "Agent permission prompts",
-      "statusline", "handle.release", "xfail", "unprivileged_userns_clone",
+      "statusline", "handle.release", "xfail", "unprivileged_userns_clone", "home_allow", "keep_run", "project_secrets",
+      "secret_files", "secret_allow", "expert_exceptions", "env -i", "symlinks",
     }) do
       H.has(text, w)
     end
