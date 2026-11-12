@@ -149,7 +149,16 @@ describe("git write mode", function()
         "mkdir .git/hooks.new && mv .git/hooks .git/hooks.old 2>&1; echo mvhooks=$?",
       }, "\n")
       local out = inside(script, project, { git_write = true })
-      for _, k in ipairs({ "rebase_merge", "rebase_apply", "sequencer", "remotes", "branches", "worktrees", "modules", "mvhooks" }) do
+      for _, k in ipairs({
+        "rebase_merge",
+        "rebase_apply",
+        "sequencer",
+        "remotes",
+        "branches",
+        "worktrees",
+        "modules",
+        "mvhooks",
+      }) do
         H.no_match(out, "\n" .. k .. "=0", true, k .. " must be refused:\n" .. out)
       end
       for _, d in ipairs({ "rebase-merge", "rebase-apply", "sequencer", "remotes", "branches", "worktrees", "modules" }) do
@@ -181,21 +190,24 @@ describe("git write mode", function()
       H.match(out, "headwrite=0", true, "the rest of a submodule git dir stays writable:\n" .. out)
     end)
 
-    it("the argv: every git directory is bound on its own, before the read-only parts, and commondir is pinned", function()
-      local project = H.fixture("basic", { git = true })
-      H.need_sandbox()
-      sb.config.policy = vim.tbl_extend("force", sb.config.policy or {}, { git_write = true })
-      local p = sb.plan({ "true" }, project, H.tmpdir())
-      H.ok(p, "a plan")
-      local argv = table.concat(sb.argv(p), " ")
-      local bind = argv:find("--bind " .. project .. "/.git " .. project .. "/.git", 1, true)
-      local ro = argv:find("--ro-bind " .. project .. "/.git/hooks", 1, true)
-      H.ok(bind and ro and bind < ro, "the .git bind comes before the read-only hooks")
-      H.match(argv, project .. "/.git/commondir", true)
-      sb.config.policy.git_write = nil
-      p = sb.plan({ "true" }, project, H.tmpdir())
-      H.no_match(table.concat(sb.argv(p), " "), "--bind " .. project .. "/.git ", true)
-    end)
+    it(
+      "the argv: every git directory is bound on its own, before the read-only parts, and commondir is pinned",
+      function()
+        local project = H.fixture("basic", { git = true })
+        H.need_sandbox()
+        sb.config.policy = vim.tbl_extend("force", sb.config.policy or {}, { git_write = true })
+        local p = sb.plan({ "true" }, project, H.tmpdir())
+        H.ok(p, "a plan")
+        local argv = table.concat(sb.argv(p), " ")
+        local bind = argv:find("--bind " .. project .. "/.git " .. project .. "/.git", 1, true)
+        local ro = argv:find("--ro-bind " .. project .. "/.git/hooks", 1, true)
+        H.ok(bind and ro and bind < ro, "the .git bind comes before the read-only hooks")
+        H.match(argv, project .. "/.git/commondir", true)
+        sb.config.policy.git_write = nil
+        p = sb.plan({ "true" }, project, H.tmpdir())
+        H.no_match(table.concat(sb.argv(p), " "), "--bind " .. project .. "/.git ", true)
+      end
+    )
   end)
 
   it("the preview says so: a Git write mode section naming what stays read-only; absent by default", function()

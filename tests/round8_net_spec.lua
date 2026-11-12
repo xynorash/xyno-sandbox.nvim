@@ -822,9 +822,12 @@ describe("the head and what follows it", function()
   it("an empty head ('\\r\\n\\r\\n' alone) is a request that is not CONNECT: 405, not a wait", function()
     local p = start_proxy({ "allowed.test" })
     local r = raw(p, "\r\n\r\n")
-    H.ok(wait_for(function()
-      return r.eof
-    end, 3000), "the proxy waited: " .. r.buf)
+    H.ok(
+      wait_for(function()
+        return r.eof
+      end, 3000),
+      "the proxy waited: " .. r.buf
+    )
     H.match(r.buf, "HTTP/1.1 405", true)
     r.pipe:close()
     p.close()
@@ -854,9 +857,12 @@ describe("the head and what follows it", function()
       end
       local p = start_proxy({ "allowed.test:" .. port })
       local c = client(p, "allowed.test", port, extra)
-      H.ok(wait_for(function()
-        return seen == extra
-      end), "upstream saw " .. vim.inspect(seen))
+      H.ok(
+        wait_for(function()
+          return seen == extra
+        end),
+        "upstream saw " .. vim.inspect(seen)
+      )
       c.pipe:close()
       p.close()
     end

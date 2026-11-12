@@ -76,7 +76,12 @@ describe("the content scan: private keys inside base64", function()
   }) do
     it(kind .. " header is found at each of the three alignments", function()
       for k = 0, 2 do
-        local doc = ("x"):rep(k) .. "-----BEGIN " .. kind .. "-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END " .. kind .. "-----\n"
+        local doc = ("x"):rep(k)
+          .. "-----BEGIN "
+          .. kind
+          .. "-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END "
+          .. kind
+          .. "-----\n"
         local line = "data: " .. vim.base64.encode(doc)
         H.ok(#scan.text(line) > 0, kind .. " alignment " .. k)
       end
@@ -157,23 +162,26 @@ describe("the runner removes trees that hold read-only directories", function()
     vim.system({ "chmod", "-R", "u+rwX", p }):wait()
   end
 
-  it("reap_stale removes a dead runner's directory with 0555 / 0000 directories and does not follow a symlink", function()
-    local base = H.tmpdir()
-    local outside = H.tmpdir() .. "/precious"
-    write(outside .. "/file", "x")
-    uv.fs_chmod(outside, tonumber("500", 8))
-    local dead = base .. "/xyno-run-DEADRO"
-    read_only_tree(dead, outside)
-    local n = reaper.reap_stale({ base })
-    if uv.fs_lstat(dead) then
-      open_up(dead)
+  it(
+    "reap_stale removes a dead runner's directory with 0555 / 0000 directories and does not follow a symlink",
+    function()
+      local base = H.tmpdir()
+      local outside = H.tmpdir() .. "/precious"
+      write(outside .. "/file", "x")
+      uv.fs_chmod(outside, tonumber("500", 8))
+      local dead = base .. "/xyno-run-DEADRO"
+      read_only_tree(dead, outside)
+      local n = reaper.reap_stale({ base })
+      if uv.fs_lstat(dead) then
+        open_up(dead)
+      end
+      H.eq(1, n, "counted")
+      H.eq(nil, uv.fs_lstat(dead), "the whole tree is gone")
+      H.ok(uv.fs_stat(outside .. "/file"), "what the symlink pointed at is untouched")
+      H.eq(tonumber("500", 8), uv.fs_stat(outside).mode % 512, "and its mode is unchanged")
+      uv.fs_chmod(outside, tonumber("700", 8))
     end
-    H.eq(1, n, "counted")
-    H.eq(nil, uv.fs_lstat(dead), "the whole tree is gone")
-    H.ok(uv.fs_stat(outside .. "/file"), "what the symlink pointed at is untouched")
-    H.eq(tonumber("500", 8), uv.fs_stat(outside).mode % 512, "and its mode is unchanged")
-    uv.fs_chmod(outside, tonumber("700", 8))
-  end)
+  )
 
   it("a second pass has nothing left to do (no ownerless remainder waiting for a day)", function()
     local base = H.tmpdir()
@@ -187,10 +195,12 @@ describe("the runner removes trees that hold read-only directories", function()
     H.eq(nil, uv.fs_lstat(dead))
   end)
 
-  it("the end of a complete run removes its scratch directory even when a spec left read-only directories in it", function()
-    local dir = H.tmpdir()
-    local f = assert(io.open(dir .. "/ro_spec.lua", "w"))
-    f:write(([[
+  it(
+    "the end of a complete run removes its scratch directory even when a spec left read-only directories in it",
+    function()
+      local dir = H.tmpdir()
+      local f = assert(io.open(dir .. "/ro_spec.lua", "w"))
+      f:write(([[
       it("leaves a read-only tree", function()
         local s = assert(os.getenv("XYNO_TEST_SCRATCH"))
         vim.fn.mkdir(s .. "/ro/inner", "p")
@@ -200,25 +210,26 @@ describe("the runner removes trees that hold read-only directories", function()
         local o = assert(io.open(%q, "w")) o:write(s) o:close()
       end)
     ]]):format(dir .. "/scratch"))
-    f:close()
-    local r = vim
-      .system(
-        { vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/ro_spec.lua" },
-        { text = true, env = { XYNO_TEST_WORKER = "0" } }
-      )
-      :wait(120000)
-    local sf = io.open(dir .. "/scratch")
-    local scratch = sf and sf:read("a")
-    if sf then
-      sf:close()
+      f:close()
+      local r = vim
+        .system(
+          { vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/ro_spec.lua" },
+          { text = true, env = { XYNO_TEST_WORKER = "0" } }
+        )
+        :wait(120000)
+      local sf = io.open(dir .. "/scratch")
+      local scratch = sf and sf:read("a")
+      if sf then
+        sf:close()
+      end
+      H.ok(scratch and scratch ~= "", "the spec ran: " .. (r.stdout or ""))
+      local left = uv.fs_lstat(scratch) ~= nil
+      if left then
+        open_up(scratch)
+        vim.fn.delete(scratch, "rf")
+      end
+      H.eq(0, r.code, r.stdout)
+      H.not_ok(left, "the scratch directory of the finished run was left behind")
     end
-    H.ok(scratch and scratch ~= "", "the spec ran: " .. (r.stdout or ""))
-    local left = uv.fs_lstat(scratch) ~= nil
-    if left then
-      open_up(scratch)
-      vim.fn.delete(scratch, "rf")
-    end
-    H.eq(0, r.code, r.stdout)
-    H.not_ok(left, "the scratch directory of the finished run was left behind")
-  end)
+  )
 end)

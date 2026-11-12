@@ -832,7 +832,11 @@ describe("the words of the report and of the review mark", function()
       quarantine = "/q",
       tampered = { { from = "/a", to = "/b" } },
     })
-    H.match(text, "created 1 file that run outside the sandbox (/p/.envrc) and they were removed from the project; a copy is in /q. A protected name was moved", true)
+    H.match(
+      text,
+      "created 1 file that run outside the sandbox (/p/.envrc) and they were removed from the project; a copy is in /q. A protected name was moved",
+      true
+    )
   end)
 
   it("a record with nothing in it still refuses, with the generic text", function()
@@ -862,7 +866,8 @@ describe("the words of the report and of the review mark", function()
       mod[i] = "/p/m" .. i
       det[mod[i]] = { plus = i, minus = 1, names = {} }
     end
-    local lines, loud = guard.report({ review = {}, modified = vim.list_slice(mod, 1, 8), details = det, tampered = {} })
+    local lines, loud =
+      guard.report({ review = {}, modified = vim.list_slice(mod, 1, 8), details = det, tampered = {} })
     H.match(lines[1], "/p/m8 +8 -1", true)
     H.no_match(lines[1], "in all", true)
     H.eq(true, loud[1])
@@ -876,22 +881,25 @@ describe("the words of the report and of the review mark", function()
     H.match(lines[1], "/p/n", true)
   end)
 
-  it("tampered: the arrow, the counts when known, four names, 8 listed then the total; the second result marks them loud", function()
-    local t = {}
-    for i = 1, 9 do
-      t[i] = { from = "/p/a" .. i, to = "/p/b" .. i, plus = i, minus = 2, names = { "a", "b", "c", "d", "e" } }
+  it(
+    "tampered: the arrow, the counts when known, four names, 8 listed then the total; the second result marks them loud",
+    function()
+      local t = {}
+      for i = 1, 9 do
+        t[i] = { from = "/p/a" .. i, to = "/p/b" .. i, plus = i, minus = 2, names = { "a", "b", "c", "d", "e" } }
+      end
+      local lines, loud = guard.report({ review = {}, modified = {}, tampered = vim.list_slice(t, 1, 1) })
+      H.match(lines[1], "/p/a1 -> /p/b1 +1 -2 (a, b, c, d)", true)
+      H.no_match(lines[1], "e)", true, lines[1])
+      H.eq(true, loud[1])
+      lines = guard.report({ review = {}, modified = {}, tampered = t })
+      H.match(lines[1], "; ... 9 in all", true)
+      H.no_match(lines[1], "/p/b9", true)
+      lines = guard.report({ review = {}, modified = {}, tampered = { { from = "/a", to = "/b", names = { "x" } } } })
+      H.match(lines[1], "/a -> /b (x)", true)
+      H.no_match(lines[1], "+", true, lines[1])
     end
-    local lines, loud = guard.report({ review = {}, modified = {}, tampered = vim.list_slice(t, 1, 1) })
-    H.match(lines[1], "/p/a1 -> /p/b1 +1 -2 (a, b, c, d)", true)
-    H.no_match(lines[1], "e)", true, lines[1])
-    H.eq(true, loud[1])
-    lines = guard.report({ review = {}, modified = {}, tampered = t })
-    H.match(lines[1], "; ... 9 in all", true)
-    H.no_match(lines[1], "/p/b9", true)
-    lines = guard.report({ review = {}, modified = {}, tampered = { { from = "/a", to = "/b", names = { "x" } } } })
-    H.match(lines[1], "/a -> /b (x)", true)
-    H.no_match(lines[1], "+", true, lines[1])
-  end)
+  )
 
   it("the review line is not loud, the order of the lines is review, modified, tampered", function()
     local lines, loud = guard.report({
@@ -1134,7 +1142,11 @@ describe("survivors of the mutation run on the new guard code", function()
 
   it("the incomplete-check sentence: alone, and after the planted sentence with one space", function()
     local alone = guard.dirty_reason({ planted = {}, incomplete = { "the project walk stopped (x)" } })
-    H.match(alone, "The end-of-run check of the project tree could not be completed (the project walk stopped (x)), so more may have been created.", true)
+    H.match(
+      alone,
+      "The end-of-run check of the project tree could not be completed (the project walk stopped (x)), so more may have been created.",
+      true
+    )
     H.eq("T", alone:sub(1, 1))
     local both = guard.dirty_reason({ planted = { "/p/a" }, quarantine = "/q", incomplete = { "b1", "b2" } })
     H.match(both, "a copy is in /q. The end-of-run check", true)
@@ -1158,9 +1170,11 @@ describe("survivors of the mutation run on the new guard code", function()
       details = { ["/p/y"] = { plus = 3 } },
     })
     H.no_match(lines[1], "+3", true, lines[1])
-    lines = guard.report({ review = {}, modified = {}, tampered = { { from = "/a", to = "/b", plus = 3, names = {} } } })
+    lines =
+      guard.report({ review = {}, modified = {}, tampered = { { from = "/a", to = "/b", plus = 3, names = {} } } })
     H.no_match(lines[1], "+3", true, lines[1])
-    lines = guard.report({ review = {}, modified = {}, tampered = { { from = "/a", to = "/b", minus = 3, names = {} } } })
+    lines =
+      guard.report({ review = {}, modified = {}, tampered = { { from = "/a", to = "/b", minus = 3, names = {} } } })
     H.no_match(lines[1], "-3", true, lines[1])
   end)
 
