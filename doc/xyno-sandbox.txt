@@ -133,6 +133,10 @@ policy                  table, default {}
       secret_files more file name globs to hide in the project
       secret_allow file names or project-relative paths never hidden
       symlinks     "warn" (list links out of the project) | "refuse"
+      content_scan true (default): scan project files for known token formats
+                   (cloud/forge tokens, private keys) and hide files that have one
+      claude_share names below ~/.claude shown read-only in the sandbox (default
+                   none; the login and this project's transcripts are always there)
 
 `sandbox` and `allow_unsandboxed` may also be functions returning the boolean.
 
@@ -227,7 +231,14 @@ capabilities dropped and no controlling terminal. The project, the scratch
 directory and a few agent and cargo cache paths are writable. Git directories (down to 8 levels),
 `.cargo`, `.envrc`, `.vscode`, the agent's project directory and the agent settings, hooks, skills
 and memory are read-only (or masked with an empty read-only directory when
-absent). Credential directories and files are replaced by empty ones.
+absent). Credential directories and files are replaced by empty ones. In the
+allowlist view ~/.claude is a throw-away tmpfs holding the login (read-only),
+this project's transcripts and the policy.claude_share names; other projects'
+transcripts, history, sessions and settings are not there. /home (other users,
+the account's real home when it is not $HOME) is hidden. Git configs are shown
+as sanitized copies (URL tokens, credential helpers and auth headers removed).
+bwrap, the agent and the network relay end with Neovim (--die-with-parent; the
+relay also exits on SIGTERM, on parent loss and when the proxy socket is gone).
 Environment variables that look like secrets are removed: bwrap itself starts
 with `env -i` and only the allowed variables, so /proc/1/environ has none of
 them. /run, /var/tmp and /tmp are empty tmpfs (no host unix sockets). $HOME is
@@ -240,13 +251,18 @@ preview is rendered from the same options as the command line.
 It is a denylist on a read-only view of the filesystem with egress limited to a
 hostname allowlist.
 
-  - the agent's credential file under its config directory must stay readable
-    and writable.
+  - the agent's credential file under its config directory in `$HOME` must stay readable
+    (bound read-only: a token refresh inside the sandbox is not saved).
   - with home = "denylist", everything unlisted under `$HOME` is readable; with
     the default allowlist the rest of the filesystem (/etc, /var, /opt, files
     of other users) still is.
-  - project secrets are found by file name only; symlinks out of the project
-    are listed, not blocked (unless policy.symlinks = "refuse").
+  - project secrets are found by file name and, for known token formats only,
+    by content (bounded scan: 4000 files, 256 KB each, 400 ms). Not found: plain
+    passwords, generic keys, JWTs, database URLs, encoded or split secrets,
+    large or binary files, skipped directories, anything past a limit. A hard
+    link to a hidden file outside the project cannot be hidden (the plan warns).
+    Symlinks out of the project are listed, not blocked (unless
+    policy.symlinks = "refuse").
   - with network = "open", loopback services and abstract sockets are reachable.
   - cargo's `registry/src` and `git` are writable.
   - a nested `.git` deeper than 8 levels (policy.scan_depth) is not locked,

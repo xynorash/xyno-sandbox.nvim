@@ -5,6 +5,8 @@ nvim -l tests/run.lua                  # every tests/*_spec.lua, one headless nv
 nvim -l tests/run.lua tests/x_spec.lua # one spec file
 ```
 
+`tests/run.lua` builds a private root (fake `$HOME` with fake credentials, outside `/tmp`) for the whole run, fails when a spec file leaves a `bwrap` or relay process behind, and removes the root. Set `XYNO_TEST_BASE` to choose where it is created.
+
 One line per test, then `RESULT passed=N failed=N skipped=N xfailed=N`. The exit code is 0 only without failures.
 
 | Result | Meaning |
@@ -25,6 +27,9 @@ One line per test, then `RESULT passed=N failed=N skipped=N xfailed=N`. The exit
 - `options_spec.lua`: option validation and the policy lists.
 - `setup_spec.lua`, `failclosed_spec.lua`: setup, commands, refusal without a backend.
 - `harness_spec.lua`: the harness itself.
+- `leak_spec.lua`: relay, bwrap and proxy lifetime; the runner's process-leak check.
+- `hermetic_spec.lua`: the private fake `$HOME`, cleanup, a machine without bubblewrap.
+- `claude_spec.lua`, `homes_spec.lua`, `tokens_spec.lua`, `writable_spec.lua`, `sections_spec.lua`: `~/.claude`, other homes, secrets without a telling name, writable approvals, one check per preview section.
 
 Specs that need a working user namespace call `H.need_sandbox()` and `SKIP` with the reason where none exists.
 

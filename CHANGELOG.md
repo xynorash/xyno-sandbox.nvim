@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Second hardening round
+
+An independent re-verification found these; each has a spec that fails when the fix is removed (mutation table in the commit messages and below).
+
+- **Process leaks**: the in-sandbox relay exits on SIGTERM/SIGINT/SIGHUP, when its parent changes and when the proxy socket is gone; `--die-with-parent` is pinned by a timeout-based spec that kills the launcher and requires bwrap, agent and relay to disappear; release closes the proxy and removes the socket directory. `tests/run.lua` fails the run (and kills the process) when a bwrap/relay of a spec file survives it. (`tests/leak_spec.lua`)
+- **`~/.claude`**: in the allowlist view only the login (read-only), this project's transcripts and `policy.claude_share` names exist; `~/.claude.json` is a copy with the current project's record only. (`tests/claude_spec.lua`)
+- **Secrets without a telling name**: sanitized read-only copies of git configs (URL tokens, credential helpers, auth headers), a larger default name list, a bounded content scan for known token formats with approve-to-unhide, hard links to hidden files, and symlinks named like secrets hide their target instead of failing with "Can't mount on symlink destination". New option `policy.content_scan`. (`tests/tokens_spec.lua`)
+- **Other homes**: `/home` and the account's real home (when it is not `$HOME`) are empty tmpfs; toolchains, `$PATH`, the agent and the relay's nvim are bound back narrowly. (`tests/homes_spec.lua`)
+- **Writable approvals**: shared system directories as a whole and parents of masked directories are refused, `policy.writable` too; specs kill the surviving `inside(p, f)` mutant. (`tests/writable_spec.lua`)
+- **Spec gaps**: one spec per preview section (`tests/sections_spec.lua`).
+- **Hermetic suite**: private fake `$HOME` outside `/tmp` with fake credentials, own scratch, cleanup; plan specs still run and sandbox specs skip where bubblewrap or user namespaces are unavailable; the `/tmp` placeholder spec no longer compares a snapshot of the shared `/tmp`; the last `RESULT` line of a spec file is the one counted (a failure message that quoted a nested run's line used to be read instead). (`tests/hermetic_spec.lua`)
+
+Behaviour changes: with the default allowlist view the agent no longer sees your global `~/.claude` settings, `CLAUDE.md`, plugins or other projects' transcripts (share chosen names with `policy.claude_share`); a token refresh inside the sandbox is not persisted.
+
 Hardening after an independent red team. Each finding was reproduced by running it and now has a spec that fails when the fix is removed.
 
 - **Environment**: bwrap starts with `env -i` and only the allowed variables; stripped secrets no longer exist in `/proc/1/environ` or any other process of the sandbox. `$NVIM` and `$NVIM_LISTEN_ADDRESS` are stripped. (`tests/env_spec.lua`)
