@@ -141,6 +141,12 @@ function M.lines(plan, ctx)
   section("Read-only (would run or steer tools outside the sandbox)", other, function(r)
     return ("%s  [%s]"):format(short(r.path, home), r.why)
   end)
+  if #(plan.runs_later or {}) > 0 then
+    section("Agent-editable, runs later on your machine (not locked: the agent has to edit these; changes are summarised when the run ends)",
+      plan.runs_later, function(p)
+        return short(p, home)
+      end)
+  end
   local guards = {}
   for _, m in ipairs(plan.masks) do
     guards[#guards + 1] = { path = m.path, why = m.why }

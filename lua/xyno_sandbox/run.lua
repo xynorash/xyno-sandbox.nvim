@@ -253,6 +253,35 @@ function M.register(cfg)
     end, { nargs = "*", complete = function() return { "revoke", "log" } end,
       desc = "List remembered sandbox exceptions (x revokes); `revoke {id}`; `log` opens the decision log" })
 
+    vim.api.nvim_create_user_command("XynoSandboxReview", function(c)
+      local project = vim.fs.normalize(vim.fn.fnamemodify(c.fargs[2] or vim.fs.root(0, ".git") or vim.uv.cwd(), ":p")):gsub("/$", "")
+      local rec = sandbox.dirty(project)
+      if c.fargs[1] == "clear" then
+        if rec then
+          sandbox.clear_dirty(project)
+          notify("review mark cleared for " .. project .. "; the next launch is allowed")
+        else
+          notify("nothing to clear for " .. project)
+        end
+        return
+      end
+      if not rec then
+        notify("no review pending for " .. project)
+        return
+      end
+      local lines = { "Sandbox review pending for " .. project, "", "Files that run outside the sandbox that a run created (copies in " .. tostring(rec.quarantine) .. "):" }
+      for _, p in ipairs(rec.planted or {}) do
+        lines[#lines + 1] = "  " .. p
+      end
+      for _, p in ipairs(rec.failed or {}) do
+        lines[#lines + 1] = "  STILL THERE (could not be removed): " .. p
+      end
+      lines[#lines + 1] = ""
+      lines[#lines + 1] = ":XynoSandboxReview clear  allows the next launch"
+      notify(table.concat(lines, "\n"), vim.log.levels.WARN)
+    end, { nargs = "*", complete = function() return { "clear" } end,
+      desc = "Show the files a sandbox run planted that were quarantined; `clear` allows the next launch" })
+
     vim.api.nvim_create_user_command("XynoSandboxRun", function(c)
       M.run(c.fargs)
     end, { nargs = "+", complete = "shellcmd", desc = "Run a command inside the bubblewrap sandbox" })

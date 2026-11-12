@@ -331,8 +331,8 @@ describe("files that act outside the sandbox, in subdirectories of the project",
     H.ok(#p.watch.names >= 10)
     H.has(p.watch.names, ".git")
     H.has(p.watch.names, ".cargo")
-    H.match(table.concat(p.notes, "\n"), "CREATES in a subdirectory are not prevented", true)
-    H.match(table.concat(ui.lines(p, { home = FHOME }), "\n"), "CREATES in a subdirectory are not prevented", true)
+    H.match(table.concat(p.notes, "\n"), "CREATES in a subdirectory", true)
+    H.match(table.concat(ui.lines(p, { home = FHOME }), "\n"), "CREATES in a subdirectory", true)
     H.no_match(table.concat(build().notes, "\n"), "CREATES in a subdirectory", true, "a project without subdirectories has nothing to say")
   end)
 
@@ -344,20 +344,22 @@ describe("files that act outside the sandbox, in subdirectories of the project",
     H.eq(plan.WATCH_DIRS_MAX, #build(extra).watch.dirs)
   end)
 
-  it("a file the agent plants in a subdirectory is reported when the run ends; what was there before is not", function()
+  it("a file the agent plants beyond the masked directories is quarantined when the run ends; what was there before is not", function()
     H.need_sandbox()
     sb.config.home, sb.config.network = "allowlist", "open"
     local home = uv.os_homedir()
     local project = home .. "/planted-r5"
     write(project .. "/Cargo.toml", "[package]\n")
     write(project .. "/old/.envrc", "# mine\n")
-    vim.fn.mkdir(project .. "/sub", "p")
-    vim.fn.mkdir(project .. "/deep/er/est", "p")
+    -- enough shallow directories to use the whole mask budget, so "deep" is NOT prevented
+    for i = 1, 60 do
+      vim.fn.mkdir(project .. ("/a%02d"):format(i), "p")
+    end
+    vim.fn.mkdir(project .. "/zz/er/est", "p")
     local script = table.concat({
-      "mkdir -p sub/.cargo && echo '[build]' > sub/.cargo/config.toml", "mkdir -p sub/.claude && echo '{}' > sub/.claude/settings.json",
-      "echo x > sub/.mcp.json", "mkdir -p sub/.vscode && echo '{}' > sub/.vscode/tasks.json", "echo x > sub/.envrc",
-      "mkdir -p deep/er/est/.cargo && echo x > deep/er/est/.cargo/config.toml", "echo x > old/.envrc.try 2>/dev/null",
-      "echo PWNED >> old/.envrc", "echo done",
+      "mkdir -p zz/er/est/.cargo && echo '[build]' > zz/er/est/.cargo/config.toml", "mkdir -p zz/er/est/.claude && echo '{}' > zz/er/est/.claude/settings.json",
+      "echo x > zz/er/est/.mcp.json", "mkdir -p zz/er/est/.vscode && echo '{}' > zz/er/est/.vscode/tasks.json", "echo x > zz/er/est/.envrc",
+      "echo x > zz/er/est/rust-toolchain.toml", "echo PWNED >> old/.envrc", "echo done",
     }, "; ")
     local cmd, err, h = sb.wrap({ "sh", "-c", script }, project, H.tmpdir())
     H.ok(cmd, err)
@@ -368,17 +370,28 @@ describe("files that act outside the sandbox, in subdirectories of the project",
     H.match(r.stdout, "done", true, (r.stdout or "") .. (r.stderr or ""))
     local planted = vim.deepcopy(h.planted)
     local old = read(project .. "/old/.envrc")
+    local still = {}
+    for _, n in ipairs({ ".cargo", ".claude", ".mcp.json", ".vscode", ".envrc", "rust-toolchain.toml" }) do
+      still[n] = uv.fs_lstat(project .. "/zz/er/est/" .. n) ~= nil
+    end
+    local dirty = sb.dirty(project)
+    local q = h.quarantine and read(h.quarantine .. "/zz/er/est/.cargo/config.toml")
     vim.fn.delete(project, "rf")
     H.eq("# mine\n", old, "an existing .envrc of a subdirectory is read-only")
     local set = {}
     for _, x in ipairs(planted) do
       set[x:sub(#project + 2)] = true
     end
-    for _, n in ipairs({ "sub/.cargo", "sub/.claude", "sub/.mcp.json", "sub/.vscode", "sub/.envrc", "deep/er/est/.cargo" }) do
-      H.ok(set[n], n .. " is reported: " .. vim.inspect(planted))
+    for _, n in ipairs({ ".cargo", ".claude", ".mcp.json", ".vscode", ".envrc", "rust-toolchain.toml" }) do
+      H.ok(set["zz/er/est/" .. n], n .. " is reported: " .. vim.inspect(planted))
+      H.not_ok(still[n], n .. " is removed from the project")
     end
-    H.eq(1, #msgs, "one warning")
-    H.eq(vim.log.levels.WARN, msgs[1][2])
+    H.eq("[build]\n", q, "a copy is kept in the quarantine")
+    H.ok(dirty, "the project is marked for review")
+    sb.clear_dirty(project)
+    H.eq(1, #vim.tbl_filter(function(m)
+      return m[2] == vim.log.levels.ERROR
+    end, msgs), "one loud error")
     H.match(msgs[1][1], "created 6 files that act outside the sandbox", true)
   end)
 

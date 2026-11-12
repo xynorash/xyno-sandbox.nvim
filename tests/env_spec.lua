@@ -114,7 +114,7 @@ describe("the environment of the sandbox", function()
     with_secrets()
     local p = sb.plan({ "agent" }, H.tmpdir(), H.tmpdir())
     local a = plan.argv(p)
-    H.eq({ "env", "-i" }, vim.list_slice(a, 1, 2))
+    H.eq({ "env", "-i" }, { vim.fs.basename(a[1]), a[2] })
     local joined = table.concat(a, "\0")
     for _, value in pairs(SECRETS) do
       H.no_match(joined, value, true)

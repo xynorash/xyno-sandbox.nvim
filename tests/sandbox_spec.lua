@@ -220,8 +220,12 @@ describe("opt-out", function()
       with_g("allow_unsandboxed", true, function()
         H.eq("bwrap", real_mod.status().mode)
         local got, _, h = real_mod.wrap({ "true" }, H.tmpdir(), H.tmpdir())
-        H.eq("env", got[1])
-        H.has(got, "bwrap")
+        H.eq("env", vim.fs.basename(got[1]))
+        local bw
+        for _, x in ipairs(got) do
+          bw = bw or (vim.fs.basename(x) == "bwrap" and x or nil)
+        end
+        H.eq("/", (bw or ""):sub(1, 1), "bwrap is named by its absolute path (env -i has no PATH)")
         h.release()
       end)
     end)
@@ -265,8 +269,14 @@ describe("wrapped command layout", function()
     local cwd = project .. "/sub"
     mkdir(cwd)
     local a = wrap(m, { "echo", "hi there" }, project, tmp, cwd)
-    local at = find_seq(a, "bwrap")
-    H.eq({ "env", "-i" }, vim.list_slice(a, 1, 2), "bwrap starts with an empty environment")
+    H.eq({ "env", "-i" }, { vim.fs.basename(a[1]), a[2] }, "bwrap starts with an empty environment")
+    local at
+    for i, x in ipairs(a) do
+      if vim.fs.basename(x) == "bwrap" and at == nil then
+        at = i
+      end
+    end
+    a[at] = "bwrap" -- (the absolute path of the binary is checked in round6_spec)
     a = vim.list_slice(a, at)
     local prefix = {
       "bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--disable-userns", "--unshare-pid",
@@ -820,7 +830,8 @@ describe("readonly_paths", function()
     local _, masks = m.readonly_paths(project)
     H.has(masks, project .. "/c1/.cargo")
     H.not_ok(contains(masks, project .. "/c2/.cargo"))
-    H.not_ok(contains(masks, project .. "/plain/.cargo"))
+    -- (a directory without Cargo.toml is not a crate, but the shallow subdirectories get .cargo masked too)
+    H.has(masks, project .. "/plain/.cargo")
     H.has(masks, project .. "/deep/er/crate/.cargo")
   end)
 

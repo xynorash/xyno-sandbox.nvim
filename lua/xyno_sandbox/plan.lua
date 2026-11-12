@@ -61,6 +61,10 @@ M.PROJECT_READONLY = {
   -- configurations, Helix language servers, husky hooks (core.hooksPath), pre-commit hooks, dev containers,
   -- debugger init files
   ".zed", ".idea", ".helix", ".husky", ".devcontainer", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit",
+  -- mise runs these tasks and tool installs from the user's shell; rustup downloads and runs whatever
+  -- toolchain a rust-toolchain file names (a malicious override triggers a download on the next cargo)
+  "mise.toml", "mise.local.toml", ".mise.local.toml", ".mise", ".config/mise.toml", ".config/mise",
+  "rust-toolchain", "rust-toolchain.toml",
 }
 -- Locked in every subdirectory the project walk found (when PRESENT there): cargo reads .cargo/config from
 -- every ancestor of the directory it runs in, direnv the nearest .envrc, claude the .claude of its
@@ -69,11 +73,27 @@ M.PROJECT_READONLY = {
 M.MEMBER_READONLY = {
   ".cargo", ".envrc", ".mise.toml", ".nvim.lua", ".nvimrc", ".exrc", ".claude", ".mcp.json", ".vscode", ".zed", ".idea",
   ".helix", ".husky", ".devcontainer", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit",
+  ".tool-versions", "mise.toml", "mise.local.toml", ".mise.local.toml", ".mise", ".config/mise.toml", ".config/mise",
+  "rust-toolchain", "rust-toolchain.toml",
 }
 -- Names that act outside the sandbox when the agent creates them in a subdirectory: looked for at launch
 -- and again when the run ends, and a new one is reported (not prevented, not removed).
 M.WATCH_NAMES = vim.list_extend({ ".git" }, M.MEMBER_READONLY)
 M.WATCH_DIRS_MAX = 400
+-- Files the agent edits for a reason and that run on your machine later (a build, a test run, CI). Never
+-- locked; the preview lists the ones that exist and the end-of-run report summarises what changed in them
+-- (xyno_sandbox.guard). Every file directly in a .github/workflows directory counts too.
+M.REVIEW_NAMES = {
+  "Makefile", "makefile", "GNUmakefile", "justfile", "Justfile", "Taskfile.yml", "Taskfile.yaml", "package.json",
+  "Cargo.toml", "build.rs", "pyproject.toml", "setup.py", "noxfile.py", "tox.ini", ".gitlab-ci.yml",
+}
+-- Absent directories that are masked (an empty read-only directory is mounted there, so the agent cannot
+-- create them) in the SHALLOWEST subdirectories, at most this many mounts: a mount per directory and name for
+-- a whole tree would be thousands. Deeper directories are covered by the end-of-run sweep (xyno_sandbox.guard).
+M.SUBDIR_MASK_DIRS = { ".cargo", ".claude", ".vscode", ".git" }
+-- Absent files that are bound to an empty read-only file in the same directories (cleaned up when the run ends).
+M.SUBDIR_GUARD_FILES = { ".envrc", ".mcp.json", ".nvim.lua", ".mise.toml", ".exrc" }
+M.SUBDIR_MASK_MAX = 360
 -- Created empty-and-read-only when absent at the project root: a planted .cargo/config.toml is
 -- the one that bites. .git too: without one the agent ran `git init` and planted
 -- `core.fsmonitor = <cmd>` in .git/config, which the user's next unsandboxed `git status`
@@ -82,7 +102,7 @@ M.WATCH_DIRS_MAX = 400
 M.PROJECT_MASK_IF_ABSENT = { ".cargo", ".git", ".vscode", ".zed", ".idea", ".helix", ".husky", ".devcontainer" }
 -- Files that run unsandboxed later when planted. When absent they are bound to an empty
 -- read-only file for the run (the launcher removes the placeholder afterwards).
-M.PROJECT_GUARD_FILES = { ".envrc", ".mise.toml", ".nvim.lua", ".nvimrc", ".exrc", ".mcp.json", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit" }
+M.PROJECT_GUARD_FILES = { ".envrc", ".mise.toml", "mise.toml", "mise.local.toml", ".mise.local.toml", ".nvim.lua", ".nvimrc", ".exrc", ".mcp.json", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit" }
 -- Project dir that is ALWAYS locked: read-only when present, otherwise masked.
 M.PROJECT_MASKED = ".claude"
 
@@ -1903,6 +1923,63 @@ function M.build(input)
         mask(m.dir .. "/.cargo", "member .cargo", true)
       end
     end
+    -- the shallowest subdirectories get the other absent directory names masked too (a planted
+    -- sub/.claude/settings.json, sub/.vscode/tasks.json, a nested .git with hooks)
+    local order = {}
+    local ro_set = {}
+    for _, r in ipairs(plan.readonly) do
+      ro_set[r.path] = true
+    end
+    local function usable(dir)
+      -- not below a hidden directory (.github/workflows, .config/mise) nor below a path mounted read-only: a mount
+      -- point cannot be created there
+      local rel = dir:sub(#project + 2)
+      if rel:find("^%.") or rel:find("/%.") then
+        return false
+      end
+      local d = dir
+      while #d > #project do
+        if ro_set[d] then
+          return false
+        end
+        d = d:match("^(.*)/[^/]+$") or ""
+      end
+      return true
+    end
+    for i, m in ipairs(w.members) do
+      if usable(m.dir) then
+        local _, depth = m.dir:gsub("/", "")
+        order[#order + 1] = { m = m, depth = depth, i = i }
+      end
+    end
+    table.sort(order, function(a, b)
+      if a.depth ~= b.depth then
+        return a.depth < b.depth
+      end
+      return a.i < b.i
+    end)
+    local budget = M.SUBDIR_MASK_MAX
+    plan.subdir_masks = 0
+    for _, o in ipairs(order) do
+      for _, rel in ipairs(M.SUBDIR_MASK_DIRS) do
+        local p = o.m.dir .. "/" .. rel
+        if budget > 0 and not exists(p) and not (rel == ".cargo" and o.m.cargo) then
+          mask(p, "absent " .. rel .. " in a subdirectory", true)
+          budget = budget - 1
+          plan.subdir_masks = plan.subdir_masks + 1
+        end
+      end
+      for _, rel in ipairs(aux.empty and M.SUBDIR_GUARD_FILES or {}) do
+        local p = o.m.dir .. "/" .. rel
+        if budget > 0 and not exists(p) then
+          plan.guard_files[#plan.guard_files + 1] = { path = p, why = "absent " .. rel .. " in a subdirectory", cleanup = true }
+          plan.needs.empty_file = aux.empty
+          budget = budget - 1
+          plan.subdir_masks = plan.subdir_masks + 1
+        end
+      end
+    end
+    plan.subdir_mask_cut = budget <= 0
   end
   if not claude_minimal then
     for _, rel in ipairs(M.HOME_READONLY) do
@@ -1974,8 +2051,21 @@ function M.build(input)
       end
     end
     if #w.members > 0 then
-      plan.notes[#plan.notes + 1] = "files that run outside the sandbox (.cargo/config.toml, .envrc, .claude/settings.json, an editor's task file...)"
-        .. " that the agent CREATES in a subdirectory are not prevented (the ones that exist are read-only); a new one is reported when the run ends"
+      plan.notes[#plan.notes + 1] = ("files that run outside the sandbox (.cargo/config.toml, .envrc, .claude/settings.json, an editor's task file...)"
+        .. " that the agent CREATES in a subdirectory: the ones that exist are read-only, %d absent .cargo/.claude/.vscode/.git directories and .envrc/.mcp.json/.nvim.lua/.mise.toml/.exrc files in the"
+        .. " shallowest subdirectories are masked, any other new one is moved into a quarantine when the run ends and the project is marked"
+        .. " for review (the next launch is refused until you cleared it)"):format(plan.subdir_masks or 0)
+    end
+  end
+  plan.runs_later = {}
+  for _, rel in ipairs(M.REVIEW_NAMES) do
+    if exists(project .. "/" .. rel) then
+      plan.runs_later[#plan.runs_later + 1] = project .. "/" .. rel
+    end
+  end
+  for _, e in ipairs(probes.list(project .. "/.github/workflows")) do
+    if e[2] == "file" then
+      plan.runs_later[#plan.runs_later + 1] = project .. "/.github/workflows/" .. e[1]
     end
   end
   for _, rel in ipairs(M.HOME_EPHEMERAL) do

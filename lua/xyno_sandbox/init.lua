@@ -23,6 +23,7 @@
 local plan_mod = require("xyno_sandbox.plan")
 local store = require("xyno_sandbox.store")
 local probe = require("xyno_sandbox.probe")
+local guard = require("xyno_sandbox.guard")
 
 local M = {}
 
@@ -482,34 +483,40 @@ local function is_empty_leftover(path, kind)
   return st.type == "file" and st.size == 0 and bit.band(st.mode, tonumber("222", 8)) == 0
 end
 
---- The watched names (plan.watch) that exist in the plan's subdirectories now: { path = true }.
-local function watched_now(plan)
-  local out = {}
-  local w = plan.watch
-  if not w then
-    return out
+--- When the run ends (and no other sandbox of the project is running): compare the project tree with
+--- the launch snapshot. A NEW name that acts outside the sandbox is quarantined and removed, the
+--- project is marked dirty; edited build/CI files are summarised.
+local function sweep(h)
+  if not h.snapshot then
+    return
   end
-  for _, dir in ipairs(w.dirs) do
-    for _, name in ipairs(w.names) do
-      local p = dir .. "/" .. name
-      if vim.uv.fs_lstat(p) then
-        out[p] = true
+  local ok, err = pcall(function()
+    local res = guard.compare(h.snapshot, guard.snapshot(h.plan.project))
+    h.planted, h.modified, h.review = res.planted, res.modified, res.review
+    if #res.planted > 0 then
+      local q = guard.quarantine(h.plan.project, res.planted)
+      local failed = {}
+      for _, m in ipairs(q.moved) do
+        if not m.ok then
+          failed[#failed + 1] = m.path
+        end
       end
+      h.quarantine = q.dir
+      guard.mark_dirty(h.plan.project, { planted = res.planted, quarantine = q.dir, failed = failed, modified = res.modified })
+      local shown = vim.list_slice(res.planted, 1, 5)
+      vim.notify(("xyno-sandbox: the agent created %d file%s that act%s outside the sandbox: %s%s. %s moved to %s and removed from the project;"
+        .. " the next launch for this project is refused until you review them (:XynoSandboxReview, then :XynoSandboxReview clear).%s"):format(
+        #res.planted, #res.planted == 1 and "" or "s", #res.planted == 1 and "s" or "", table.concat(shown, ", "), #res.planted > 5 and ", ..." or "",
+        #res.planted == 1 and "It was" or "They were", q.dir,
+        #failed > 0 and (" COULD NOT REMOVE: " .. table.concat(failed, ", ")) or ""), vim.log.levels.ERROR)
     end
-  end
-  return out
-end
-
---- Names that act outside the sandbox and were created in a subdirectory during the run.
-local function planted(h)
-  local now, out = watched_now(h.plan), {}
-  for p in pairs(now) do
-    if not h.watch_before[p] then
-      out[#out + 1] = p
+    for _, line in ipairs(guard.report(res)) do
+      vim.notify("xyno-sandbox: " .. line, vim.log.levels.WARN)
     end
+  end)
+  if not ok then
+    vim.notify("xyno-sandbox: the end-of-run check of the project tree failed: " .. tostring(err), vim.log.levels.WARN)
   end
-  table.sort(out)
-  return out
 end
 
 local function release(h)
@@ -518,12 +525,6 @@ local function release(h)
   end
   h.released = true
   live[h.id] = nil
-  h.planted = planted(h)
-  if #h.planted > 0 then
-    local shown = vim.list_slice(h.planted, 1, 5)
-    vim.notify(("xyno-sandbox: the agent created %d file%s that act%s outside the sandbox (not prevented in subdirectories): %s%s. Review before running cargo, direnv, claude or your editor there."):format(
-      #h.planted, #h.planted == 1 and "" or "s", #h.planted == 1 and "s" or "", table.concat(shown, ", "), #h.planted > 5 and ", ..." or ""), vim.log.levels.WARN)
-  end
   if h.proxy then
     pcall(h.proxy.close)
   end
@@ -568,6 +569,7 @@ local function release(h)
       end
     end
   end
+  sweep(h)
 end
 
 --- Remove the empty placeholders that a sandbox of a Neovim that has since died left in a project
@@ -596,6 +598,16 @@ function M.reap_orphans()
     end
   end
   return n
+end
+
+--- The review mark of a project (see xyno_sandbox.guard): nil, or the record of the run that planted files.
+function M.dirty(project)
+  return guard.dirty(project)
+end
+
+--- Clear the review mark so that the next launch is allowed again.
+function M.clear_dirty(project)
+  return guard.clear_dirty(project)
 end
 
 --- Release every live sandbox (temp files, empty leftovers). Runs at VimLeavePre.
@@ -771,6 +783,10 @@ function M.wrap(cmd, project, tmp_dir, opts)
   elseif st.mode == "unsandboxed" then
     return cmd
   end
+  local dirty = guard.dirty(project)
+  if dirty then
+    return nil, guard.dirty_reason(dirty)
+  end
   local plan = opts.plan
   local excs = opts.exceptions
   if plan and (plan.mode ~= "bwrap" or plan.project ~= project or stale(plan)) then
@@ -794,7 +810,7 @@ function M.wrap(cmd, project, tmp_dir, opts)
   end
   local temp = prepare(plan)
   next_id = next_id + 1
-  local h = { id = next_id, plan = plan, temp = temp, watch_before = watched_now(plan) }
+  local h = { id = next_id, plan = plan, temp = temp, snapshot = guard.snapshot(project) }
   if netf then
     h.proxy, h.net_dir = netf.proxy, netf.net_dir
   end
