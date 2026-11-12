@@ -663,6 +663,9 @@ local function sweep(h)
         vim.log.levels.INFO
       )
     end
+    if res.info and #res.info > 0 then
+      vim.notify("xyno-sandbox: " .. table.concat(res.info, "; "), vim.log.levels.INFO)
+    end
     local lines, loud = guard.report(res)
     for i, line in ipairs(lines) do
       vim.notify("xyno-sandbox: " .. line, loud[i] and vim.log.levels.ERROR or vim.log.levels.WARN)

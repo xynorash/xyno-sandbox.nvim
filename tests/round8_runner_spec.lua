@@ -55,4 +55,3 @@ describe("tests/run.lua when the runner itself is killed (kill -9)", function()
     H.eq({}, nvim_left, "the spec's nvim is gone")
   end)
 end)
-

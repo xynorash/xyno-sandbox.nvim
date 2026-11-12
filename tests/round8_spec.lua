@@ -314,12 +314,38 @@ end)
 -- ------------------------------------------------------------------ (2) more auto-exec names
 describe("round 8 names: covered or reviewed", function()
   local LOCKED = {
-    ".devcontainer.json", ".bazelrc", ".bazelversion", ".bazeliskrc", ".lefthook", ".cargo-husky", ".sbtopts", ".jvmopts", ".bundle",
+    ".devcontainer.json",
+    ".bazelrc",
+    ".bazelversion",
+    ".bazeliskrc",
+    ".lefthook",
+    ".cargo-husky",
+    ".sbtopts",
+    ".jvmopts",
+    ".bundle",
   }
   local REVIEW = {
-    "lefthook-local.yml", "gradle.properties", "gradle-wrapper.properties", "build.gradle", "build.gradle.kts",
-    "settings.gradle", "pom.xml", "build.sbt", "Gemfile", "Rakefile", ".rspec", "Procfile", ".nvmrc", ".node-version",
-    ".python-version", ".ruby-version", ".gitattributes", ".tmuxp.yaml", ".tmuxinator.yml", "gradlew", "mvnw",
+    "lefthook-local.yml",
+    "gradle.properties",
+    "gradle-wrapper.properties",
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "pom.xml",
+    "build.sbt",
+    "Gemfile",
+    "Rakefile",
+    ".rspec",
+    "Procfile",
+    ".nvmrc",
+    ".node-version",
+    ".python-version",
+    ".ruby-version",
+    ".gitattributes",
+    ".tmuxp.yaml",
+    ".tmuxinator.yml",
+    "gradlew",
+    "mvnw",
   }
   it("the tables name them (written out here)", function()
     for _, n in ipairs(LOCKED) do
@@ -434,7 +460,17 @@ end
 
 describe("the subdirectory mount budget is exact and ordered", function()
   local DIRS = { "/.cargo", "/.claude", "/.vscode", "/.git" }
-  local FILES_ = { "/.envrc", "/.mcp.json", "/.nvim.lua", "/.mise.toml", "/.exrc", "/.npmrc", "/.yarnrc.yml", "/.dir-locals.el", "/.lvimrc" }
+  local FILES_ = {
+    "/.envrc",
+    "/.mcp.json",
+    "/.nvim.lua",
+    "/.mise.toml",
+    "/.exrc",
+    "/.npmrc",
+    "/.yarnrc.yml",
+    "/.dir-locals.el",
+    "/.lvimrc",
+  }
   local PER_DIR = #DIRS + #FILES_
   local function with_max(n, extra)
     local old = plan.SUBDIR_MASK_MAX
@@ -458,9 +494,12 @@ describe("the subdirectory mount budget is exact and ordered", function()
   }
 
   it("the names are what this spec counts with", function()
-    H.eq(DIRS, vim.tbl_map(function(n)
-      return "/" .. n
-    end, plan.SUBDIR_MASK_DIRS))
+    H.eq(
+      DIRS,
+      vim.tbl_map(function(n)
+        return "/" .. n
+      end, plan.SUBDIR_MASK_DIRS)
+    )
     H.eq(PER_DIR, 13)
   end)
 
@@ -505,7 +544,8 @@ describe("the subdirectory mount budget is exact and ordered", function()
   end)
 
   it("an existing name takes no mount from the budget", function()
-    local extra = vim.tbl_extend("force", TREE, { [PROJECT .. "/d1/.claude"] = "directory", [PROJECT .. "/d1/.envrc"] = "file" })
+    local extra =
+      vim.tbl_extend("force", TREE, { [PROJECT .. "/d1/.claude"] = "directory", [PROJECT .. "/d1/.envrc"] = "file" })
     local p = with_max(PER_DIR, extra)
     H.eq(PER_DIR, p.subdir_masks)
     H.ok(select(2, with_max(PER_DIR, extra))[PROJECT .. "/d2/.cargo"], "the two that exist leave room for d2's first")
@@ -516,9 +556,23 @@ describe("the README and the help name what round 8 added", function()
   local text = H.docs_text()
   it("every locked and reviewed name is in the docs", function()
     for _, n in ipairs({
-      ".devcontainer.json", ".bazelrc", ".bazelversion", ".bazeliskrc", ".lefthook", ".cargo-husky", ".sbtopts",
-      ".jvmopts", ".bundle", "gradle.properties", "pom.xml", "Gemfile", "Procfile", ".nvmrc", ".python-version",
-      ".gitattributes", "tampered",
+      ".devcontainer.json",
+      ".bazelrc",
+      ".bazelversion",
+      ".bazeliskrc",
+      ".lefthook",
+      ".cargo-husky",
+      ".sbtopts",
+      ".jvmopts",
+      ".bundle",
+      "gradle.properties",
+      "pom.xml",
+      "Gemfile",
+      "Procfile",
+      ".nvmrc",
+      ".python-version",
+      ".gitattributes",
+      "tampered",
     }) do
       H.match(text, n, true, n)
     end

@@ -150,18 +150,34 @@ describe("the walk bounds are reported, not silent", function()
     end)
   end)
 
-  it("a growing target/ past the second budget: incomplete; the second budget is its own", function()
+  it(
+    "a growing target/ past the second budget is INFO, not incomplete (an ordinary first build must not refuse the next launch)",
+    function()
+      local project = H.tmpdir()
+      vim.fn.mkdir(project .. "/target/a", "p")
+      with("SKIP_MAX_DIRS", 5, function()
+        local before = guard.snapshot(project)
+        H.eq(false, before.skip_truncated)
+        for i = 1, 20 do
+          vim.fn.mkdir(project .. "/target/z" .. i, "p")
+        end
+        local res = guard.compare(before, guard.snapshot(project))
+        H.eq({}, res.incomplete, "the project is not marked dirty by the count growing")
+        H.eq(1, #res.info)
+        H.match(res.info[1], "target", true)
+        H.eq({}, res.planted)
+      end)
+    end
+  )
+
+  it("a protected NAME planted inside the walked part of target/ still counts, bound or not", function()
     local project = H.tmpdir()
     vim.fn.mkdir(project .. "/target/a", "p")
-    with("SKIP_MAX_DIRS", 5, function()
+    with("SKIP_MAX_DIRS", 50, function()
       local before = guard.snapshot(project)
-      H.eq(false, before.skip_truncated)
-      for i = 1, 20 do
-        vim.fn.mkdir(project .. "/target/z" .. i, "p")
-      end
+      write(project .. "/target/a/.envrc")
       local res = guard.compare(before, guard.snapshot(project))
-      H.eq(1, #res.incomplete)
-      H.match(res.incomplete[1], "target", true)
+      H.eq({ project .. "/target/a/.envrc" }, res.planted)
     end)
   end)
 

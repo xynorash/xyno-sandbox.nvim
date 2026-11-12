@@ -228,7 +228,15 @@ exit 0
 local function run_child(argv, env, root)
   local child = vim.system(argv, { text = true, env = env, detach = true })
   local wd = vim.system(
-    { "sh", "-c", WATCHDOG, "xyno-watchdog", tostring(vim.uv.os_getpid()), tostring(reaper.proc_start(vim.uv.os_getpid())), tostring(child.pid) },
+    {
+      "sh",
+      "-c",
+      WATCHDOG,
+      "xyno-watchdog",
+      tostring(vim.uv.os_getpid()),
+      tostring(reaper.proc_start(vim.uv.os_getpid())),
+      tostring(child.pid),
+    },
     { detach = true, env = vim.tbl_extend("force", env, { WD_ROOT = root, WD_TMP = env.XYNO_TEST_SCRATCH }) }
   )
   local r = child:wait(FILE_TIMEOUT_MS)

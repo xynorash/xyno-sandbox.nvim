@@ -166,9 +166,11 @@ function M.snapshot(project)
       local sig = sig_of(st)
       if st.type == "directory" and not noisy then
         local files = { [""] = { id = "directory" } }
-        sig = sig .. "#" .. dir_sig(path, function(rel, est, epath)
-          files[rel] = file_rec(epath, est)
-        end)
+        sig = sig
+          .. "#"
+          .. dir_sig(path, function(rel, est, epath)
+            files[rel] = file_rec(epath, est)
+          end)
         snap.content[path] = { files = files }
       elseif noisy then
         sig = st.type -- appearance only
@@ -349,7 +351,7 @@ end
 --- `moved`: the same inode under a new path. `tampered`: of those, the ones whose CONTENT is not what it was at launch
 --- (a protected directory renamed and then given a new file). `modified`: a name that existed at launch and changed
 --- (signature or content); `details[path]` holds its lines added and removed.
---- @return { planted: string[], modified: string[], removed: string[], moved: { from: string, to: string }[], tampered: { from: string, to: string, plus?: integer, minus?: integer, names: string[] }[], details: table<string, table>, incomplete: string[], partial: string[], review: { path: string, change: string, plus?: integer, minus?: integer }[] }
+--- @return { planted: string[], modified: string[], removed: string[], moved: { from: string, to: string }[], tampered: { from: string, to: string, plus?: integer, minus?: integer, names: string[] }[], details: table<string, table>, incomplete: string[], partial: string[], info: string[], review: { path: string, change: string, plus?: integer, minus?: integer }[] }
 function M.compare(before, after)
   local res = {
     planted = {},
@@ -361,6 +363,7 @@ function M.compare(before, after)
     details = {},
     incomplete = {},
     partial = {},
+    info = {},
   }
   -- a directory that was RENAMED during the run (mv sub sub_old) shows its protected names under a new path: they are the
   -- same inodes as before, not new files. Their CONTENT is still compared with what it was at launch.
@@ -411,15 +414,25 @@ function M.compare(before, after)
   -- created beyond it is unknown. Fail closed (dirty). A tree that was already too large at launch is only reported.
   for _, b in ipairs({
     { "truncated", "the project walk stopped (" .. tostring(after.why) .. ")" },
-    {
-      "skip_truncated",
-      "the walk inside target, node_modules and virtualenvs stopped (" .. tostring(after.skip_why) .. ")",
-    },
     { "depth_cut", "directories deeper than " .. M.MAX_DEPTH .. " levels were not entered" },
   }) do
     if after[b[1]] then
       table.insert(before[b[1]] and res.partial or res.incomplete, b[2])
     end
+  end
+  -- The walk inside target/, node_modules/ and virtualenvs is a second, separate budget. An ordinary first build
+  -- fills target/ with thousands of directories, so "the bound was hit now and not at launch" says nothing about
+  -- protected names there: it is INFO (res.info), never `incomplete` (which refuses the next launch). Only a
+  -- protected NAME that the walk finds (planted / modified, below) marks the project dirty.
+  if after.skip_truncated and not before.skip_truncated then
+    res.info[#res.info + 1] = "the walk inside target, node_modules and virtualenvs stopped ("
+      .. tostring(after.skip_why)
+      .. "): the tree grew during the run (a build); protected names in the part that was not walked are not compared"
+  elseif after.skip_truncated then
+    table.insert(
+      res.partial,
+      "the walk inside target, node_modules and virtualenvs stopped (" .. tostring(after.skip_why) .. ")"
+    )
   end
   for p, a in pairs(after.review) do
     local b = before.review[p]
