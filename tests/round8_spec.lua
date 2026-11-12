@@ -543,6 +543,22 @@ describe("the subdirectory mount budget is exact and ordered", function()
     H.not_ok(c[PROJECT .. "/d2/.cargo"])
   end)
 
+  it("a Cargo member has its own .cargo mask and spends none of the budget on it", function()
+    local extra = vim.tbl_extend("force", TREE, { [PROJECT .. "/d1/Cargo.toml"] = "file" })
+    local p, c = with_max(1000, extra)
+    H.eq(3 * PER_DIR - 1, p.subdir_masks)
+    local n = 0
+    for _, m in ipairs(p.masks) do
+      if m.path == PROJECT .. "/d1/.cargo" then
+        n = n + 1
+      end
+    end
+    H.eq(1, n, "masked once")
+    H.ok(c[PROJECT .. "/d1/.cargo"])
+    local p2 = with_max(PER_DIR - 1, extra)
+    H.eq(PER_DIR - 1, p2.subdir_masks)
+  end)
+
   it("an existing name takes no mount from the budget", function()
     local extra =
       vim.tbl_extend("force", TREE, { [PROJECT .. "/d1/.claude"] = "directory", [PROJECT .. "/d1/.envrc"] = "file" })
@@ -1221,6 +1237,7 @@ describe("the notices of the end-of-run sweep", function()
     local h = launch(project)
     H.eq({}, release_with_notes(h))
     H.eq(nil, sb.dirty(project))
+    H.eq({}, vim.fn.glob(store.dir() .. "/quarantine/*", false, true), "no quarantine directory is made for nothing")
   end)
 
   it("one planted name: singular words; the notice is an ERROR", function()
@@ -1233,6 +1250,7 @@ describe("the notices of the end-of-run sweep", function()
     H.eq(vim.log.levels.ERROR, notes[1][2])
     H.match(notes[1][1], "created 1 file that acts outside the sandbox", true)
     H.match(notes[1][1], "It was moved to", true)
+    H.match(notes[1][1], "outside the sandbox: " .. project .. "/x/.envrc.", true, "the first name is shown")
     H.no_match(notes[1][1], "COULD NOT REMOVE", true)
     sb.clear_dirty(project)
   end)
