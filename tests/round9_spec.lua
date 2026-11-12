@@ -48,6 +48,22 @@ describe("option validation: the lists the earlier specs did not exercise", func
   end)
 end)
 
+describe("policy.scan_depth", function()
+  it("is an integer from 1 to 32, both ends included", function()
+    local function bad(v)
+      return #sb.validate_opts({ policy = { scan_depth = v } }) > 0
+    end
+    H.not_ok(bad(1))
+    H.not_ok(bad(8))
+    H.not_ok(bad(32))
+    H.ok(bad(0))
+    H.ok(bad(33))
+    H.ok(bad(-1))
+    H.ok(bad(1.5))
+    H.ok(bad("8"))
+  end)
+end)
+
 describe("the content scan: private keys inside base64", function()
   for _, kind in ipairs({
     "PRIVATE KEY",
