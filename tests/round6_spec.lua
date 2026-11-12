@@ -59,6 +59,23 @@ describe("H1: the bwrap that is checked is the bwrap that is launched", function
     H.eq(0, r.code)
   end)
 
+  it("the probe really spawns the absolute path (not the bare name)", function()
+    local bin = stub_dir()
+    vim.env.PATH = bin .. ":" .. old_path
+    probe.reset()
+    probe.net = false
+    local seen
+    local real = vim.system
+    vim.system = function(argv, ...)
+      seen = seen or argv
+      return real(argv, ...)
+    end
+    local ok, e = pcall(probe.run_sync, true)
+    vim.system = real
+    H.ok(ok, e)
+    H.eq(bin .. "/bwrap", seen[1])
+  end)
+
   it("a plan built without a resolved path keeps the plain name (pure builder)", function()
     H.eq("bwrap", plan.probe_argv(false)[1])
   end)
@@ -576,6 +593,256 @@ describe("a ~/.claude.json that is not a JSON object", function()
       local ok, shared = try(t)
       H.ok(ok, "raised for " .. t)
       H.eq(true, shared, t)
+    end
+  end)
+end)
+
+-- ------------------------------------------------------------------ F4: survivors
+describe("F4: net.is_public_ip boundaries (every special range, both edges)", function()
+  local net = require("xyno_sandbox.net")
+  local PRIVATE = {
+    "0.0.0.0", "0.255.255.255", "10.0.0.0", "10.255.255.255", "127.0.0.1", "127.255.255.255",
+    "100.64.0.0", "100.127.255.255", "169.254.0.1", "169.254.255.255",
+    "172.16.0.0", "172.16.5.5", "172.20.1.1", "172.31.0.0", "172.31.255.255",
+    "192.0.0.0", "192.0.0.255", "192.0.2.0", "192.0.2.255", "192.168.0.0", "192.168.255.255",
+    "198.18.0.0", "198.18.255.255", "198.19.0.0", "198.19.255.255", "198.51.100.0", "198.51.100.255",
+    "203.0.113.0", "203.0.113.255", "224.0.0.1", "239.255.255.255", "240.0.0.1", "255.255.255.255",
+    "::", "::1", "fe80::1", "febf::1", "fc00::1", "fdff::1", "ff02::1", "2001:db8::1", "2001:0db8:ffff::1",
+    "::ffff:10.0.0.1", "::ffff:127.0.0.1", "::ffff:172.31.1.1", "::ffff:192.168.1.1", "64:ff9b::a00:1", "64:ff9b::7f00:1",
+    "2002:a00:1::1", "2002:c0a8:101::1",
+  }
+  local PUBLIC = {
+    "1.1.1.1", "8.8.8.8", "9.255.255.255", "11.0.0.0", "126.255.255.255", "128.0.0.1", "100.63.255.255", "100.128.0.0",
+    "169.253.255.255", "169.255.0.0", "172.15.255.255", "172.32.0.0", "191.255.255.255", "192.0.1.1", "192.0.3.0",
+    "192.1.0.1", "192.167.255.255", "192.169.0.0", "198.17.255.255", "198.20.0.0", "198.51.99.255", "198.51.101.0",
+    "203.0.112.255", "203.0.114.0", "223.255.255.255",
+    "2606:4700::1", "2001:db9::1", "2001:4860:4860::8888", "fe00::1", "fec0::1", "::ffff:8.8.8.8", "64:ff9b::808:808",
+    "2002:808:808::1",
+  }
+  it("refuses every private, loopback, link-local, shared, benchmark, documentation and multicast address", function()
+    for _, ip in ipairs(PRIVATE) do
+      H.eq(false, net.is_public_ip(ip), ip .. " must not be public")
+    end
+  end)
+  it("accepts the addresses just outside each range", function()
+    for _, ip in ipairs(PUBLIC) do
+      H.eq(true, net.is_public_ip(ip), ip .. " must be public")
+    end
+  end)
+  it("a name or garbage is not a public address", function()
+    for _, ip in ipairs({ "example.com", "", "1.2.3", "1.2.3.4.5", "256.1.1.1", "::g", "1::2::3" }) do
+      H.eq(false, net.is_public_ip(ip), ip)
+    end
+  end)
+end)
+
+describe("F4: policy.readonly in a project that is $HOME", function()
+  it("locks '~/x' and absolute paths but not a project-relative one", function()
+    local p = plan.build({
+      project = FHOME, tmp_dir = TMP, cwd = FHOME, home = FHOME, uid = 1000,
+      probes = fakefs({
+        [FHOME] = "directory", [FHOME .. "/.claude"] = "directory", [TMP] = "directory", [FHOME .. "/x"] = "directory",
+        [FHOME .. "/rel"] = "directory", ["/srv/abs"] = "directory",
+      }),
+      env = { PATH = "/usr/bin" }, cmd = { "agent" }, aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
+      config = { network = "open", policy = { readonly = { "~/x", "rel", "/srv/abs" } } },
+    })
+    local ro = {}
+    for _, r in ipairs(p.readonly) do
+      ro[r.path] = r.why
+    end
+    H.eq("policy.readonly", ro[FHOME .. "/x"])
+    H.eq("policy.readonly", ro["/srv/abs"])
+    H.eq(nil, ro[FHOME .. "/rel"], "'rel' would be $HOME/rel for a project that is $HOME: not applied")
+  end)
+  it("in an ordinary project all three forms apply", function()
+    local p = plan.build({
+      project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = FHOME, uid = 1000,
+      probes = fakefs({
+        [FHOME] = "directory", [FHOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory", [PROJECT .. "/.git"] = "directory",
+        [FHOME .. "/x"] = "directory", [PROJECT .. "/rel"] = "directory", ["/srv/abs"] = "directory",
+      }),
+      env = { PATH = "/usr/bin" }, cmd = { "agent" }, aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
+      config = { network = "open", policy = { readonly = { "~/x", "rel", "/srv/abs" } } },
+    })
+    local ro = {}
+    for _, r in ipairs(p.readonly) do
+      ro[r.path] = r.why
+    end
+    for _, x in ipairs({ FHOME .. "/x", PROJECT .. "/rel", "/srv/abs" }) do
+      H.eq("policy.readonly", ro[x], x)
+    end
+  end)
+end)
+
+describe("F4: git_locked lists exactly the locked git directories", function()
+  it("a nested repository, the root .git and a masked absent .git are each counted once; other read-only paths are not", function()
+    local p = build({ [PROJECT .. "/sub"] = "directory", [PROJECT .. "/sub/.git"] = "directory", [PROJECT .. "/.envrc"] = "file" })
+    table.sort(p.git_locked)
+    H.eq({ PROJECT .. "/.git", PROJECT .. "/sub/.git" }, p.git_locked)
+    local bare = plan.build({
+      project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = FHOME, uid = 1000,
+      probes = fakefs({ [FHOME] = "directory", [FHOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory" }),
+      env = { PATH = "/usr/bin" }, cmd = { "agent" }, aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
+      config = { network = "open" },
+    })
+    H.eq({ PROJECT .. "/.git" }, bare.git_locked, "an absent .git is guarded and listed")
+    local text = table.concat(require("xyno_sandbox.ui").lines(p, { home = FHOME }), "\n")
+    H.match(text, "git directories locked (2)", true)
+  end)
+end)
+
+describe("F4: the in-sandbox relay", function()
+  local RELAY = H.repo .. "/lua/xyno_sandbox/relay.lua"
+
+  it("refuses to start without its three arguments (usage, exit 2)", function()
+    local r = vim.system({ vim.v.progpath, "-u", "NONE", "-i", "NONE", "--headless", "-l", RELAY }, { text = true }):wait(10000)
+    H.eq(2, r.code)
+    H.match(r.stderr, "usage: relay.lua SOCK PORT READY", true)
+    local r2 = vim.system({ vim.v.progpath, "-u", "NONE", "-i", "NONE", "--headless", "-l", RELAY, "/x", "notaport" }, { text = true }):wait(10000)
+    H.eq(2, r2.code)
+  end)
+
+  it("closes both ends of a connection once both directions ended (no descriptor leak)", function()
+    local dir = H.tmpdir()
+    vim.fn.mkdir(dir .. "/net", "p")
+    local sock = dir .. "/net/proxy.sock"
+    local server = uv.new_pipe(false)
+    assert(server:bind(sock))
+    local served = 0
+    server:listen(64, function()
+      local c = uv.new_pipe(false)
+      server:accept(c)
+      c:read_start(function(err, chunk)
+        if err or not chunk then
+          if not c:is_closing() then
+            c:close()
+          end
+          return
+        end
+        c:write("pong", function()
+          c:shutdown(function()
+            served = served + 1
+          end)
+        end)
+      end)
+    end)
+    local port = 20000 + (uv.hrtime() % 20000)
+    local ready = dir .. "/ready"
+    local sh = vim.system({ "sh", "-c", ('"%s" -u NONE -i NONE --headless -l "%s" "%s" %d "%s" </dev/null >/dev/null 2>&1 & wait'):format(
+      vim.v.progpath, RELAY, sock, port, ready), "xyno-r6-relay", dir:match("([^/]+)$") })
+    H.ok(vim.wait(10000, function()
+      return uv.fs_stat(ready) ~= nil
+    end, 50), "the relay did not come up")
+    local pid = H.procs(sock)[1] and H.procs(sock)[1][1]
+    H.ok(pid, "relay process")
+    local function fds()
+      local n = 0
+      for _ in vim.fs.dir("/proc/" .. pid .. "/fd") do
+        n = n + 1
+      end
+      return n
+    end
+    local function connect_once()
+      local done = false
+      local cl = uv.new_tcp()
+      cl:connect("127.0.0.1", port, function(err)
+        if err then
+          done = true
+          return
+        end
+        cl:write("ping")
+        cl:read_start(function(e, chunk)
+          if e or not chunk then
+            if not cl:is_closing() then
+              cl:close()
+            end
+            done = true
+          end
+        end)
+      end)
+      vim.wait(5000, function()
+        return done
+      end, 5)
+      H.ok(done, "a connection through the relay finished")
+    end
+    connect_once()
+    vim.wait(300, function() return false end)
+    local before = fds()
+    for _ = 1, 40 do
+      connect_once()
+    end
+    vim.wait(800, function() return false end)
+    local after = fds()
+    uv.kill(pid, 15)
+    sh:kill(9)
+    server:close()
+    H.wait_gone(sock, 4000)
+    H.ok(served >= 40, "the fake proxy served the connections: " .. served)
+    H.ok(after <= before + 4, ("the relay leaked descriptors: %d before, %d after 40 connections"):format(before, after))
+  end)
+end)
+
+describe("F4: the readiness probe runs the isolation of the real launch", function()
+  local EXPECTED = { "--die-with-parent", "--new-session", "--unshare-user", "--disable-userns", "--unshare-pid", "--unshare-ipc",
+    "--unshare-uts", "--unshare-cgroup-try", "--cap-drop", "ALL" }
+
+  it("plan.ISOLATION_FLAGS is exactly the expected list", function()
+    H.eq(EXPECTED, plan.ISOLATION_FLAGS)
+  end)
+
+  it("the command the probe really spawns carries every flag, the read-only root and --unshare-net when filtered", function()
+    local bin = H.tmpdir()
+    local log = bin .. "/argv.log"
+    write(bin .. "/bwrap", '#!/bin/sh\nfor a in "$@"; do echo "$a"; done > "' .. log .. '"\nexit 0\n')
+    uv.fs_chmod(bin .. "/bwrap", tonumber("755", 8))
+    vim.env.PATH = bin .. ":" .. old_path
+    for _, net_on in ipairs({ false, true }) do
+      probe.reset()
+      probe.net = net_on
+      local e = probe.run_sync(true)
+      H.ok(e.ok, vim.inspect(e))
+      local got = vim.fn.readfile(log)
+      local text = "\0" .. table.concat(got, "\0") .. "\0"
+      for _, f in ipairs(EXPECTED) do
+        H.ok(text:find("\0" .. f .. "\0", 1, true), "the probe did not pass " .. f)
+      end
+      H.ok(text:find("\0--ro-bind\0/\0/\0", 1, true), "read-only root")
+      H.ok(text:find("\0true\0", 1, true), "runs `true`")
+      H.eq(net_on, text:find("\0--unshare-net\0", 1, true) ~= nil)
+    end
+    probe.net = false
+  end)
+end)
+
+describe("F4: M.plan() when the status is refused", function()
+  it("returns nil and the reason, never a plan", function()
+    vim.env.PATH = H.tmpdir() -- no bwrap here
+    probe.reset()
+    sb.config.sandbox, sb.config.allow_unsandboxed = true, false
+    local p, reason = sb.plan({ "agent" }, H.tmpdir(), H.tmpdir())
+    H.eq(nil, p)
+    H.match(reason, "bwrap not found", true)
+    sb.config.allow_unsandboxed = true
+    local p2 = sb.plan({ "agent" }, H.tmpdir(), H.tmpdir())
+    H.eq("unsandboxed", p2.mode, "the explicit opt-in gives an unsandboxed plan")
+  end)
+end)
+
+describe("F4: ENV_DANGEROUS_EXACT", function()
+  local DANGEROUS = { "PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_DEBUG_OUTPUT", "BASH_ENV", "ENV", "PYTHONPATH", "PYTHONSTARTUP",
+    "PYTHONHOME", "NODE_OPTIONS", "NODE_PATH", "PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB", "GIT_SSH_COMMAND", "GIT_EXEC_PATH",
+    "CARGO_BUILD_RUSTC_WRAPPER", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTFLAGS", "SHELLOPTS", "PS4", "PROMPT_COMMAND", "IFS",
+    "HOME", "SHELL" }
+  it("each of them is refused as an env exception, with the reason that names the danger", function()
+    local ctx = { home = FHOME, probes = fakefs({}), scrub = nil }
+    for _, name in ipairs(DANGEROUS) do
+      H.ok(plan.ENV_DANGEROUS_EXACT[name], name .. " is missing from the table")
+      for _, spelled in ipairs({ name, name:lower() }) do
+        local ok, why = plan.validate_exception({ kind = "env", value = spelled }, ctx)
+        H.eq(false, ok, spelled)
+        H.match(why, "decides which code runs", true, spelled)
+      end
     end
   end)
 end)
