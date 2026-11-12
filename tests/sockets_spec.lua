@@ -118,36 +118,42 @@ end
 
 describe("host sockets", function()
   for _, mode in ipairs({ "allowlist", "denylist" }) do
-    it(("home = %s: a connect() sweep of /run, /var, /etc, /tmp, /mnt, /srv, /opt and the ssh-agent canary dir finds only the proxy socket"):format(mode), function()
-      sb.config.home = mode
-      sb.config.network = "filtered"
-      local project = H.tmpdir()
-      local c = canaries(project)
-      -- an ssh-agent style socket in a place no directory rule covers: found through $SSH_AUTH_SOCK
-      local home = vim.uv.os_homedir()
-      local agent_dir = home .. "/.cache/xc-a-" .. rnd
-      cleanup[#cleanup + 1] = function()
-        vim.fn.delete(agent_dir, "rf")
+    it(
+      ("home = %s: a connect() sweep of /run, /var, /etc, /tmp, /mnt, /srv, /opt and the ssh-agent canary dir finds only the proxy socket"):format(
+        mode
+      ),
+      function()
+        sb.config.home = mode
+        sb.config.network = "filtered"
+        local project = H.tmpdir()
+        local c = canaries(project)
+        -- an ssh-agent style socket in a place no directory rule covers: found through $SSH_AUTH_SOCK
+        local home = vim.uv.os_homedir()
+        local agent_dir = home .. "/.cache/xc-a-" .. rnd
+        cleanup[#cleanup + 1] = function()
+          vim.fn.delete(agent_dir, "rf")
+        end
+        local agent = listen(agent_dir .. "/a.sock")
+        if not agent then
+          return require("xynotest.harness").skip("$HOME is so deep that a unix socket path below it exceeds 107 bytes")
+        end
+        setenv("SSH_AUTH_SOCK", agent)
+        local roots =
+          { "/run", "/var", "/etc", "/tmp", "/mnt", "/srv", "/opt", "/media", agent_dir, vim.fs.dirname(c.tmp) }
+        local found, plan = sweep(project, roots)
+        local allowed = { [plan.net.sock] = true }
+        for _, p in ipairs(found) do
+          H.ok(allowed[p], "a host socket is connectable inside the sandbox: " .. p)
+        end
+        H.ok(vim.tbl_contains(found, plan.net.sock), "the sweep does see the one socket that must work (the proxy's)")
+        -- the project socket is a project file: hidden by the plan (project socket), so not connectable either
+        local seen = {}
+        for _, h in ipairs(plan.hidden) do
+          seen[h.path] = h.why
+        end
+        H.eq("project socket", seen[c.project])
       end
-      local agent = listen(agent_dir .. "/a.sock")
-      if not agent then
-        return require("xynotest.harness").skip("$HOME is so deep that a unix socket path below it exceeds 107 bytes")
-      end
-      setenv("SSH_AUTH_SOCK", agent)
-      local roots = { "/run", "/var", "/etc", "/tmp", "/mnt", "/srv", "/opt", "/media", agent_dir, vim.fs.dirname(c.tmp) }
-      local found, plan = sweep(project, roots)
-      local allowed = { [plan.net.sock] = true }
-      for _, p in ipairs(found) do
-        H.ok(allowed[p], "a host socket is connectable inside the sandbox: " .. p)
-      end
-      H.ok(vim.tbl_contains(found, plan.net.sock), "the sweep does see the one socket that must work (the proxy's)")
-      -- the project socket is a project file: hidden by the plan (project socket), so not connectable either
-      local seen = {}
-      for _, h in ipairs(plan.hidden) do
-        seen[h.path] = h.why
-      end
-      H.eq("project socket", seen[c.project])
-    end)
+    )
   end
 
   it("the detector works: a socket the policy does not cover IS found (a socket in a writable scratch dir)", function()
@@ -163,59 +169,74 @@ describe("host sockets", function()
     H.match(r.stdout or "", "CONNECTABLE " .. s, true, (r.stdout or "") .. (r.stderr or ""))
   end)
 
-  it("the masked directories are the empty tmpfs the plan lists (/run, /var/tmp, /tmp), nothing of the host is under them", function()
-    sb.config.network = "open"
-    H.need_sandbox()
-    local project = H.tmpdir()
-    local c = canaries(project)
-    local tmp = H.tmpdir()
-    local script = 'ls -A /run | head -20; echo ---; ls -A /var/tmp | head; echo ---; ls -A /tmp | head -3; echo ---; '
-      .. '[ -e /run/user/' .. uid .. ' ] && echo RUN-USER-VISIBLE; [ -e "' .. (c.vartmp or "") .. '" ] && echo VARTMP-VISIBLE; '
-      .. '[ -e "' .. (c.tmp or "") .. '" ] && echo TMP-VISIBLE; echo done'
-    local cmd, err, h = sb.wrap({ "bash", "-c", script }, project, tmp)
-    H.ok(cmd, err)
-    local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
-    h.release()
-    local out = (r.stdout or "") .. (r.stderr or "")
-    H.match(out, "done", true, out)
-    for _, bad in ipairs({ "RUN-USER-VISIBLE", "VARTMP-VISIBLE", "TMP-VISIBLE" }) do
-      H.no_match(out, bad, true, out)
-    end
-  end)
-
-  it("a socket named by $SSH_AUTH_SOCK / $XDG_RUNTIME_DIR outside the masked directories is hidden (denylist view)", function()
-    sb.config.home = "denylist"
-    local home = vim.uv.os_homedir()
-    local dir = home .. "/.cache/xc-e-" .. rnd
-    cleanup[#cleanup + 1] = function()
-      vim.fn.delete(dir, "rf")
-    end
-    local agent = listen(dir .. "/a.sock")
-    if not agent then
-      return require("xynotest.harness").skip("$HOME is so deep that a unix socket path below it exceeds 107 bytes")
-    end
-    setenv("SSH_AUTH_SOCK", agent or "")
-    setenv("XDG_RUNTIME_DIR", dir)
-    local p = sb.plan({ "agent" }, H.tmpdir(), H.tmpdir())
-    local by = {}
-    for _, h in ipairs(p.hidden) do
-      by[h.path] = h.why
-    end
-    H.eq("socket named by $SSH_AUTH_SOCK", by[agent])
-    H.eq("socket named by $XDG_RUNTIME_DIR", by[dir])
-    H.has(p.env_strip, "SSH_AUTH_SOCK")
-  end)
-
-  it("a project that is /tmp (or another shared system directory) is not mounted writable and gets no placeholders", function()
-    for _, shared in ipairs({ "/tmp", "/var/tmp", "/run", "/", vim.uv.os_homedir() .. "/.." }) do
-      local p = sb.plan({ "agent" }, vim.fs.normalize(shared), H.tmpdir())
-      for _, w in ipairs(p.writable) do
-        H.not_ok(w.path == vim.fs.normalize(shared) and w.why == "project", "mounted writable: " .. shared)
-      end
-      H.eq({}, p.guard_files, shared)
-      for _, m in ipairs(p.masks) do
-        H.not_ok(m.cleanup, "placeholder mask in " .. shared .. ": " .. m.path)
+  it(
+    "the masked directories are the empty tmpfs the plan lists (/run, /var/tmp, /tmp), nothing of the host is under them",
+    function()
+      sb.config.network = "open"
+      H.need_sandbox()
+      local project = H.tmpdir()
+      local c = canaries(project)
+      local tmp = H.tmpdir()
+      local script = "ls -A /run | head -20; echo ---; ls -A /var/tmp | head; echo ---; ls -A /tmp | head -3; echo ---; "
+        .. "[ -e /run/user/"
+        .. uid
+        .. ' ] && echo RUN-USER-VISIBLE; [ -e "'
+        .. (c.vartmp or "")
+        .. '" ] && echo VARTMP-VISIBLE; '
+        .. '[ -e "'
+        .. (c.tmp or "")
+        .. '" ] && echo TMP-VISIBLE; echo done'
+      local cmd, err, h = sb.wrap({ "bash", "-c", script }, project, tmp)
+      H.ok(cmd, err)
+      local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
+      h.release()
+      local out = (r.stdout or "") .. (r.stderr or "")
+      H.match(out, "done", true, out)
+      for _, bad in ipairs({ "RUN-USER-VISIBLE", "VARTMP-VISIBLE", "TMP-VISIBLE" }) do
+        H.no_match(out, bad, true, out)
       end
     end
-  end)
+  )
+
+  it(
+    "a socket named by $SSH_AUTH_SOCK / $XDG_RUNTIME_DIR outside the masked directories is hidden (denylist view)",
+    function()
+      sb.config.home = "denylist"
+      local home = vim.uv.os_homedir()
+      local dir = home .. "/.cache/xc-e-" .. rnd
+      cleanup[#cleanup + 1] = function()
+        vim.fn.delete(dir, "rf")
+      end
+      local agent = listen(dir .. "/a.sock")
+      if not agent then
+        return require("xynotest.harness").skip("$HOME is so deep that a unix socket path below it exceeds 107 bytes")
+      end
+      setenv("SSH_AUTH_SOCK", agent or "")
+      setenv("XDG_RUNTIME_DIR", dir)
+      local p = sb.plan({ "agent" }, H.tmpdir(), H.tmpdir())
+      local by = {}
+      for _, h in ipairs(p.hidden) do
+        by[h.path] = h.why
+      end
+      H.eq("socket named by $SSH_AUTH_SOCK", by[agent])
+      H.eq("socket named by $XDG_RUNTIME_DIR", by[dir])
+      H.has(p.env_strip, "SSH_AUTH_SOCK")
+    end
+  )
+
+  it(
+    "a project that is /tmp (or another shared system directory) is not mounted writable and gets no placeholders",
+    function()
+      for _, shared in ipairs({ "/tmp", "/var/tmp", "/run", "/", vim.uv.os_homedir() .. "/.." }) do
+        local p = sb.plan({ "agent" }, vim.fs.normalize(shared), H.tmpdir())
+        for _, w in ipairs(p.writable) do
+          H.not_ok(w.path == vim.fs.normalize(shared) and w.why == "project", "mounted writable: " .. shared)
+        end
+        H.eq({}, p.guard_files, shared)
+        for _, m in ipairs(p.masks) do
+          H.not_ok(m.cleanup, "placeholder mask in " .. shared .. ": " .. m.path)
+        end
+      end
+    end
+  )
 end)

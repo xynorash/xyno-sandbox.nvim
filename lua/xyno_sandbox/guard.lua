@@ -112,7 +112,16 @@ end
 --- @param project string
 --- @return { protected: table<string,string>, ino: table<string,string>, review: table<string,table>, dirs: integer, truncated: boolean, skip_truncated: boolean, depth_cut: boolean, why?: string }
 function M.snapshot(project)
-  local snap = { protected = {}, ino = {}, review = {}, dirs = 0, skip_dirs = 0, truncated = false, skip_truncated = false, depth_cut = false }
+  local snap = {
+    protected = {},
+    ino = {},
+    review = {},
+    dirs = 0,
+    skip_dirs = 0,
+    truncated = false,
+    skip_truncated = false,
+    depth_cut = false,
+  }
   local watch, slashed = {}, {}
   for _, n in ipairs(plan_mod.WATCH_NAMES) do
     if n:find("/", 1, true) then
@@ -284,7 +293,10 @@ function M.compare(before, after)
   -- created beyond it is unknown. Fail closed (dirty). A tree that was already too large at launch is only reported.
   for _, b in ipairs({
     { "truncated", "the project walk stopped (" .. tostring(after.why) .. ")" },
-    { "skip_truncated", "the walk inside target, node_modules and virtualenvs stopped (" .. tostring(after.skip_why) .. ")" },
+    {
+      "skip_truncated",
+      "the walk inside target, node_modules and virtualenvs stopped (" .. tostring(after.skip_why) .. ")",
+    },
     { "depth_cut", "directories deeper than " .. M.MAX_DEPTH .. " levels were not entered" },
   }) do
     if after[b[1]] then
@@ -294,7 +306,8 @@ function M.compare(before, after)
   for p, a in pairs(after.review) do
     local b = before.review[p]
     if not b then
-      res.review[#res.review + 1] = { path = p, change = "created", plus = a.text and count_lines(a.text) - 1 or nil, minus = 0 }
+      res.review[#res.review + 1] =
+        { path = p, change = "created", plus = a.text and count_lines(a.text) - 1 or nil, minus = 0 }
     elseif (a.sha or a.sig) ~= (b.sha or b.sig) then
       local plus, minus = line_delta(b.text, a.text)
       res.review[#res.review + 1] = { path = p, change = "changed", plus = plus, minus = minus }
@@ -302,7 +315,8 @@ function M.compare(before, after)
   end
   for p, b in pairs(before.review) do
     if not after.review[p] then
-      res.review[#res.review + 1] = { path = p, change = "deleted", plus = 0, minus = b.text and count_lines(b.text) - 1 or nil }
+      res.review[#res.review + 1] =
+        { path = p, change = "deleted", plus = 0, minus = b.text and count_lines(b.text) - 1 or nil }
     end
   end
   table.sort(res.moved, function(x, y)
@@ -390,8 +404,13 @@ end
 --- Mark the project dirty (the next launch is refused until cleared).
 function M.mark_dirty(project, info)
   local rec = {
-    project = project, ts = os.date("!%Y-%m-%dT%H:%M:%SZ"), planted = info.planted or {}, quarantine = info.quarantine,
-    failed = info.failed or {}, modified = info.modified or {}, incomplete = info.incomplete or {},
+    project = project,
+    ts = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+    planted = info.planted or {},
+    quarantine = info.quarantine,
+    failed = info.failed or {},
+    modified = info.modified or {},
+    incomplete = info.incomplete or {},
   }
   local ok, text = pcall(vim.json.encode, rec)
   if not ok then
@@ -438,13 +457,23 @@ function M.dirty_reason(rec)
   end
   local text = ""
   if #planted > 0 then
-    text = ("a previous sandbox run created %d file%s that run outside the sandbox (%s%s) and they were removed from the project;"
-      .. " a copy is in %s."):format(#planted, #planted == 1 and "" or "s", table.concat(shown, ", "), #planted > 5 and ", ..." or "",
-      rec.quarantine or "the state directory")
+    text = (
+      "a previous sandbox run created %d file%s that run outside the sandbox (%s%s) and they were removed from the project;"
+      .. " a copy is in %s."
+    ):format(
+      #planted,
+      #planted == 1 and "" or "s",
+      table.concat(shown, ", "),
+      #planted > 5 and ", ..." or "",
+      rec.quarantine or "the state directory"
+    )
   end
   if rec.incomplete and #rec.incomplete > 0 then
-    text = text .. (#planted > 0 and " " or "") .. ("The end-of-run check of the project tree could not be completed (%s), so more may have been created."):format(
-      table.concat(rec.incomplete, "; "))
+    text = text
+      .. (#planted > 0 and " " or "")
+      .. ("The end-of-run check of the project tree could not be completed (%s), so more may have been created."):format(
+        table.concat(rec.incomplete, "; ")
+      )
   end
   if text == "" then
     text = "a previous sandbox run left this project marked for review."
@@ -462,10 +491,13 @@ function M.report(res)
       parts[#parts + 1] = ("%s %s%s"):format(r.change, r.path, d)
     end
     lines[#lines + 1] = ("files that run on your machine later were edited (review before you build or run them): %s"):format(
-      table.concat(vim.list_slice(parts, 1, 8), "; ") .. (#parts > 8 and ("; ... " .. #parts .. " in all") or ""))
+      table.concat(vim.list_slice(parts, 1, 8), "; ") .. (#parts > 8 and ("; ... " .. #parts .. " in all") or "")
+    )
   end
   if #res.modified > 0 then
-    lines[#lines + 1] = ("existing files that act outside the sandbox changed: %s"):format(table.concat(vim.list_slice(res.modified, 1, 8), ", "))
+    lines[#lines + 1] = ("existing files that act outside the sandbox changed: %s"):format(
+      table.concat(vim.list_slice(res.modified, 1, 8), ", ")
+    )
   end
   return lines
 end

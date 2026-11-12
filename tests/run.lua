@@ -12,7 +12,8 @@ vim.opt.runtimepath:prepend(repo)
 
 -- Names that sandbox guards create in a project directory. A spec that leaves one in /tmp breaks
 -- every unrelated spec and tool that looks for a repository or an .envrc there, so a new one fails the run.
-local STRAYS = { ".git", ".envrc", ".exrc", ".mcp.json", ".mise.toml", ".nvim.lua", ".nvimrc", ".cargo", ".claude", ".vscode" }
+local STRAYS =
+  { ".git", ".envrc", ".exrc", ".mcp.json", ".mise.toml", ".nvim.lua", ".nvimrc", ".cargo", ".claude", ".vscode" }
 local function strays()
   local out = {}
   for _, n in ipairs(STRAYS) do
@@ -123,9 +124,15 @@ local function child_env(root, real_home)
   end
   mark_owner(tmp)
   local env = {
-    HOME = home, TMPDIR = tmp, XYNO_TEST_ROOT = root, XYNO_TEST_SCRATCH = tmp,
-    XYNO_TEST_WORKER = "1", XDG_CONFIG_HOME = home .. "/.config", XDG_CACHE_HOME = home .. "/.cache",
-    XDG_DATA_HOME = home .. "/.local/share", XDG_STATE_HOME = home .. "/.local/state",
+    HOME = home,
+    TMPDIR = tmp,
+    XYNO_TEST_ROOT = root,
+    XYNO_TEST_SCRATCH = tmp,
+    XYNO_TEST_WORKER = "1",
+    XDG_CONFIG_HOME = home .. "/.config",
+    XDG_CACHE_HOME = home .. "/.cache",
+    XDG_DATA_HOME = home .. "/.local/share",
+    XDG_STATE_HOME = home .. "/.local/state",
   }
   -- No working bubblewrap (no binary, no user namespaces: a CI container): the specs that run
   -- commands inside a sandbox skip themselves (helpers.need_sandbox); the ones that only build and
@@ -164,7 +171,9 @@ local function survivors(root, tmp)
       if f then
         local c = (f:read("a") or ""):gsub("%z", " ")
         f:close()
-        if (c:find(root, 1, true) or c:find(tmp, 1, true)) and (c:find("relay.lua", 1, true) or c:find("bwrap", 1, true)) then
+        if
+          (c:find(root, 1, true) or c:find(tmp, 1, true)) and (c:find("relay.lua", 1, true) or c:find("bwrap", 1, true))
+        then
           out[#out + 1] = { pid, c }
         end
       end
@@ -215,10 +224,17 @@ local function run_all(files)
     table.sort(files)
   end
   for _, f in ipairs(files) do
-    local r = vim.system({ vim.v.progpath, "--headless", "-l", repo .. "/tests/run.lua", f }, { text = true, env = env }):wait(FILE_TIMEOUT_MS)
+    local r = vim
+      .system({ vim.v.progpath, "--headless", "-l", repo .. "/tests/run.lua", f }, { text = true, env = env })
+      :wait(FILE_TIMEOUT_MS)
     if r.code == 124 or r.signal == 15 or r.signal == 9 then
       total.failed = total.failed + 1
-      io.stdout:write(("FAIL %s timed out after %d s (killed): a hang is a failure, not a pause\n"):format(vim.fs.basename(f), FILE_TIMEOUT_MS / 1000))
+      io.stdout:write(
+        ("FAIL %s timed out after %d s (killed): a hang is a failure, not a pause\n"):format(
+          vim.fs.basename(f),
+          FILE_TIMEOUT_MS / 1000
+        )
+      )
     end
     io.stdout:write(r.stdout or "")
     io.stderr:write(r.stderr or "")
@@ -230,19 +246,30 @@ local function run_all(files)
     for k in pairs(total) do
       total[k] = total[k] + tonumber((last or ""):match(k .. "=(%d+)") or 0)
     end
-    if r.code ~= 0 and not (r.stdout or ""):find("RESULT", 1, true) and not (r.code == 124 or r.signal == 15 or r.signal == 9) then
+    if
+      r.code ~= 0
+      and not (r.stdout or ""):find("RESULT", 1, true)
+      and not (r.code == 124 or r.signal == 15 or r.signal == 9)
+    then
       total.failed = total.failed + 1
     end
     for n in pairs(strays()) do
       if not before[n] then
         before[n] = true
         total.failed = total.failed + 1
-        io.stdout:write(("FAIL %s left /tmp/%s behind (a sandbox placeholder leaked into a shared directory)\n"):format(vim.fs.basename(f), n))
+        io.stdout:write(
+          ("FAIL %s left /tmp/%s behind (a sandbox placeholder leaked into a shared directory)\n"):format(
+            vim.fs.basename(f),
+            n
+          )
+        )
       end
     end
     for _, s in ipairs(reap(root, env.XYNO_TEST_SCRATCH)) do
       total.failed = total.failed + 1
-      io.stdout:write(("FAIL %s left a process behind (killed): pid %d %s\n"):format(vim.fs.basename(f), s[1], s[2]:sub(1, 160)))
+      io.stdout:write(
+        ("FAIL %s left a process behind (killed): pid %d %s\n"):format(vim.fs.basename(f), s[1], s[2]:sub(1, 160))
+      )
     end
   end
   vim.fn.delete(root, "rf")
@@ -250,7 +277,14 @@ local function run_all(files)
   for _, d in ipairs(made_dirs) do
     vim.uv.fs_rmdir(d) -- only when empty
   end
-  io.stdout:write(("RESULT passed=%d failed=%d skipped=%d xfailed=%d\n"):format(total.passed, total.failed, total.skipped, total.xfailed))
+  io.stdout:write(
+    ("RESULT passed=%d failed=%d skipped=%d xfailed=%d\n"):format(
+      total.passed,
+      total.failed,
+      total.skipped,
+      total.xfailed
+    )
+  )
   os.exit(total.failed > 0 and 1 or 0)
 end
 
@@ -295,7 +329,14 @@ if not ok then
 else
   counts = harness.run()
 end
-io.stdout:write(("RESULT passed=%d failed=%d skipped=%d xfailed=%d\n"):format(counts.passed, counts.failed, counts.skipped, counts.xfailed or 0))
+io.stdout:write(
+  ("RESULT passed=%d failed=%d skipped=%d xfailed=%d\n"):format(
+    counts.passed,
+    counts.failed,
+    counts.skipped,
+    counts.xfailed or 0
+  )
+)
 io.stdout:flush()
 pcall(function()
   require("xynotest.helpers").cleanup()

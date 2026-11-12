@@ -19,36 +19,66 @@ end)
 local HOME, PROJECT, TMP = "/h", "/h/proj", "/h/scratch"
 local function fakefs(entries)
   return {
-    stat_type = function(p) return entries[p] end,
-    lstat_type = function(p) return entries[p] end,
-    exists = function(p) return entries[p] ~= nil end,
-    list = function() return {} end,
+    stat_type = function(p)
+      return entries[p]
+    end,
+    lstat_type = function(p)
+      return entries[p]
+    end,
+    exists = function(p)
+      return entries[p] ~= nil
+    end,
+    list = function()
+      return {}
+    end,
     glob = function(pat)
       local out = {}
       local lp = "^" .. pat:gsub("[%-%.%+%[%]%(%)%$%^%%]", "%%%0"):gsub("%*", "[^/]*") .. "$"
       for p in pairs(entries) do
-        if p:match(lp) then out[#out + 1] = p end
+        if p:match(lp) then
+          out[#out + 1] = p
+        end
       end
       table.sort(out)
       return out
     end,
-    read_line = function() return nil end,
-    realpath = function(p) return entries[p] and p or nil end,
+    read_line = function()
+      return nil
+    end,
+    realpath = function(p)
+      return entries[p] and p or nil
+    end,
   }
 end
 local CLAUDE = {
-  [HOME] = "directory", [HOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory",
-  [HOME .. "/.claude/.credentials.json"] = "file", [HOME .. "/.claude/settings.json"] = "file",
-  [HOME .. "/.claude/CLAUDE.md"] = "file", [HOME .. "/.claude/history.jsonl"] = "file",
-  [HOME .. "/.claude/projects"] = "directory", [HOME .. "/.claude/projects/-other-project"] = "directory",
-  [HOME .. "/.claude/projects/-other-project/memory"] = "directory", [HOME .. "/.claude/projects/-h-proj"] = "directory",
-  [HOME .. "/.claude/projects/-h-proj/memory"] = "directory", [HOME .. "/.claude/sessions"] = "directory",
-  [HOME .. "/.claude/plugins"] = "directory", [HOME .. "/.claude/hooks"] = "directory",
+  [HOME] = "directory",
+  [HOME .. "/.claude"] = "directory",
+  [PROJECT] = "directory",
+  [TMP] = "directory",
+  [HOME .. "/.claude/.credentials.json"] = "file",
+  [HOME .. "/.claude/settings.json"] = "file",
+  [HOME .. "/.claude/CLAUDE.md"] = "file",
+  [HOME .. "/.claude/history.jsonl"] = "file",
+  [HOME .. "/.claude/projects"] = "directory",
+  [HOME .. "/.claude/projects/-other-project"] = "directory",
+  [HOME .. "/.claude/projects/-other-project/memory"] = "directory",
+  [HOME .. "/.claude/projects/-h-proj"] = "directory",
+  [HOME .. "/.claude/projects/-h-proj/memory"] = "directory",
+  [HOME .. "/.claude/sessions"] = "directory",
+  [HOME .. "/.claude/plugins"] = "directory",
+  [HOME .. "/.claude/hooks"] = "directory",
 }
 local function build(over, entries)
   return plan.build(vim.tbl_extend("force", {
-    project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, probes = fakefs(entries or CLAUDE),
-    env = { PATH = "/usr/bin" }, cmd = { "agent" }, aux = { empty = "/aux/e", claude_json = "/aux/cj" },
+    project = PROJECT,
+    tmp_dir = TMP,
+    cwd = PROJECT,
+    home = HOME,
+    uid = 1000,
+    probes = fakefs(entries or CLAUDE),
+    env = { PATH = "/usr/bin" },
+    cmd = { "agent" },
+    aux = { empty = "/aux/e", claude_json = "/aux/cj" },
     config = { network = "open" },
   }, over or {}))
 end
@@ -71,8 +101,16 @@ describe("the allowlist view of ~/.claude", function()
 
   it("shows nothing else of it: not the other projects' transcripts, settings, history, sessions, plugins", function()
     local text = argv_text(plan.build and build())
-    for _, secret in ipairs({ "/.claude/projects\0", "-other-project", "settings.json", "CLAUDE.md", "history.jsonl", "/.claude/sessions",
-      "/.claude/plugins", "/.claude/hooks" }) do
+    for _, secret in ipairs({
+      "/.claude/projects\0",
+      "-other-project",
+      "settings.json",
+      "CLAUDE.md",
+      "history.jsonl",
+      "/.claude/sessions",
+      "/.claude/plugins",
+      "/.claude/hooks",
+    }) do
       H.no_match(text, secret, true, secret .. " must not be mounted")
     end
   end)
@@ -89,17 +127,35 @@ describe("the allowlist view of ~/.claude", function()
     H.ok(has(p, "--ro-bind", HOME .. "/.claude/settings.json", HOME .. "/.claude/settings.json"))
   end)
 
-  it("policy.claude_share shows chosen names read-only; the login, transcripts and history are not shareable", function()
-    local p = build({ config = { network = "open", policy = { claude_share = { "settings.json", "CLAUDE.md", "projects", "history.jsonl", "../x" } } } })
-    H.ok(has(p, "--ro-bind", HOME .. "/.claude/settings.json", HOME .. "/.claude/settings.json"))
-    H.ok(has(p, "--ro-bind", HOME .. "/.claude/CLAUDE.md", HOME .. "/.claude/CLAUDE.md"))
-    H.eq(2, #p.claude.shared)
-    H.not_ok(argv_text(p):find("history.jsonl", 1, true))
-    for _, bad in ipairs({ "projects", "projects/-other-project", "history.jsonl", ".credentials.json", "sessions", "../x", "a/../b" }) do
-      H.throws(function() sb.setup({ policy = { claude_share = { bad } } }) end, "claude_share")
+  it(
+    "policy.claude_share shows chosen names read-only; the login, transcripts and history are not shareable",
+    function()
+      local p = build({
+        config = {
+          network = "open",
+          policy = { claude_share = { "settings.json", "CLAUDE.md", "projects", "history.jsonl", "../x" } },
+        },
+      })
+      H.ok(has(p, "--ro-bind", HOME .. "/.claude/settings.json", HOME .. "/.claude/settings.json"))
+      H.ok(has(p, "--ro-bind", HOME .. "/.claude/CLAUDE.md", HOME .. "/.claude/CLAUDE.md"))
+      H.eq(2, #p.claude.shared)
+      H.not_ok(argv_text(p):find("history.jsonl", 1, true))
+      for _, bad in ipairs({
+        "projects",
+        "projects/-other-project",
+        "history.jsonl",
+        ".credentials.json",
+        "sessions",
+        "../x",
+        "a/../b",
+      }) do
+        H.throws(function()
+          sb.setup({ policy = { claude_share = { bad } } })
+        end, "claude_share")
+      end
+      sb.setup({ preview = "never", policy = { claude_share = { "settings.json" } } })
     end
-    sb.setup({ preview = "never", policy = { claude_share = { "settings.json" } } })
-  end)
+  )
 
   it("no login file, no bind: nothing is invented", function()
     local entries = vim.tbl_extend("force", {}, CLAUDE)
@@ -133,14 +189,26 @@ describe("the ~/.claude.json copy", function()
 
   it("keeps the current project's record and the login state, drops every other project", function()
     local project = H.tmpdir()
-    local ok, out, path = scrub(vim.json.encode({
-      oauthAccount = { emailAddress = "u@example.com", accountUuid = "uuid-1" }, numStartups = 3, mcpServers = vim.empty_dict(),
-      projects = { [project] = { allowedTools = {}, hasTrustDialogAccepted = true }, ["/secret/other"] = { history = { "prompt of another project" } } },
-      githubRepoPaths = { ["a/b"] = { "/secret/other" } },
-    }), project)
+    local ok, out, path = scrub(
+      vim.json.encode({
+        oauthAccount = { emailAddress = "u@example.com", accountUuid = "uuid-1" },
+        numStartups = 3,
+        mcpServers = vim.empty_dict(),
+        projects = {
+          [project] = { allowedTools = {}, hasTrustDialogAccepted = true },
+          ["/secret/other"] = { history = { "prompt of another project" } },
+        },
+        githubRepoPaths = { ["a/b"] = { "/secret/other" } },
+      }),
+      project
+    )
     H.ok(ok)
     H.eq({ [project] = { allowedTools = {}, hasTrustDialogAccepted = true } }, out.projects)
-    H.eq(nil, out.oauthAccount.accountUuid, "the account id does not (round 6); the login itself is ~/.claude/.credentials.json")
+    H.eq(
+      nil,
+      out.oauthAccount.accountUuid,
+      "the account id does not (round 6); the login itself is ~/.claude/.credentials.json"
+    )
     H.eq(nil, out.oauthAccount.emailAddress, "the e-mail address does not")
     H.eq(3, out.numStartups)
     H.eq(nil, out.githubRepoPaths)
@@ -202,11 +270,21 @@ describe("a real sandbox", function()
 
   it("the agent reads its login and its own transcripts, nothing else of ~/.claude", function()
     local name = setup_home()
-    local out = run(('cd "$HOME/.claude" && cat .credentials.json; cat projects/%s/mine.jsonl; ls -A; ls -A projects; '
-      .. 'for f in settings.json CLAUDE.md history.jsonl sessions/s1 projects/-other-project/s.jsonl; do cat "$f" 2>/dev/null; done; echo end'):format(name))
+    local out = run(
+      (
+        'cd "$HOME/.claude" && cat .credentials.json; cat projects/%s/mine.jsonl; ls -A; ls -A projects; '
+        .. 'for f in settings.json CLAUDE.md history.jsonl sessions/s1 projects/-other-project/s.jsonl; do cat "$f" 2>/dev/null; done; echo end'
+      ):format(name)
+    )
     H.match(out, '{"fake":"login"}', true, out)
     H.match(out, "OWN-TRANSCRIPT", true, out)
-    for _, canary in ipairs({ "SETTINGS-CANARY", "GLOBAL-INSTRUCTIONS-CANARY", "HISTORY-CANARY", "OTHER-TRANSCRIPT-CANARY", "SESSION-CANARY" }) do
+    for _, canary in ipairs({
+      "SETTINGS-CANARY",
+      "GLOBAL-INSTRUCTIONS-CANARY",
+      "HISTORY-CANARY",
+      "OTHER-TRANSCRIPT-CANARY",
+      "SESSION-CANARY",
+    }) do
       H.no_match(out, canary, true, out)
     end
     H.no_match(out, "-other-project", true, "the other project's directory is not even listed")
@@ -215,7 +293,11 @@ describe("a real sandbox", function()
 
   it("the login is read-only, own transcripts persist, other writes vanish with the sandbox", function()
     local name = setup_home()
-    run(('cd "$HOME/.claude" && (echo hacked > .credentials.json) 2>/dev/null; echo new > projects/%s/new.jsonl; mkdir todos; echo t > todos/t.json; echo x > planted.json'):format(name))
+    run(
+      ('cd "$HOME/.claude" && (echo hacked > .credentials.json) 2>/dev/null; echo new > projects/%s/new.jsonl; mkdir todos; echo t > todos/t.json; echo x > planted.json'):format(
+        name
+      )
+    )
     H.eq({ '{"fake":"login"}' }, vim.fn.readfile(home .. "/.claude/.credentials.json"))
     H.eq({ "new" }, vim.fn.readfile(home .. "/.claude/projects/" .. name .. "/new.jsonl"))
     H.eq(0, vim.fn.filereadable(home .. "/.claude/planted.json"), "nothing else reaches the host")
@@ -225,7 +307,9 @@ describe("a real sandbox", function()
   it("policy.claude_share shows a chosen file, read-only", function()
     setup_home()
     sb.config.policy = { claude_share = { "CLAUDE.md" } }
-    local out = run('cat "$HOME/.claude/CLAUDE.md"; (echo x > "$HOME/.claude/CLAUDE.md") 2>&1; cat "$HOME/.claude/settings.json" 2>&1')
+    local out = run(
+      'cat "$HOME/.claude/CLAUDE.md"; (echo x > "$HOME/.claude/CLAUDE.md") 2>&1; cat "$HOME/.claude/settings.json" 2>&1'
+    )
     H.match(out, "GLOBAL-INSTRUCTIONS-CANARY", true, out)
     H.no_match(out, "SETTINGS-CANARY", true, out)
     H.eq({ "GLOBAL-INSTRUCTIONS-CANARY" }, vim.fn.readfile(home .. "/.claude/CLAUDE.md"))

@@ -169,9 +169,19 @@ function M.run(out)
         end
         local secs = (vim.uv.hrtime() - t0) / 1e9
         if item.xfail and ok then
-          report("failed", name, "XPASS: expected to fail (" .. item.xfail .. ") but it passed; make it a normal test", secs)
+          report(
+            "failed",
+            name,
+            "XPASS: expected to fail (" .. item.xfail .. ") but it passed; make it a normal test",
+            secs
+          )
         elseif item.xfail and not is_skip(err) then
-          report("xfailed", name, "known limit: " .. item.xfail .. " | " .. tostring(err):gsub("\n.*", ""):sub(1, 120), secs)
+          report(
+            "xfailed",
+            name,
+            "known limit: " .. item.xfail .. " | " .. tostring(err):gsub("\n.*", ""):sub(1, 120),
+            secs
+          )
         elseif ok then
           report("passed", name, nil, secs)
         elseif is_skip(err) then

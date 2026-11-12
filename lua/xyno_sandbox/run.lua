@@ -19,7 +19,12 @@ function M.describe(st)
   local hint = st.hint and (" -> " .. st.hint) or ""
   if st.mode == "bwrap" then
     local net = require("xyno_sandbox").net_mode() == "open" and "; network OPEN" or "; network filtered (allowlist)"
-    return (st.ready == "pending" and "sandboxed (bubblewrap; readiness check running" or "sandboxed (bubblewrap, user namespaces work") .. net .. ")"
+    return (
+      st.ready == "pending" and "sandboxed (bubblewrap; readiness check running"
+      or "sandboxed (bubblewrap, user namespaces work"
+    )
+      .. net
+      .. ")"
   elseif st.mode == "unsandboxed" then
     return "UNSANDBOXED (" .. st.via .. "): " .. st.reason .. hint
   end
@@ -216,7 +221,9 @@ function M.register(cfg)
       local tmp_dir = vim.fn.stdpath("cache") .. "/xyno-sandbox"
       sandbox.status_blocking()
       require("xyno_sandbox.ui").show({
-        project = project, full = c.bang, status = sandbox.status,
+        project = project,
+        full = c.bang,
+        status = sandbox.status,
         build = function(once)
           return sandbox.plan(cmd, project, tmp_dir, { exceptions = once })
         end,
@@ -226,8 +233,12 @@ function M.register(cfg)
           end
         end,
       })
-    end, { bang = true, nargs = "?", complete = "dir",
-      desc = "Show the sandbox policy for a project (writable, read-only, hidden, stripped env names); ! lists everything" })
+    end, {
+      bang = true,
+      nargs = "?",
+      complete = "dir",
+      desc = "Show the sandbox policy for a project (writable, read-only, hidden, stripped env names); ! lists everything",
+    })
 
     vim.api.nvim_create_user_command("XynoSandboxApprovals", function(c)
       local sub = c.fargs[1]
@@ -242,19 +253,27 @@ function M.register(cfg)
             end
           end
         end
-        notify(done and ("revoked approval " .. id) or ("no approval with id " .. tostring(c.fargs[2])),
-          done and vim.log.levels.INFO or vim.log.levels.WARN)
+        notify(
+          done and ("revoked approval " .. id) or ("no approval with id " .. tostring(c.fargs[2])),
+          done and vim.log.levels.INFO or vim.log.levels.WARN
+        )
       elseif sub == "log" then
         vim.cmd("edit " .. vim.fn.fnameescape(store.log_path()))
         vim.bo.readonly = true
       else
         require("xyno_sandbox.ui").approvals()
       end
-    end, { nargs = "*", complete = function() return { "revoke", "log" } end,
-      desc = "List remembered sandbox exceptions (x revokes); `revoke {id}`; `log` opens the decision log" })
+    end, {
+      nargs = "*",
+      complete = function()
+        return { "revoke", "log" }
+      end,
+      desc = "List remembered sandbox exceptions (x revokes); `revoke {id}`; `log` opens the decision log",
+    })
 
     vim.api.nvim_create_user_command("XynoSandboxReview", function(c)
-      local project = vim.fs.normalize(vim.fn.fnamemodify(c.fargs[2] or vim.fs.root(0, ".git") or vim.uv.cwd(), ":p")):gsub("/$", "")
+      local project =
+        vim.fs.normalize(vim.fn.fnamemodify(c.fargs[2] or vim.fs.root(0, ".git") or vim.uv.cwd(), ":p")):gsub("/$", "")
       local rec = sandbox.dirty(project)
       if c.fargs[1] == "clear" then
         if rec then
@@ -269,7 +288,11 @@ function M.register(cfg)
         notify("no review pending for " .. project)
         return
       end
-      local lines = { "Sandbox review pending for " .. project, "", "Files that run outside the sandbox that a run created (copies in " .. tostring(rec.quarantine) .. "):" }
+      local lines = {
+        "Sandbox review pending for " .. project,
+        "",
+        "Files that run outside the sandbox that a run created (copies in " .. tostring(rec.quarantine) .. "):",
+      }
       for _, p in ipairs(rec.planted or {}) do
         lines[#lines + 1] = "  " .. p
       end
@@ -277,13 +300,20 @@ function M.register(cfg)
         lines[#lines + 1] = "  STILL THERE (could not be removed): " .. p
       end
       for _, why in ipairs(rec.incomplete or {}) do
-        lines[#lines + 1] = "  END-OF-RUN CHECK INCOMPLETE: " .. why .. " (look for .envrc, .cargo/config.toml, .git/hooks... in the part that was not compared)"
+        lines[#lines + 1] = "  END-OF-RUN CHECK INCOMPLETE: "
+          .. why
+          .. " (look for .envrc, .cargo/config.toml, .git/hooks... in the part that was not compared)"
       end
       lines[#lines + 1] = ""
       lines[#lines + 1] = ":XynoSandboxReview clear  allows the next launch"
       notify(table.concat(lines, "\n"), vim.log.levels.WARN)
-    end, { nargs = "*", complete = function() return { "clear" } end,
-      desc = "Show the files a sandbox run planted that were quarantined; `clear` allows the next launch" })
+    end, {
+      nargs = "*",
+      complete = function()
+        return { "clear" }
+      end,
+      desc = "Show the files a sandbox run planted that were quarantined; `clear` allows the next launch",
+    })
 
     vim.api.nvim_create_user_command("XynoSandboxRun", function(c)
       M.run(c.fargs)

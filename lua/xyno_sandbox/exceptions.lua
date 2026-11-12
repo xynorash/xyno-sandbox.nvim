@@ -39,8 +39,10 @@ function M.decide(project, decision, exc, scope)
     store.log(entry)
     return nil
   end
-  local ok, why = plan.validate_exception({ kind = exc.kind, value = value },
-    require("xyno_sandbox").exception_context(project, exc.kind))
+  local ok, why = plan.validate_exception(
+    { kind = exc.kind, value = value },
+    require("xyno_sandbox").exception_context(project, exc.kind)
+  )
   if not ok then
     entry.decision, entry.reason = "refused", why
     store.log(entry)

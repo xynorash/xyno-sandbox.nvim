@@ -48,9 +48,15 @@ local PROJECT, TMP, FHOME = "/h/proj", "/h/scratch", "/h"
 
 local function fakefs(entries, info)
   return {
-    stat_type = function(x) return entries[x] end,
-    lstat_type = function(x) return entries[x] end,
-    exists = function(x) return entries[x] ~= nil end,
+    stat_type = function(x)
+      return entries[x]
+    end,
+    lstat_type = function(x)
+      return entries[x]
+    end,
+    exists = function(x)
+      return entries[x] ~= nil
+    end,
     list = function(dir)
       local out, prefix = {}, dir == "/" and "/" or (dir .. "/")
       for x, t in pairs(entries) do
@@ -58,7 +64,9 @@ local function fakefs(entries, info)
           out[#out + 1] = { x:sub(#prefix + 1), t }
         end
       end
-      table.sort(out, function(a, b) return a[1] < b[1] end)
+      table.sort(out, function(a, b)
+        return a[1] < b[1]
+      end)
       return out
     end,
     glob = function(pat)
@@ -72,27 +80,47 @@ local function fakefs(entries, info)
       table.sort(out)
       return out
     end,
-    read_line = function() return nil end,
-    realpath = function(x) return entries[x] and x or nil end,
-    stat_info = function(x) return (info or {})[x] end,
+    read_line = function()
+      return nil
+    end,
+    realpath = function(x)
+      return entries[x] and x or nil
+    end,
+    stat_info = function(x)
+      return (info or {})[x]
+    end,
   }
 end
 
 local function build(extra, over, info, scan_result, realmap)
   local entries = vim.tbl_extend("force", {
-    [FHOME] = "directory", [FHOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory",
+    [FHOME] = "directory",
+    [FHOME .. "/.claude"] = "directory",
+    [PROJECT] = "directory",
+    [TMP] = "directory",
     [PROJECT .. "/.git"] = "directory",
   }, extra or {})
   local probes = fakefs(entries, info)
   if realmap then
-    probes.realpath = function(x) return realmap[x] or (entries[x] and x or nil) end
+    probes.realpath = function(x)
+      return realmap[x] or (entries[x] and x or nil)
+    end
   end
   if scan_result then
-    probes.scan_project = function() return scan_result end
+    probes.scan_project = function()
+      return scan_result
+    end
   end
   return plan.build(vim.tbl_extend("force", {
-    project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = FHOME, uid = 1000, probes = probes,
-    env = { PATH = "/usr/bin" }, cmd = { "agent" }, aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
+    project = PROJECT,
+    tmp_dir = TMP,
+    cwd = PROJECT,
+    home = FHOME,
+    uid = 1000,
+    probes = probes,
+    env = { PATH = "/usr/bin" },
+    cmd = { "agent" },
+    aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
     config = { network = "open" },
   }, over or {}))
 end
@@ -121,7 +149,8 @@ describe("the login file ~/.claude/.credentials.json", function()
     it("a project hard link of it is hidden (" .. mode .. ")", function()
       local extra = { [CRED] = "file", [PROJECT .. "/hl_claude"] = "file" }
       local info = { [CRED] = { nlink = 2, dev = 7, ino = 41 } }
-      local scanned = { hits = {}, files = 1, multi = { { path = PROJECT .. "/hl_claude", dev = 7, ino = 41, nlink = 2 } } }
+      local scanned =
+        { hits = {}, files = 1, multi = { { path = PROJECT .. "/hl_claude", dev = 7, ino = 41, nlink = 2 } } }
       local p = build(extra, { config = { network = "open", home = mode } }, info, scanned)
       local h = hidden_map(p)[PROJECT .. "/hl_claude"]
       H.ok(h, "the writable second name of the login stays writable otherwise")
@@ -143,8 +172,17 @@ describe("the login file ~/.claude/.credentials.json", function()
   end)
 
   it("a writable approval for it is refused (it is a file the agent must not rewrite)", function()
-    local ok = plan.validate_exception({ kind = "writable", value = FHOME .. "/.claude/.credentials.json" },
-      { home = FHOME, probes = { exists = function() return true end, realpath = function(x) return x end } })
+    local ok = plan.validate_exception({ kind = "writable", value = FHOME .. "/.claude/.credentials.json" }, {
+      home = FHOME,
+      probes = {
+        exists = function()
+          return true
+        end,
+        realpath = function(x)
+          return x
+        end,
+      },
+    })
     H.not_ok(ok)
   end)
 
@@ -159,8 +197,11 @@ describe("the login file ~/.claude/.credentials.json", function()
       local project = home .. "/login-link-" .. mode
       write(project .. "/Cargo.toml", "[package]\n")
       H.ok(uv.fs_link(cred, project .. "/hl_claude"))
-      local cmd, err, h = sb.wrap({ "sh", "-c",
-        "echo PWNED >> hl_claude; echo PWNED >> \"$HOME/.claude/.credentials.json\"; echo done" }, project, H.tmpdir())
+      local cmd, err, h = sb.wrap(
+        { "sh", "-c", 'echo PWNED >> hl_claude; echo PWNED >> "$HOME/.claude/.credentials.json"; echo done' },
+        project,
+        H.tmpdir()
+      )
       H.ok(cmd, err)
       local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
       h.release()
@@ -177,7 +218,11 @@ end)
 
 describe("credential files the hidden list missed (home = denylist)", function()
   local files = {
-    "/.config/sops/age/keys.txt", "/.gem/credentials", "/.config/pypoetry/auth.toml", "/.pip/pip.conf", "/.config/pip/pip.conf",
+    "/.config/sops/age/keys.txt",
+    "/.gem/credentials",
+    "/.config/pypoetry/auth.toml",
+    "/.pip/pip.conf",
+    "/.config/pip/pip.conf",
     "/.npm/_logs",
   }
   it("each is hidden", function()
@@ -211,7 +256,7 @@ describe("credential files the hidden list missed (home = denylist)", function()
     write(project .. "/Cargo.toml", "[package]\n")
     local script = {}
     for _, rel in ipairs(files) do
-      script[#script + 1] = ("cat \"$HOME%s\" \"$HOME%s\"/* 2>/dev/null"):format(rel, rel)
+      script[#script + 1] = ('cat "$HOME%s" "$HOME%s"/* 2>/dev/null'):format(rel, rel)
     end
     local cmd, err, h = sb.wrap({ "sh", "-c", table.concat(script, "; ") .. "; echo done" }, project, H.tmpdir())
     H.ok(cmd, err)
@@ -247,22 +292,25 @@ describe("files of the project root that act outside the sandbox: editors, hooks
     end
   end)
 
-  it("the ones that are absent cannot be created (directories masked, files bound to an empty read-only file)", function()
-    local p = build()
-    local masks, guards = {}, {}
-    for _, m in ipairs(p.masks) do
-      masks[m.path] = true
+  it(
+    "the ones that are absent cannot be created (directories masked, files bound to an empty read-only file)",
+    function()
+      local p = build()
+      local masks, guards = {}, {}
+      for _, m in ipairs(p.masks) do
+        masks[m.path] = true
+      end
+      for _, g in ipairs(p.guard_files) do
+        guards[g.path] = true
+      end
+      for _, d in ipairs(dirs) do
+        H.ok(masks[PROJECT .. "/" .. d], d .. " masked while absent")
+      end
+      for _, f in ipairs(files) do
+        H.ok(guards[PROJECT .. "/" .. f], f .. " guarded while absent")
+      end
     end
-    for _, g in ipairs(p.guard_files) do
-      guards[g.path] = true
-    end
-    for _, d in ipairs(dirs) do
-      H.ok(masks[PROJECT .. "/" .. d], d .. " masked while absent")
-    end
-    for _, f in ipairs(files) do
-      H.ok(guards[PROJECT .. "/" .. f], f .. " guarded while absent")
-    end
-  end)
+  )
 
   it("really cannot be created, replaced or renamed in a sandbox, and no placeholder is left behind", function()
     H.need_sandbox()
@@ -273,9 +321,16 @@ describe("files of the project root that act outside the sandbox: editors, hooks
     write(project .. "/.idea/workspace.xml", "<x/>\n")
     write(project .. "/.husky/pre-commit", "echo ok\n")
     local script = table.concat({
-      "mkdir -p .zed && echo '{\"tasks\":1}' > .zed/tasks.json", "mkdir -p .helix && echo x > .helix/languages.toml",
-      "mkdir -p .devcontainer && echo x > .devcontainer/devcontainer.json", "echo x > .pre-commit-config.yaml", "echo x > .lldbinit",
-      "echo x > .gdbinit", "echo PWNED >> .idea/workspace.xml", "echo PWNED >> .husky/pre-commit", "mv .idea .idea-old", "mv .husky h2",
+      "mkdir -p .zed && echo '{\"tasks\":1}' > .zed/tasks.json",
+      "mkdir -p .helix && echo x > .helix/languages.toml",
+      "mkdir -p .devcontainer && echo x > .devcontainer/devcontainer.json",
+      "echo x > .pre-commit-config.yaml",
+      "echo x > .lldbinit",
+      "echo x > .gdbinit",
+      "echo PWNED >> .idea/workspace.xml",
+      "echo PWNED >> .husky/pre-commit",
+      "mv .idea .idea-old",
+      "mv .husky h2",
       "echo done",
     }, "; ")
     local cmd, err, h = sb.wrap({ "sh", "-c", script }, project, H.tmpdir())
@@ -284,7 +339,16 @@ describe("files of the project root that act outside the sandbox: editors, hooks
     h.release()
     H.match(r.stdout, "done", true, (r.stdout or "") .. (r.stderr or ""))
     local seen = {}
-    for _, n in ipairs({ ".zed", ".helix", ".devcontainer", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit", ".idea-old", "h2" }) do
+    for _, n in ipairs({
+      ".zed",
+      ".helix",
+      ".devcontainer",
+      ".pre-commit-config.yaml",
+      ".lldbinit",
+      ".gdbinit",
+      ".idea-old",
+      "h2",
+    }) do
       seen[n] = uv.fs_lstat(project .. "/" .. n) ~= nil
     end
     local idea, husky = read(project .. "/.idea/workspace.xml"), read(project .. "/.husky/pre-commit")
@@ -306,9 +370,17 @@ describe("files that act outside the sandbox, in subdirectories of the project",
       extra[PROJECT .. "/" .. d] = "directory"
     end
     local names = {
-      ".cargo", ".claude", ".vscode", ".zed", ".idea", ".helix", ".husky", ".devcontainer",
+      ".cargo",
+      ".claude",
+      ".vscode",
+      ".zed",
+      ".idea",
+      ".helix",
+      ".husky",
+      ".devcontainer",
     }
-    local fnames = { ".envrc", ".mise.toml", ".nvim.lua", ".exrc", ".mcp.json", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit" }
+    local fnames =
+      { ".envrc", ".mise.toml", ".nvim.lua", ".exrc", ".mcp.json", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit" }
     for _, d in ipairs({ "sub", "crates/a" }) do
       for _, n in ipairs(names) do
         extra[PROJECT .. "/" .. d .. "/" .. n] = "directory"
@@ -333,7 +405,12 @@ describe("files that act outside the sandbox, in subdirectories of the project",
     H.has(p.watch.names, ".cargo")
     H.match(table.concat(p.notes, "\n"), "CREATES in a subdirectory", true)
     H.match(table.concat(ui.lines(p, { home = FHOME }), "\n"), "CREATES in a subdirectory", true)
-    H.no_match(table.concat(build().notes, "\n"), "CREATES in a subdirectory", true, "a project without subdirectories has nothing to say")
+    H.no_match(
+      table.concat(build().notes, "\n"),
+      "CREATES in a subdirectory",
+      true,
+      "a project without subdirectories has nothing to say"
+    )
   end)
 
   it("the number of compared directories is bounded", function()
@@ -344,56 +421,64 @@ describe("files that act outside the sandbox, in subdirectories of the project",
     H.eq(plan.WATCH_DIRS_MAX, #build(extra).watch.dirs)
   end)
 
-  it("a file the agent plants beyond the masked directories is quarantined when the run ends; what was there before is not", function()
-    H.need_sandbox()
-    sb.config.home, sb.config.network = "allowlist", "open"
-    local home = uv.os_homedir()
-    local project = home .. "/planted-r5"
-    write(project .. "/Cargo.toml", "[package]\n")
-    write(project .. "/old/.envrc", "# mine\n")
-    -- enough shallow directories to use the whole mask budget, so "deep" is NOT prevented
-    for i = 1, 60 do
-      vim.fn.mkdir(project .. ("/a%02d"):format(i), "p")
+  it(
+    "a file the agent plants beyond the masked directories is quarantined when the run ends; what was there before is not",
+    function()
+      H.need_sandbox()
+      sb.config.home, sb.config.network = "allowlist", "open"
+      local home = uv.os_homedir()
+      local project = home .. "/planted-r5"
+      write(project .. "/Cargo.toml", "[package]\n")
+      write(project .. "/old/.envrc", "# mine\n")
+      -- enough shallow directories to use the whole mask budget, so "deep" is NOT prevented
+      for i = 1, 60 do
+        vim.fn.mkdir(project .. ("/a%02d"):format(i), "p")
+      end
+      vim.fn.mkdir(project .. "/zz/er/est", "p")
+      local script = table.concat({
+        "mkdir -p zz/er/est/.cargo && echo '[build]' > zz/er/est/.cargo/config.toml",
+        "mkdir -p zz/er/est/.claude && echo '{}' > zz/er/est/.claude/settings.json",
+        "echo x > zz/er/est/.mcp.json",
+        "mkdir -p zz/er/est/.vscode && echo '{}' > zz/er/est/.vscode/tasks.json",
+        "echo x > zz/er/est/.envrc",
+        "echo x > zz/er/est/rust-toolchain.toml",
+        "echo PWNED >> old/.envrc",
+        "echo done",
+      }, "; ")
+      local cmd, err, h = sb.wrap({ "sh", "-c", script }, project, H.tmpdir())
+      H.ok(cmd, err)
+      local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
+      local msgs = H.capture_notify(function()
+        h.release()
+      end)
+      H.match(r.stdout, "done", true, (r.stdout or "") .. (r.stderr or ""))
+      local planted = vim.deepcopy(h.planted)
+      local old = read(project .. "/old/.envrc")
+      local still = {}
+      for _, n in ipairs({ ".cargo", ".claude", ".mcp.json", ".vscode", ".envrc", "rust-toolchain.toml" }) do
+        still[n] = uv.fs_lstat(project .. "/zz/er/est/" .. n) ~= nil
+      end
+      local dirty = sb.dirty(project)
+      local q = h.quarantine and read(h.quarantine .. "/zz/er/est/.cargo/config.toml")
+      vim.fn.delete(project, "rf")
+      H.eq("# mine\n", old, "an existing .envrc of a subdirectory is read-only")
+      local set = {}
+      for _, x in ipairs(planted) do
+        set[x:sub(#project + 2)] = true
+      end
+      for _, n in ipairs({ ".cargo", ".claude", ".mcp.json", ".vscode", ".envrc", "rust-toolchain.toml" }) do
+        H.ok(set["zz/er/est/" .. n], n .. " is reported: " .. vim.inspect(planted))
+        H.not_ok(still[n], n .. " is removed from the project")
+      end
+      H.eq("[build]\n", q, "a copy is kept in the quarantine")
+      H.ok(dirty, "the project is marked for review")
+      sb.clear_dirty(project)
+      H.eq(1, #vim.tbl_filter(function(m)
+        return m[2] == vim.log.levels.ERROR
+      end, msgs), "one loud error")
+      H.match(msgs[1][1], "created 6 files that act outside the sandbox", true)
     end
-    vim.fn.mkdir(project .. "/zz/er/est", "p")
-    local script = table.concat({
-      "mkdir -p zz/er/est/.cargo && echo '[build]' > zz/er/est/.cargo/config.toml", "mkdir -p zz/er/est/.claude && echo '{}' > zz/er/est/.claude/settings.json",
-      "echo x > zz/er/est/.mcp.json", "mkdir -p zz/er/est/.vscode && echo '{}' > zz/er/est/.vscode/tasks.json", "echo x > zz/er/est/.envrc",
-      "echo x > zz/er/est/rust-toolchain.toml", "echo PWNED >> old/.envrc", "echo done",
-    }, "; ")
-    local cmd, err, h = sb.wrap({ "sh", "-c", script }, project, H.tmpdir())
-    H.ok(cmd, err)
-    local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
-    local msgs = H.capture_notify(function()
-      h.release()
-    end)
-    H.match(r.stdout, "done", true, (r.stdout or "") .. (r.stderr or ""))
-    local planted = vim.deepcopy(h.planted)
-    local old = read(project .. "/old/.envrc")
-    local still = {}
-    for _, n in ipairs({ ".cargo", ".claude", ".mcp.json", ".vscode", ".envrc", "rust-toolchain.toml" }) do
-      still[n] = uv.fs_lstat(project .. "/zz/er/est/" .. n) ~= nil
-    end
-    local dirty = sb.dirty(project)
-    local q = h.quarantine and read(h.quarantine .. "/zz/er/est/.cargo/config.toml")
-    vim.fn.delete(project, "rf")
-    H.eq("# mine\n", old, "an existing .envrc of a subdirectory is read-only")
-    local set = {}
-    for _, x in ipairs(planted) do
-      set[x:sub(#project + 2)] = true
-    end
-    for _, n in ipairs({ ".cargo", ".claude", ".mcp.json", ".vscode", ".envrc", "rust-toolchain.toml" }) do
-      H.ok(set["zz/er/est/" .. n], n .. " is reported: " .. vim.inspect(planted))
-      H.not_ok(still[n], n .. " is removed from the project")
-    end
-    H.eq("[build]\n", q, "a copy is kept in the quarantine")
-    H.ok(dirty, "the project is marked for review")
-    sb.clear_dirty(project)
-    H.eq(1, #vim.tbl_filter(function(m)
-      return m[2] == vim.log.levels.ERROR
-    end, msgs), "one loud error")
-    H.match(msgs[1][1], "created 6 files that act outside the sandbox", true)
-  end)
+  )
 
   it("a run that plants nothing reports nothing", function()
     H.need_sandbox()
@@ -419,9 +504,17 @@ end)
 describe("the content scan on lines that are very long", function()
   local N = 256 * 1024
   local shapes = {
-    letters = ("a"):rep(N), hex = ("deadbeef"):rep(N / 8), base64 = ("QUJD"):rep(N / 4), dashes = ("-"):rep(N),
-    begins = ("-----BEGIN "):rep(math.floor(N / 11)), sk = ("sk-a"):rep(N / 4), urls = ("a://"):rep(N / 4),
-    userinfo = ("a://:"):rep(N / 5), akia = ("AKIA"):rep(N / 4), ghp = ("ghp_a"):rep(N / 5), minified = ("function(a,b){return a+b}"):rep(N / 25),
+    letters = ("a"):rep(N),
+    hex = ("deadbeef"):rep(N / 8),
+    base64 = ("QUJD"):rep(N / 4),
+    dashes = ("-"):rep(N),
+    begins = ("-----BEGIN "):rep(math.floor(N / 11)),
+    sk = ("sk-a"):rep(N / 4),
+    urls = ("a://"):rep(N / 4),
+    userinfo = ("a://:"):rep(N / 5),
+    akia = ("AKIA"):rep(N / 4),
+    ghp = ("ghp_a"):rep(N / 5),
+    minified = ("function(a,b){return a+b}"):rep(N / 25),
     spaces = ("A "):rep(N / 2),
   }
   for name, text in pairs(shapes) do
@@ -470,7 +563,15 @@ describe("the content scan on lines that are very long", function()
 
   it("the URL pattern still finds credentials in a URL, in every position of a line", function()
     local url = "postgres://admin:Tr0ub4dor9xz@db.internal"
-    for _, fmt in ipairs({ "%s", "DATABASE_URL=%s", 'u = "%s"', "x" .. ("a"):rep(50) .. " %s", "1abc+def.ghi-jkl://x/ %s", "see (%s) now", "%s %s" }) do
+    for _, fmt in ipairs({
+      "%s",
+      "DATABASE_URL=%s",
+      'u = "%s"',
+      "x" .. ("a"):rep(50) .. " %s",
+      "1abc+def.ghi-jkl://x/ %s",
+      "see (%s) now",
+      "%s %s",
+    }) do
       H.has(scan.text(fmt:format(url, url)), "credentials in a URL", fmt)
     end
     H.eq({}, scan.text("https://example.com/path?x=1"))
@@ -488,8 +589,12 @@ describe("token formats and boundaries (round 5)", function()
 
   it("a private key header in any case, with tabs or several spaces, is found", function()
     for _, h in ipairs({
-      "-----begin rsa private key-----", "-----Begin Private Key-----", "-----BEGIN\tRSA\tPRIVATE\tKEY-----",
-      "-----BEGIN  RSA   PRIVATE KEY-----", "-----BEGIN OPENSSH PRIVATE KEY-----", "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+      "-----begin rsa private key-----",
+      "-----Begin Private Key-----",
+      "-----BEGIN\tRSA\tPRIVATE\tKEY-----",
+      "-----BEGIN  RSA   PRIVATE KEY-----",
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "-----BEGIN PGP PRIVATE KEY BLOCK-----",
     }) do
       H.has(kinds("x=" .. h .. "MIIE"), "private key", h)
       H.has(kinds(h), "private key", h)
@@ -536,8 +641,19 @@ describe("token formats and boundaries (round 5)", function()
   it("wrappers: quotes, =, :, JSON, YAML, base64 wrappers and CRLF all keep a key header findable", function()
     local hdr = "-----BEGIN RSA PRIVATE KEY-----"
     for _, fmt in ipairs({
-      "key=%sMIIE", 'key="%s"', "key:%s", '{"k":"%s\\nMIIE"}', "k: |\n  %s\n  MIIE", "%s\r\nMIIE\r\n", "'%s'", "<k>%s</k>",
-      "[%s]", "(%s)", "a,%s,b", "export K=%s", "# %s",
+      "key=%sMIIE",
+      'key="%s"',
+      "key:%s",
+      '{"k":"%s\\nMIIE"}',
+      "k: |\n  %s\n  MIIE",
+      "%s\r\nMIIE\r\n",
+      "'%s'",
+      "<k>%s</k>",
+      "[%s]",
+      "(%s)",
+      "a,%s,b",
+      "export K=%s",
+      "# %s",
     }) do
       H.has(kinds(fmt:format(hdr)), "private key", fmt)
     end
@@ -595,23 +711,33 @@ describe("approvals and options (survivors)", function()
     local ok, why = plan.validate_exception({ kind = "env", value = "ENV" }, { home = FHOME })
     H.not_ok(ok)
     H.match(why, "decides which code runs", true)
-    H.match(select(2, plan.validate_exception({ kind = "env", value = "BASH_ENV" }, { home = FHOME })), "decides which code runs", true)
+    H.match(
+      select(2, plan.validate_exception({ kind = "env", value = "BASH_ENV" }, { home = FHOME })),
+      "decides which code runs",
+      true
+    )
   end)
 
-  it("policy.readonly may name $HOME or a parent (a lock cannot expose anything); writable and hidden may not", function()
-    local base = { network = "open" }
-    local function errs(policy)
-      return sb.validate_opts(vim.tbl_extend("force", base, { policy = policy }))
+  it(
+    "policy.readonly may name $HOME or a parent (a lock cannot expose anything); writable and hidden may not",
+    function()
+      local base = { network = "open" }
+      local function errs(policy)
+        return sb.validate_opts(vim.tbl_extend("force", base, { policy = policy }))
+      end
+      H.eq({}, errs({ readonly = { "~" } }))
+      local e = errs({ writable = { "~" } })
+      H.ok(#e > 0, "writable ~ refused")
+      e = errs({ hidden = { "~" } })
+      H.ok(#e > 0, "hidden ~ refused")
     end
-    H.eq({}, errs({ readonly = { "~" } }))
-    local e = errs({ writable = { "~" } })
-    H.ok(#e > 0, "writable ~ refused")
-    e = errs({ hidden = { "~" } })
-    H.ok(#e > 0, "hidden ~ refused")
-  end)
+  )
 
   it("a duplicate policy.guard_files entry gives ONE guard file", function()
-    local p = build(nil, { config = { network = "open", policy = { guard_files = { "extra.rc", "extra.rc", "./extra.rc", ".envrc" } } } })
+    local p = build(
+      nil,
+      { config = { network = "open", policy = { guard_files = { "extra.rc", "extra.rc", "./extra.rc", ".envrc" } } } }
+    )
     local n = 0
     for _, g in ipairs(p.guard_files) do
       if g.path == PROJECT .. "/extra.rc" then
@@ -629,43 +755,84 @@ describe("approvals and options (survivors)", function()
   end)
 
   it("a bare agent command that is a symlink out of its $PATH directory shows the real file too (own home)", function()
-    local extra = { [FHOME .. "/bin"] = "directory", [FHOME .. "/bin/agent"] = "file", [FHOME .. "/tools"] = "directory",
-      [FHOME .. "/tools/agent-real"] = "file" }
-    local over = { env = { PATH = FHOME .. "/bin:/usr/bin" }, cmd = { "agent" }, config = { network = "open", home = "allowlist" } }
+    local extra = {
+      [FHOME .. "/bin"] = "directory",
+      [FHOME .. "/bin/agent"] = "file",
+      [FHOME .. "/tools"] = "directory",
+      [FHOME .. "/tools/agent-real"] = "file",
+    }
+    local over = {
+      env = { PATH = FHOME .. "/bin:/usr/bin" },
+      cmd = { "agent" },
+      config = { network = "open", home = "allowlist" },
+    }
     local p = build(extra, over, nil, nil, { [FHOME .. "/bin/agent"] = FHOME .. "/tools/agent-real" })
-    local paths = vim.tbl_map(function(a) return a.path end, p.home_allow)
+    local paths = vim.tbl_map(function(a)
+      return a.path
+    end, p.home_allow)
     H.has(paths, FHOME .. "/tools/agent-real")
     -- a command with a slash is NOT looked up in $PATH: "rel/agent" finds nothing there
-    local q = build(extra, vim.tbl_extend("force", over, { cmd = { "bin/agent" } }), nil, nil, { [FHOME .. "/bin/agent"] = FHOME .. "/tools/agent-real" })
-    local qp = vim.tbl_map(function(a) return a.path end, q.home_allow)
+    local q = build(
+      extra,
+      vim.tbl_extend("force", over, { cmd = { "bin/agent" } }),
+      nil,
+      nil,
+      { [FHOME .. "/bin/agent"] = FHOME .. "/tools/agent-real" }
+    )
+    local qp = vim.tbl_map(function(a)
+      return a.path
+    end, q.home_allow)
     H.not_ok(vim.tbl_contains(qp, FHOME .. "/tools/agent-real"), "a relative path is not resolved through PATH")
   end)
 
   it("the same for a bare agent command in a $PATH directory of ANOTHER user's home", function()
     local extra = {
-      ["/home"] = "directory", ["/home/alice"] = "directory", ["/home/alice/.local"] = "directory",
-      ["/home/alice/.local/bin"] = "directory", ["/home/alice/.local/bin/agent"] = "file",
-      ["/home/alice/.local/share"] = "directory", ["/home/alice/.local/share/agent"] = "directory",
+      ["/home"] = "directory",
+      ["/home/alice"] = "directory",
+      ["/home/alice/.local"] = "directory",
+      ["/home/alice/.local/bin"] = "directory",
+      ["/home/alice/.local/bin/agent"] = "file",
+      ["/home/alice/.local/share"] = "directory",
+      ["/home/alice/.local/share/agent"] = "directory",
       ["/home/alice/.local/share/agent/agent-real"] = "file",
     }
-    local p = build(extra, { env = { PATH = "/home/alice/.local/bin:/usr/bin" }, cmd = { "agent" } }, nil, nil,
-      { ["/home/alice/.local/bin/agent"] = "/home/alice/.local/share/agent/agent-real" })
-    local shown = vim.tbl_map(function(a) return a.path end, p.homes.allow)
+    local p = build(
+      extra,
+      { env = { PATH = "/home/alice/.local/bin:/usr/bin" }, cmd = { "agent" } },
+      nil,
+      nil,
+      { ["/home/alice/.local/bin/agent"] = "/home/alice/.local/share/agent/agent-real" }
+    )
+    local shown = vim.tbl_map(function(a)
+      return a.path
+    end, p.homes.allow)
     H.has(shown, "/home/alice/.local/share/agent/agent-real")
-    local q = build(extra, { env = { PATH = "/home/alice/.local/bin:/usr/bin" }, cmd = { ".local/bin/agent" } }, nil, nil,
-      { ["/home/alice/.local/bin/agent"] = "/home/alice/.local/share/agent/agent-real" })
-    local qs = vim.tbl_map(function(a) return a.path end, q.homes.allow)
+    local q = build(
+      extra,
+      { env = { PATH = "/home/alice/.local/bin:/usr/bin" }, cmd = { ".local/bin/agent" } },
+      nil,
+      nil,
+      { ["/home/alice/.local/bin/agent"] = "/home/alice/.local/share/agent/agent-real" }
+    )
+    local qs = vim.tbl_map(function(a)
+      return a.path
+    end, q.homes.allow)
     H.not_ok(vim.tbl_contains(qs, "/home/alice/.local/share/agent/agent-real"))
   end)
 
   it("a tree that is not too large gets no 'tree is large' note", function()
-    local extra = { [FHOME .. "/tools"] = "directory", [FHOME .. "/tools/bin"] = "directory", [FHOME .. "/tools/bin/x"] = "file" }
-    local p = build(extra, { env = { PATH = FHOME .. "/tools/bin:/usr/bin" }, config = { network = "open", home = "allowlist" } })
+    local extra =
+      { [FHOME .. "/tools"] = "directory", [FHOME .. "/tools/bin"] = "directory", [FHOME .. "/tools/bin/x"] = "file" }
+    local p = build(
+      extra,
+      { env = { PATH = FHOME .. "/tools/bin:/usr/bin" }, config = { network = "open", home = "allowlist" } }
+    )
     H.no_match(table.concat(p.notes, "\n"), "is large", true)
   end)
 
   it("a hard link of a credential is recorded with its alias, count and mask", function()
-    local extra = { [FHOME .. "/.aws"] = "directory", [FHOME .. "/.aws/credentials"] = "file", [PROJECT .. "/c"] = "file" }
+    local extra =
+      { [FHOME .. "/.aws"] = "directory", [FHOME .. "/.aws/credentials"] = "file", [PROJECT .. "/c"] = "file" }
     local info = { [FHOME .. "/.aws/credentials"] = { nlink = 2, dev = 3, ino = 8 } }
     local scanned = { hits = {}, files = 1, multi = { { path = PROJECT .. "/c", dev = 3, ino = 8, nlink = 2 } } }
     local p = build(extra, nil, info, scanned)
@@ -685,9 +852,14 @@ end)
 describe("secret files that only their path gives away", function()
   it("a base name that is a secret only below a certain directory is hidden there and nowhere else", function()
     local extra = {
-      [PROJECT .. "/sub"] = "directory", [PROJECT .. "/sub/.docker"] = "directory", [PROJECT .. "/sub/.docker/config.json"] = "file",
-      [PROJECT .. "/sub/.m2"] = "directory", [PROJECT .. "/sub/.m2/Settings.XML"] = "file",
-      [PROJECT .. "/sub/other"] = "directory", [PROJECT .. "/sub/other/config.json"] = "file", [PROJECT .. "/config.json"] = "file",
+      [PROJECT .. "/sub"] = "directory",
+      [PROJECT .. "/sub/.docker"] = "directory",
+      [PROJECT .. "/sub/.docker/config.json"] = "file",
+      [PROJECT .. "/sub/.m2"] = "directory",
+      [PROJECT .. "/sub/.m2/Settings.XML"] = "file",
+      [PROJECT .. "/sub/other"] = "directory",
+      [PROJECT .. "/sub/other/config.json"] = "file",
+      [PROJECT .. "/config.json"] = "file",
     }
     local h = hidden_map(build(extra))
     H.ok(h[PROJECT .. "/sub/.docker/config.json"], ".docker/config.json")
@@ -698,10 +870,16 @@ describe("secret files that only their path gives away", function()
 
   it("the same inside a toolchain tree shown from $HOME", function()
     local extra = {
-      [FHOME .. "/tools"] = "directory", [FHOME .. "/tools/bin"] = "directory", [FHOME .. "/tools/.docker"] = "directory",
-      [FHOME .. "/tools/.docker/config.json"] = "file", [FHOME .. "/tools/config.json"] = "file",
+      [FHOME .. "/tools"] = "directory",
+      [FHOME .. "/tools/bin"] = "directory",
+      [FHOME .. "/tools/.docker"] = "directory",
+      [FHOME .. "/tools/.docker/config.json"] = "file",
+      [FHOME .. "/tools/config.json"] = "file",
     }
-    local p = build(extra, { env = { PATH = FHOME .. "/tools/bin:/usr/bin" }, config = { network = "open", home = "allowlist" } })
+    local p = build(
+      extra,
+      { env = { PATH = FHOME .. "/tools/bin:/usr/bin" }, config = { network = "open", home = "allowlist" } }
+    )
     local h = hidden_map(p)
     H.ok(h[FHOME .. "/tools/.docker/config.json"], "hidden in the shown tree")
     H.eq(nil, h[FHOME .. "/tools/config.json"])
@@ -770,10 +948,24 @@ describe("the runner removes what an earlier, killed run left", function()
     write(plain_file, "x")
     local n = reaper.reap_stale({ base, base .. "/does-not-exist" })
     H.eq(6, n, "dead_root, dead_tmp, reused, garbage, old, probe_old")
-    for name, d in pairs({ dead_root = dead_root, dead_tmp = dead_tmp, reused = reused, garbage = garbage, old = old, probe_old = probe_old }) do
+    for name, d in pairs({
+      dead_root = dead_root,
+      dead_tmp = dead_tmp,
+      reused = reused,
+      garbage = garbage,
+      old = old,
+      probe_old = probe_old,
+    }) do
       H.not_ok(exists(d), name .. " is removed")
     end
-    for name, d in pairs({ live_root = live_root, live_tmp = live_tmp, stranger = stranger, young = young, probe_new = probe_new, plain_file = plain_file }) do
+    for name, d in pairs({
+      live_root = live_root,
+      live_tmp = live_tmp,
+      stranger = stranger,
+      young = young,
+      probe_new = probe_new,
+      plain_file = plain_file,
+    }) do
       H.ok(exists(d), name .. " stays")
     end
     H.eq(0, reaper.reap_stale({ base }), "a second pass finds nothing")
@@ -811,8 +1003,12 @@ describe("the runner removes what an earlier, killed run left", function()
     local live_root = dir_with(base, "xyno-sandbox-test-LIVE01", reaper.owner_tag())
     local dir = H.tmpdir()
     write(dir .. "/inner_spec.lua", 'it("runs", function() end)')
-    local r = vim.system({ vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/inner_spec.lua" },
-      { text = true, env = { XYNO_TEST_WORKER = "0", XYNO_TEST_BASE = base, XYNO_TEST_REAP_BASES = base } }):wait(180000)
+    local r = vim
+      .system(
+        { vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/inner_spec.lua" },
+        { text = true, env = { XYNO_TEST_WORKER = "0", XYNO_TEST_BASE = base, XYNO_TEST_REAP_BASES = base } }
+      )
+      :wait(180000)
     local out = (r.stdout or "") .. (r.stderr or "")
     H.eq(0, r.code, out)
     H.match(out, "removed 2 private root", true, out)
@@ -824,14 +1020,21 @@ describe("the runner removes what an earlier, killed run left", function()
   it("every root and scratch directory carries the owner file while the run is going", function()
     local base = H.tmpdir()
     local dir = H.tmpdir()
-    write(dir .. "/inner_spec.lua", [[
+    write(
+      dir .. "/inner_spec.lua",
+      [[
       it("owner", function()
         local f = io.open(vim.env.XYNO_TEST_ROOT .. "/.owner", "rb")
         local g = io.open(vim.env.XYNO_TEST_SCRATCH .. "/.owner", "rb")
         assert(f and g and f:read("a"):match("^%d+:%d+$") and g:read("a"):match("^%d+:%d+$"), "owner files")
-      end)]])
-    local r = vim.system({ vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/inner_spec.lua" },
-      { text = true, env = { XYNO_TEST_WORKER = "0", XYNO_TEST_BASE = base, XYNO_TEST_REAP_BASES = base } }):wait(180000)
+      end)]]
+    )
+    local r = vim
+      .system(
+        { vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/inner_spec.lua" },
+        { text = true, env = { XYNO_TEST_WORKER = "0", XYNO_TEST_BASE = base, XYNO_TEST_REAP_BASES = base } }
+      )
+      :wait(180000)
     local out = (r.stdout or "") .. (r.stderr or "")
     H.eq(0, r.code, out)
     H.match(out, "passed=1", true, out)

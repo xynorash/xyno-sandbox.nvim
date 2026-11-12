@@ -32,8 +32,14 @@ M.read_sysctl = read_sysctl -- replaceable in specs
 function M.diagnose(r, sysctl)
   sysctl = sysctl or M.read_sysctl
   local err = vim.trim(r.stderr or "")
-  if M.net and (err:lower():find("loopback", 1, true) or err:lower():find("rtm_newaddr", 1, true)
-    or err:lower():find("network namespace", 1, true)) then
+  if
+    M.net
+    and (
+      err:lower():find("loopback", 1, true)
+      or err:lower():find("rtm_newaddr", 1, true)
+      or err:lower():find("network namespace", 1, true)
+    )
+  then
     return "bwrap cannot create an isolated network namespace (needed to filter egress): " .. err,
       'network egress cannot be enforced here; the agent is not started. network = "open" in setup() runs it with the network open'
   end
@@ -54,8 +60,12 @@ function M.diagnose(r, sysctl)
     return "AppArmor restricts unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns = 1)",
       "give bwrap an AppArmor profile that allows `userns` (the bubblewrap package ships one on recent Ubuntu), or set `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`"
   end
-  if low:find("setting up uid map", 1, true) or low:find("no permissions to create", 1, true)
-    or low:find("operation not permitted", 1, true) or low:find("creating new namespace failed", 1, true) then
+  if
+    low:find("setting up uid map", 1, true)
+    or low:find("no permissions to create", 1, true)
+    or low:find("operation not permitted", 1, true)
+    or low:find("creating new namespace failed", 1, true)
+  then
     return "bwrap cannot create a user namespace: " .. (err ~= "" and err or "permission denied"),
       "check kernel.unprivileged_userns_clone, user.max_user_namespaces, AppArmor/SELinux policy, and whether you run inside a container whose seccomp profile blocks `unshare`/`clone` (Docker: --security-opt seccomp=unconfined or a profile that allows user namespaces)"
   end

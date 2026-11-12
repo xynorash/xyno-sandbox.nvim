@@ -20,9 +20,21 @@ M.MAX_DEPTH = 8
 M.MAX_DIRS = 6000 -- directories entered (a tree of 100k empty directories must not cost 100k scandir calls)
 M.MAX_MS = 400
 M.SKIP_DIRS = {
-  target = true, node_modules = true, [".git"] = true, [".cache"] = true, [".venv"] = true, venv = true,
-  __pycache__ = true, [".mypy_cache"] = true, [".tox"] = true, [".next"] = true, dist = true, build = true,
-  [".gradle"] = true, vendor = true, [".terraform"] = true,
+  target = true,
+  node_modules = true,
+  [".git"] = true,
+  [".cache"] = true,
+  [".venv"] = true,
+  venv = true,
+  __pycache__ = true,
+  [".mypy_cache"] = true,
+  [".tox"] = true,
+  [".next"] = true,
+  dist = true,
+  build = true,
+  [".gradle"] = true,
+  vendor = true,
+  [".terraform"] = true,
 }
 local function boundary(s, i, j, prefixed)
   -- the match s[i..j] is not part of a longer token
@@ -61,48 +73,181 @@ end
 -- { kind, lua pattern, optional exact length of the whole match }
 M.PATTERNS = {
   { "AWS access key id", "A[SK]IA[%u%d]+", 20, nil, nil, "nonupper" },
-  { "AWS secret access key", "[Aa][Ww][Ss]_?[Ss][Ee][Cc][Rr][Ee][Tt]_?[Aa][Cc][Cc][Ee][Ss][Ss]_?[Kk][Ee][Yy][\"']?%s*[=:]%s*[\"']?[%w/+]+", nil,
+  {
+    "AWS secret access key",
+    "[Aa][Ww][Ss]_?[Ss][Ee][Cc][Rr][Ee][Tt]_?[Aa][Cc][Cc][Ee][Ss][Ss]_?[Kk][Ee][Yy][\"']?%s*[=:]%s*[\"']?[%w/+]+",
+    nil,
     function(m)
       local v = m:match("[=:]%s*[\"']?([%w/+]+)$")
       return v and #v == 40
-    end },
-  { "GitHub token", "gh[pousr]_[%w]+", nil, function(m) return #m >= 40 end, nil, true }, -- (longer ones exist: the length is a minimum)
-  { "GitHub fine-grained token", "github_pat_[%w_]+", nil, function(m) return #m >= 60 end, nil, true },
-  { "GitLab token", "glpat%-[%w_%-]+", nil, function(m) return #m >= 26 end, nil, true },
-  { "Slack token", "xox[abprs]%-[%w%-]+", nil, function(m) return #m >= 24 end, nil, true },
-  { "Slack app token", "xapp%-[%w%-]+", nil, function(m) return #m >= 30 end, nil, true },
+    end,
+  },
+  {
+    "GitHub token",
+    "gh[pousr]_[%w]+",
+    nil,
+    function(m)
+      return #m >= 40
+    end,
+    nil,
+    true,
+  }, -- (longer ones exist: the length is a minimum)
+  {
+    "GitHub fine-grained token",
+    "github_pat_[%w_]+",
+    nil,
+    function(m)
+      return #m >= 60
+    end,
+    nil,
+    true,
+  },
+  {
+    "GitLab token",
+    "glpat%-[%w_%-]+",
+    nil,
+    function(m)
+      return #m >= 26
+    end,
+    nil,
+    true,
+  },
+  {
+    "Slack token",
+    "xox[abprs]%-[%w%-]+",
+    nil,
+    function(m)
+      return #m >= 24
+    end,
+    nil,
+    true,
+  },
+  {
+    "Slack app token",
+    "xapp%-[%w%-]+",
+    nil,
+    function(m)
+      return #m >= 30
+    end,
+    nil,
+    true,
+  },
   { "Slack webhook", "hooks%.slack%.com/services/T%w+/B%w+/%w+" },
-  { "Stripe live key", "[sr]k_live_[%w]+", nil, function(m) return #m >= 32 end, nil, true },
-  { "Stripe test key", "[sr]k_test_[%w]+", nil, function(m) return #m >= 32 end, nil, true },
-  { "Anthropic key", "sk%-ant%-[%w_%-]+", nil, function(m) return #m >= 40 end, nil, true },
-  { "OpenAI key", "sk%-proj%-[%w_%-]+", nil, function(m) return #m >= 40 end, nil, true },
+  {
+    "Stripe live key",
+    "[sr]k_live_[%w]+",
+    nil,
+    function(m)
+      return #m >= 32
+    end,
+    nil,
+    true,
+  },
+  {
+    "Stripe test key",
+    "[sr]k_test_[%w]+",
+    nil,
+    function(m)
+      return #m >= 32
+    end,
+    nil,
+    true,
+  },
+  {
+    "Anthropic key",
+    "sk%-ant%-[%w_%-]+",
+    nil,
+    function(m)
+      return #m >= 40
+    end,
+    nil,
+    true,
+  },
+  {
+    "OpenAI key",
+    "sk%-proj%-[%w_%-]+",
+    nil,
+    function(m)
+      return #m >= 40
+    end,
+    nil,
+    true,
+  },
   { "OpenAI key", "sk%-[%w]+T3BlbkFJ[%w]+", nil, nil, nil, true },
   { "OpenAI key", "sk%-[%w]+", 51, nil, nil, true }, -- the legacy format: sk- and 48 characters
   { "Google API key", "AIza[%w_%-]+", 39, nil, nil, true },
-  { "npm token", "npm_[%w]+", nil, function(m) return #m >= 40 end, nil, true },
-  { "Hugging Face token", "hf_[%w]+", nil, function(m) return #m >= 37 end, nil, true },
+  {
+    "npm token",
+    "npm_[%w]+",
+    nil,
+    function(m)
+      return #m >= 40
+    end,
+    nil,
+    true,
+  },
+  {
+    "Hugging Face token",
+    "hf_[%w]+",
+    nil,
+    function(m)
+      return #m >= 37
+    end,
+    nil,
+    true,
+  },
   { "DigitalOcean token", "do[por]_v1_%x+", 71, nil, nil, true },
   { "Shopify token", "shp%l%l_%x+", 38, nil, nil, true },
-  { "SendGrid key", "SG%.[%w_%-]+%.[%w_%-]+", nil, function(m) return #m == 69 end, nil, true },
+  {
+    "SendGrid key",
+    "SG%.[%w_%-]+%.[%w_%-]+",
+    nil,
+    function(m)
+      return #m == 69
+    end,
+    nil,
+    true,
+  },
   -- loose: the dashes are distinctive, and a key is often glued to its neighbours (key=-----BEGIN ...-----MIIE...)
   -- (any case, any white space: matched on the lower-cased line)
   { "private key", "%-%-%-%-%-%s*begin%s+[%a%s]*private%s+key[%a%s]*%-%-%-%-%-", nil, nil, "lower" },
-  { "credentials in a URL", "%a[%w%+%.%-]*://[^/%s:@\"']*:[^/%s@\"']+@[%w%.%-]+", nil, function(m)
-    local pw = m:match("^%a[%w%+%.%-]*://[^:/]*:([^@]+)@")
-    if not pw or #pw < 8 or pw:find("[%$%{%}<>%%]") then
-      return false
-    end
-    local low = pw:lower()
-    for _, ph in ipairs({ "password", "passw0rd", "changeme", "secret", "example", "xxxxxxxx", "********", "redacted" }) do
-      if low:find(ph, 1, true) then
+  {
+    "credentials in a URL",
+    "%a[%w%+%.%-]*://[^/%s:@\"']*:[^/%s@\"']+@[%w%.%-]+",
+    nil,
+    function(m)
+      local pw = m:match("^%a[%w%+%.%-]*://[^:/]*:([^@]+)@")
+      if not pw or #pw < 8 or pw:find("[%$%{%}<>%%]") then
         return false
       end
-    end
-    return true
-  end },
+      local low = pw:lower()
+      for _, ph in ipairs({
+        "password",
+        "passw0rd",
+        "changeme",
+        "secret",
+        "example",
+        "xxxxxxxx",
+        "********",
+        "redacted",
+      }) do
+        if low:find(ph, 1, true) then
+          return false
+        end
+      end
+      return true
+    end,
+  },
 }
-for _, hdr in ipairs({ "-----BEGIN PRIVATE KEY", "-----BEGIN RSA PRIVATE KEY", "-----BEGIN EC PRIVATE KEY", "-----BEGIN DSA PRIVATE KEY",
-  "-----BEGIN OPENSSH PRIVATE KEY", "-----BEGIN ENCRYPTED PRIVATE KEY", "-----BEGIN PGP PRIVATE KEY" }) do
+for _, hdr in ipairs({
+  "-----BEGIN PRIVATE KEY",
+  "-----BEGIN RSA PRIVATE KEY",
+  "-----BEGIN EC PRIVATE KEY",
+  "-----BEGIN DSA PRIVATE KEY",
+  "-----BEGIN OPENSSH PRIVATE KEY",
+  "-----BEGIN ENCRYPTED PRIVATE KEY",
+  "-----BEGIN PGP PRIVATE KEY",
+}) do
   for _, form in ipairs(b64_forms(hdr)) do
     M.PATTERNS[#M.PATTERNS + 1] = { "private key (base64)", form, nil, nil, true }
   end
@@ -184,7 +329,9 @@ function M.text(text, deadline)
             break
           end
           local m = subject:sub(i, j)
-          local ok = (pat[5] or boundary(subject, i, j, pat[6])) and (not pat[3] or #m == pat[3]) and (not pat[4] or pat[4](m))
+          local ok = (pat[5] or boundary(subject, i, j, pat[6]))
+            and (not pat[3] or #m == pat[3])
+            and (not pat[4] or pat[4](m))
           -- the URL pattern judges its own password part (the host may well be example.com)
           if ok and kind ~= "credentials in a URL" and placeholder(m) then
             ok = false

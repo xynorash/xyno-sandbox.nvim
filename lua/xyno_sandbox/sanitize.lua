@@ -7,20 +7,25 @@ local M = {}
 -- Keys (lower case, any section) whose whole value is dropped.
 M.DROP_KEYS = {
   extraheader = true, -- http.extraHeader = Authorization: ...
-  password = true, token = true, askpass = true, sshcommand = false,
+  password = true,
+  token = true,
+  askpass = true,
+  sshcommand = false,
 }
 
 --- Remove the user info of a URL: `https://user:TOKEN@host/x` -> `https://host/x`; for other schemes
 --- only the password part (`ssh://git:pw@host` -> `ssh://git@host`).
 local function strip_userinfo(s)
-  return (s:gsub("(%a[%w+.-]*://)([^/%s@\"]+)@", function(scheme, info)
-    local sch = scheme:lower()
-    if sch:match("^https?://$") or sch:match("^ftps?://$") or sch:match("^git://$") then
-      return scheme
-    end
-    local user = info:match("^([^:]*):")
-    return scheme .. (user or info) .. "@"
-  end))
+  return (
+    s:gsub('(%a[%w+.-]*://)([^/%s@"]+)@', function(scheme, info)
+      local sch = scheme:lower()
+      if sch:match("^https?://$") or sch:match("^ftps?://$") or sch:match("^git://$") then
+        return scheme
+      end
+      local user = info:match("^([^:]*):")
+      return scheme .. (user or info) .. "@"
+    end)
+  )
 end
 M.strip_userinfo = strip_userinfo
 
@@ -65,14 +70,27 @@ end
 -- Top-level keys of ~/.claude.json that never reach the sandbox: keys of the account, the other
 -- projects' repository paths, an anonymous id, and the old global prompt history.
 M.CLAUDE_JSON_DROP = {
-  "githubRepoPaths", "primaryApiKey", "customApiKeyResponses", "userID", "anonymousId", "history", "apiKey",
+  "githubRepoPaths",
+  "primaryApiKey",
+  "customApiKeyResponses",
+  "userID",
+  "anonymousId",
+  "history",
+  "apiKey",
   -- the agent does not need these to work and each is either an identifier of the account, a command that
   -- runs with the account's cloud credentials, or a cache keyed to the account
-  "env", "hooks", "awsAuthRefresh", "awsCredentialExport", "apiKeyHelper", "cachedGrowthBookFeatures",
-  "cachedStatsigGates", "cachedDynamicConfigs",
+  "env",
+  "hooks",
+  "awsAuthRefresh",
+  "awsCredentialExport",
+  "apiKeyHelper",
+  "cachedGrowthBookFeatures",
+  "cachedStatsigGates",
+  "cachedDynamicConfigs",
 }
 -- Keys (at any depth) whose value is removed when the key NAME says it is a credential.
-M.CLAUDE_JSON_SECRET_KEYS = { "token", "secret", "password", "passwd", "apikey", "api_key", "authorization", "credential", "bearer", "cookie" }
+M.CLAUDE_JSON_SECRET_KEYS =
+  { "token", "secret", "password", "passwd", "apikey", "api_key", "authorization", "credential", "bearer", "cookie" }
 -- MCP server fields that carry credentials or run programs with them.
 M.MCP_DROP = { "env", "headers", "headersHelper", "oauth", "apiKeyHelper" }
 

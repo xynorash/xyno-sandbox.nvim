@@ -5,10 +5,20 @@ local plan = require("xyno_sandbox.plan")
 
 local HOME = "/home/spec-user"
 local function probes()
-  return { exists = function() return true end, realpath = function(x) return x end }
+  return {
+    exists = function()
+      return true
+    end,
+    realpath = function(x)
+      return x
+    end,
+  }
 end
 local function check(path, extra)
-  return plan.validate_exception({ kind = "writable", value = path }, vim.tbl_extend("force", { home = HOME, probes = probes() }, extra or {}))
+  return plan.validate_exception(
+    { kind = "writable", value = path },
+    vim.tbl_extend("force", { home = HOME, probes = probes() }, extra or {})
+  )
 end
 local function refused(path, pat, extra)
   local ok, why = check(path, extra)
@@ -25,7 +35,16 @@ describe("shared system directories", function()
   end)
 
   it("/run and everything below it, /dev, /proc, /etc and / are refused", function()
-    for _, d in ipairs({ "/run", "/run/user", "/run/user/1000", "/run/media", "/run/docker.sock", "/dev", "/proc", "/etc/ssh" }) do
+    for _, d in ipairs({
+      "/run",
+      "/run/user",
+      "/run/user/1000",
+      "/run/media",
+      "/run/docker.sock",
+      "/dev",
+      "/proc",
+      "/etc/ssh",
+    }) do
       refused(d, "system path")
     end
     refused("/", "refusing to expose / as a whole")
@@ -41,15 +60,31 @@ describe("shared system directories", function()
   end)
 
   it("a project directory BELOW a shared directory is fine", function()
-    for _, d in ipairs({ "/tmp/project", "/mnt/data/project", "/var/lib/myapp/work", "/srv/site", "/opt/work", HOME .. "/projects/p" }) do
+    for _, d in ipairs({
+      "/tmp/project",
+      "/mnt/data/project",
+      "/var/lib/myapp/work",
+      "/srv/site",
+      "/opt/work",
+      HOME .. "/projects/p",
+    }) do
       local ok, why = check(d)
       H.ok(ok, d .. ": " .. tostring(why))
     end
   end)
 
   it("a symlink that leads to one is refused, naming the target", function()
-    local ok, why = plan.validate_exception({ kind = "writable", value = "/home/spec-user/innocent" },
-      { home = HOME, probes = { exists = function() return true end, realpath = function() return "/var/tmp" end } })
+    local ok, why = plan.validate_exception({ kind = "writable", value = "/home/spec-user/innocent" }, {
+      home = HOME,
+      probes = {
+        exists = function()
+          return true
+        end,
+        realpath = function()
+          return "/var/tmp"
+        end,
+      },
+    })
     H.not_ok(ok)
     H.match(why, "resolves to /var/tmp", true)
   end)
@@ -66,23 +101,68 @@ describe("a parent of a directory the sandbox masks", function()
   end)
 
   it("includes the masked paths of the plan that was built (baseline.masked)", function()
-    refused("/srv/a", "which the sandbox hides", { baseline = { masked = { { path = "/srv/a/secret-socket-dir" } }, hidden = {}, readonly = {}, masks = {}, guard_files = {}, ephemeral = {} } })
-    local ok = check("/srv/b", { baseline = { masked = { { path = "/srv/a/secret-socket-dir" } }, hidden = {}, readonly = {}, masks = {}, guard_files = {}, ephemeral = {} } })
+    refused("/srv/a", "which the sandbox hides", {
+      baseline = {
+        masked = { { path = "/srv/a/secret-socket-dir" } },
+        hidden = {},
+        readonly = {},
+        masks = {},
+        guard_files = {},
+        ephemeral = {},
+      },
+    })
+    local ok = check("/srv/b", {
+      baseline = {
+        masked = { { path = "/srv/a/secret-socket-dir" } },
+        hidden = {},
+        readonly = {},
+        masks = {},
+        guard_files = {},
+        ephemeral = {},
+      },
+    })
     H.ok(ok, "an unrelated sibling is fine")
   end)
 
   it("the sandbox's own policy.writable is ignored with a note when it is one", function()
     local p = plan.build({
-      project = "/mnt/proj", tmp_dir = "/mnt/scratch", home = HOME, env = {}, cmd = { "agent" },
-      config = { network = "open", policy = { writable = { "/var", "/tmp", "/mnt/ok" } } }, aux = { empty = "/e" },
-      probes = { stat_type = function() return "directory" end, lstat_type = function() return "directory" end,
-        exists = function() return true end, list = function() return {} end, glob = function() return {} end,
-        read_line = function() return nil end, realpath = function(x) return x end },
+      project = "/mnt/proj",
+      tmp_dir = "/mnt/scratch",
+      home = HOME,
+      env = {},
+      cmd = { "agent" },
+      config = { network = "open", policy = { writable = { "/var", "/tmp", "/mnt/ok" } } },
+      aux = { empty = "/e" },
+      probes = {
+        stat_type = function()
+          return "directory"
+        end,
+        lstat_type = function()
+          return "directory"
+        end,
+        exists = function()
+          return true
+        end,
+        list = function()
+          return {}
+        end,
+        glob = function()
+          return {}
+        end,
+        read_line = function()
+          return nil
+        end,
+        realpath = function(x)
+          return x
+        end,
+      },
     })
     local text = table.concat(p.notes, "\n")
     H.match(text, "policy.writable /var is ignored", true)
     H.match(text, "policy.writable /tmp is ignored", true)
-    local paths = vim.tbl_map(function(w) return w.path end, p.writable)
+    local paths = vim.tbl_map(function(w)
+      return w.path
+    end, p.writable)
     H.not_ok(vim.tbl_contains(paths, "/var") or vim.tbl_contains(paths, "/tmp"))
     H.has(paths, "/mnt/ok")
   end)
@@ -92,9 +172,18 @@ describe("a writable approval below a place that runs outside the sandbox later"
   -- kills the mutant that dropped the "inside(p, f)" half of the check: the CHILD of a forbidden path
   it("is refused for the children, and for the parents, of every forbidden $HOME path", function()
     local children = {
-      "/.ssh/known_hosts", "/.ssh/config", "/.config/nvim/init.lua", "/.config/autostart/x.desktop", "/.local/bin/tool",
-      "/.cargo/bin/rg", "/.cargo/config.toml/x", "/.config/systemd/user/a.service", "/.config/git/config", "/.vscode/tasks.json",
-      "/.config/environment.d/x.conf", "/.gnupg/gpg.conf",
+      "/.ssh/known_hosts",
+      "/.ssh/config",
+      "/.config/nvim/init.lua",
+      "/.config/autostart/x.desktop",
+      "/.local/bin/tool",
+      "/.cargo/bin/rg",
+      "/.cargo/config.toml/x",
+      "/.config/systemd/user/a.service",
+      "/.config/git/config",
+      "/.vscode/tasks.json",
+      "/.config/environment.d/x.conf",
+      "/.gnupg/gpg.conf",
     }
     for _, rel in ipairs(children) do
       refused(HOME .. rel, "outside the sandbox later")

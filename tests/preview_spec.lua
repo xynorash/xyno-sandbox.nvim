@@ -19,9 +19,24 @@ after_each(function()
 end)
 
 local TAKES = {
-  ["--bind"] = 2, ["--ro-bind"] = 2, ["--dev-bind"] = 2, ["--bind-try"] = 2, ["--ro-bind-try"] = 2, ["--symlink"] = 2,
-  ["--setenv"] = 2, ["--unsetenv"] = 1, ["--tmpfs"] = 1, ["--dev"] = 1, ["--proc"] = 1, ["--remount-ro"] = 1,
-  ["--mqueue"] = 1, ["--dir"] = 1, ["--chdir"] = 1, ["--cap-drop"] = 1, ["--cap-add"] = 1, ["--file"] = 2,
+  ["--bind"] = 2,
+  ["--ro-bind"] = 2,
+  ["--dev-bind"] = 2,
+  ["--bind-try"] = 2,
+  ["--ro-bind-try"] = 2,
+  ["--symlink"] = 2,
+  ["--setenv"] = 2,
+  ["--unsetenv"] = 1,
+  ["--tmpfs"] = 1,
+  ["--dev"] = 1,
+  ["--proc"] = 1,
+  ["--remount-ro"] = 1,
+  ["--mqueue"] = 1,
+  ["--dir"] = 1,
+  ["--chdir"] = 1,
+  ["--cap-drop"] = 1,
+  ["--cap-add"] = 1,
+  ["--file"] = 2,
 }
 
 --- The effects of a command line, parsed from the tokens only: { {flag, args...}, ... } between
@@ -119,15 +134,31 @@ local HOME, PROJECT, TMP = "/h", "/h/proj", "/h/scratch"
 
 local function fake(extra)
   local entries = vim.tbl_extend("force", {
-    [HOME] = "directory", [HOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory",
-    [PROJECT .. "/.git"] = "directory", [HOME .. "/.ssh"] = "directory", [HOME .. "/.cargo"] = "directory",
-    [PROJECT .. "/.env"] = "file", [PROJECT .. "/Cargo.toml"] = "file", [HOME .. "/.bash_history"] = "file",
-    ["/run"] = "directory", ["/var/tmp"] = "directory", [PROJECT .. "/sub"] = "directory", [PROJECT .. "/sub/Cargo.toml"] = "file",
+    [HOME] = "directory",
+    [HOME .. "/.claude"] = "directory",
+    [PROJECT] = "directory",
+    [TMP] = "directory",
+    [PROJECT .. "/.git"] = "directory",
+    [HOME .. "/.ssh"] = "directory",
+    [HOME .. "/.cargo"] = "directory",
+    [PROJECT .. "/.env"] = "file",
+    [PROJECT .. "/Cargo.toml"] = "file",
+    [HOME .. "/.bash_history"] = "file",
+    ["/run"] = "directory",
+    ["/var/tmp"] = "directory",
+    [PROJECT .. "/sub"] = "directory",
+    [PROJECT .. "/sub/Cargo.toml"] = "file",
   }, extra or {})
   return {
-    stat_type = function(p) return entries[p] end,
-    lstat_type = function(p) return entries[p] end,
-    exists = function(p) return entries[p] ~= nil end,
+    stat_type = function(p)
+      return entries[p]
+    end,
+    lstat_type = function(p)
+      return entries[p]
+    end,
+    exists = function(p)
+      return entries[p] ~= nil
+    end,
     list = function(dir)
       local out, prefix = {}, dir .. "/"
       for p, t in pairs(entries) do
@@ -135,58 +166,95 @@ local function fake(extra)
           out[#out + 1] = { p:sub(#prefix + 1), t }
         end
       end
-      table.sort(out, function(a, b) return a[1] < b[1] end)
+      table.sort(out, function(a, b)
+        return a[1] < b[1]
+      end)
       return out
     end,
     glob = function(pat)
       local out = {}
       local lp = "^" .. pat:gsub("[%-%.%+%[%]%(%)%$%^%%]", "%%%0"):gsub("%*", "[^/]*") .. "$"
       for p in pairs(entries) do
-        if p:match(lp) then out[#out + 1] = p end
+        if p:match(lp) then
+          out[#out + 1] = p
+        end
       end
       table.sort(out)
       return out
     end,
-    read_line = function() return nil end,
-    realpath = function(p) return entries[p] and p or nil end,
+    read_line = function()
+      return nil
+    end,
+    realpath = function(p)
+      return entries[p] and p or nil
+    end,
   }
 end
 
 local function build(cfg, exceptions, env)
   return plan.build({
-    project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, probes = fake(),
-    env = vim.tbl_extend("force", { PATH = "/usr/bin", GITHUB_TOKEN = "x", MY_API_KEY = "y", TERM = "xterm" }, env or {}),
+    project = PROJECT,
+    tmp_dir = TMP,
+    cwd = PROJECT,
+    home = HOME,
+    uid = 1000,
+    probes = fake(),
+    env = vim.tbl_extend(
+      "force",
+      { PATH = "/usr/bin", GITHUB_TOKEN = "x", MY_API_KEY = "y", TERM = "xterm" },
+      env or {}
+    ),
     cmd = { "agent", "--dangerously-skip-permissions", "-p", "the prompt" },
     aux = { empty = "/aux/empty", claude_json = "/aux/cj", net_dir = "/aux/net" },
-    config = cfg, exceptions = exceptions or {},
+    config = cfg,
+    exceptions = exceptions or {},
   })
 end
 
 describe("preview == argv", function()
   for _, home in ipairs({ "allowlist", "denylist" }) do
     for _, net in ipairs({ "open", "filtered" }) do
-      it(("home = %s, network = %s: every bind, tmpfs, setenv and flag of the command line is in the preview"):format(home, net), function()
-        check(build({ home = home, network = net }))
-      end)
+      it(
+        ("home = %s, network = %s: every bind, tmpfs, setenv and flag of the command line is in the preview"):format(
+          home,
+          net
+        ),
+        function()
+          check(build({ home = home, network = net }))
+        end
+      )
     end
   end
 
   it("with exceptions applied (writable, unhide, env, host) the preview still equals the argv", function()
     local p = build({ home = "denylist", network = "filtered" }, {
-      { kind = "unhide", value = HOME .. "/.ssh", scope = "once" }, { kind = "env", value = "GITHUB_TOKEN", scope = "once" },
-      { kind = "writable", value = HOME .. "/.cargo", scope = "once" }, { kind = "host", value = "github.com", scope = "once" },
+      { kind = "unhide", value = HOME .. "/.ssh", scope = "once" },
+      { kind = "env", value = "GITHUB_TOKEN", scope = "once" },
+      { kind = "writable", value = HOME .. "/.cargo", scope = "once" },
+      { kind = "host", value = "github.com", scope = "once" },
     })
     check(p)
   end)
 
-  it("the old omissions are named explicitly: --ro-bind / /, --tmpfs /tmp, --dev, --proc, the masked sockets", function()
-    local p = build({ home = "allowlist", network = "open" })
-    local text = table.concat(ui.lines(p), "\n")
-    for _, needle in ipairs({ "--ro-bind / /", "--tmpfs /tmp", "--dev /dev", "--proc /proc", "--tmpfs /run", "--tmpfs /var/tmp", "--tmpfs " .. HOME }) do
-      H.match(text, needle, true, needle .. " missing from the default preview")
+  it(
+    "the old omissions are named explicitly: --ro-bind / /, --tmpfs /tmp, --dev, --proc, the masked sockets",
+    function()
+      local p = build({ home = "allowlist", network = "open" })
+      local text = table.concat(ui.lines(p), "\n")
+      for _, needle in ipairs({
+        "--ro-bind / /",
+        "--tmpfs /tmp",
+        "--dev /dev",
+        "--proc /proc",
+        "--tmpfs /run",
+        "--tmpfs /var/tmp",
+        "--tmpfs " .. HOME,
+      }) do
+        H.match(text, needle, true, needle .. " missing from the default preview")
+      end
+      H.no_match(text, "Read-only (0)\n  none\n\nAbsent", true)
     end
-    H.no_match(text, "Read-only (0)\n  none\n\nAbsent", true)
-  end)
+  )
 
   it("a real plan of this machine equals its real wrapped command", function()
     if sb.status_blocking().mode ~= "bwrap" then
@@ -209,7 +277,9 @@ describe("preview == argv", function()
     -- a plan whose preview forgets the base mounts (the red team's finding), by removing them from the ops the UI sees
     local function without(section)
       plan.ops = function(pl)
-        return vim.tbl_filter(function(o) return o.section ~= section end, real(pl))
+        return vim.tbl_filter(function(o)
+          return o.section ~= section
+        end, real(pl))
       end
     end
     for _, section in ipairs({ "base", "setenv", "sockets", "home" }) do

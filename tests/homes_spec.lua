@@ -10,9 +10,15 @@ local HOME = "/home/bob"
 local function fakefs(entries, links)
   local fs = entries
   return {
-    stat_type = function(p) return fs[p] end,
-    lstat_type = function(p) return (links or {})[p] and "link" or fs[p] end,
-    exists = function(p) return fs[p] ~= nil end,
+    stat_type = function(p)
+      return fs[p]
+    end,
+    lstat_type = function(p)
+      return (links or {})[p] and "link" or fs[p]
+    end,
+    exists = function(p)
+      return fs[p] ~= nil
+    end,
     list = function(dir)
       local out, prefix = {}, dir .. "/"
       for p, t in pairs(fs) do
@@ -20,19 +26,31 @@ local function fakefs(entries, links)
           out[#out + 1] = { p:sub(#prefix + 1), (links or {})[p] and "link" or t }
         end
       end
-      table.sort(out, function(a, b) return a[1] < b[1] end)
+      table.sort(out, function(a, b)
+        return a[1] < b[1]
+      end)
       return out
     end,
-    glob = function() return {} end,
-    read_line = function() return nil end,
-    realpath = function(p) return (links or {})[p] or (fs[p] and p) or nil end,
+    glob = function()
+      return {}
+    end,
+    read_line = function()
+      return nil
+    end,
+    realpath = function(p)
+      return (links or {})[p] or (fs[p] and p) or nil
+    end,
   }
 end
 
 local function build(over, fs, links)
   local entries = vim.tbl_extend("force", {
-    ["/home"] = "directory", [HOME] = "directory", [HOME .. "/.claude"] = "directory", [HOME .. "/proj"] = "directory",
-    ["/home/alice"] = "directory", ["/srv/acct"] = "directory",
+    ["/home"] = "directory",
+    [HOME] = "directory",
+    [HOME .. "/.claude"] = "directory",
+    [HOME .. "/proj"] = "directory",
+    ["/home/alice"] = "directory",
+    ["/srv/acct"] = "directory",
   }, fs or {})
   for k, v in pairs(entries) do
     if v == false then
@@ -40,8 +58,14 @@ local function build(over, fs, links)
     end
   end
   return plan.build(vim.tbl_extend("force", {
-    project = HOME .. "/proj", tmp_dir = HOME .. "/scratch", home = HOME, uid = 1000, env = { PATH = "/usr/bin" },
-    cmd = { "agent" }, aux = { empty = "/aux/e" }, config = { network = "open" },
+    project = HOME .. "/proj",
+    tmp_dir = HOME .. "/scratch",
+    home = HOME,
+    uid = 1000,
+    env = { PATH = "/usr/bin" },
+    cmd = { "agent" },
+    aux = { empty = "/aux/e" },
+    config = { network = "open" },
     probes = fakefs(entries, links),
   }, over or {}))
 end
@@ -69,7 +93,12 @@ describe("/home is an empty tmpfs", function()
     H.ok(h, ops_text(p))
     H.ok(h < index_of(p, "home", "--tmpfs " .. HOME), "the home view is built on top")
     H.ok(h < index_of(p, "writable", "--bind " .. HOME .. "/proj"), "the project is writable again on top")
-    H.eq({ "/home" }, vim.tbl_map(function(m) return m.path end, p.homes.masked))
+    H.eq(
+      { "/home" },
+      vim.tbl_map(function(m)
+        return m.path
+      end, p.homes.masked)
+    )
   end)
 
   it("also in the denylist view: $HOME is bound back read-only after the tmpfs", function()
@@ -88,7 +117,12 @@ describe("/home is an empty tmpfs", function()
 
   it("a /home that is a symlink masks what it points to", function()
     local p = build(nil, { ["/var/home"] = "directory" }, { ["/home"] = "/var/home" })
-    H.eq({ "/var/home" }, vim.tbl_map(function(m) return m.path end, p.homes.masked))
+    H.eq(
+      { "/var/home" },
+      vim.tbl_map(function(m)
+        return m.path
+      end, p.homes.masked)
+    )
   end)
 
   it("the preview lists it", function()
@@ -101,7 +135,12 @@ end)
 describe("the account's real home when it differs from $HOME", function()
   it("is masked too, when it is not below /home", function()
     local p = build({ passwd_home = "/srv/acct" })
-    H.eq({ "/home", "/srv/acct" }, vim.tbl_map(function(m) return m.path end, p.homes.masked))
+    H.eq(
+      { "/home", "/srv/acct" },
+      vim.tbl_map(function(m)
+        return m.path
+      end, p.homes.masked)
+    )
     H.match(ops_text(p), "homes: --tmpfs /srv/acct", true)
   end)
 
@@ -113,59 +152,85 @@ end)
 
 describe("what is shown again from a hidden home", function()
   local fs = {
-    ["/home/alice/.cargo"] = "directory", ["/home/alice/.cargo/bin"] = "directory", ["/home/alice/.cargo/bin/cargo"] = "file",
-    ["/home/alice/.cargo/credentials.toml"] = "file", ["/home/alice/.ssh"] = "directory",
-    ["/home/alice/.local"] = "directory", ["/home/alice/.local/bin"] = "directory",
-    ["/home/alice/.local/share/tool/bin/tool"] = "file", ["/home/alice/.local/share/tool"] = "directory",
+    ["/home/alice/.cargo"] = "directory",
+    ["/home/alice/.cargo/bin"] = "directory",
+    ["/home/alice/.cargo/bin/cargo"] = "file",
+    ["/home/alice/.cargo/credentials.toml"] = "file",
+    ["/home/alice/.ssh"] = "directory",
+    ["/home/alice/.local"] = "directory",
+    ["/home/alice/.local/bin"] = "directory",
+    ["/home/alice/.local/share/tool/bin/tool"] = "file",
+    ["/home/alice/.local/share/tool"] = "directory",
     ["/home/alice/secret-notes"] = "directory",
   }
 
   it("a $PATH directory and the toolchain around it are read-only, the owner's credentials stay hidden", function()
     local p = build({ env = { PATH = "/home/alice/.cargo/bin:/usr/bin" } }, fs)
-    local shown = vim.tbl_map(function(a) return a.path end, p.homes.allow)
+    local shown = vim.tbl_map(function(a)
+      return a.path
+    end, p.homes.allow)
     H.eq({ "/home/alice/.cargo/bin" }, vim.list_slice(shown, 1, 1))
     H.has(shown, "/home/alice/.cargo")
-    local hidden = vim.tbl_map(function(h) return h.path end, p.hidden)
+    local hidden = vim.tbl_map(function(h)
+      return h.path
+    end, p.hidden)
     H.has(hidden, "/home/alice/.cargo/credentials.toml")
     H.not_ok(vim.tbl_contains(shown, "/home/alice/.ssh") or vim.tbl_contains(shown, "/home/alice/secret-notes"))
     H.match(ops_text(p), "homes: --ro-bind /home/alice/.cargo/bin /home/alice/.cargo/bin", true)
   end)
 
   it("never the owner's whole home, ~/.local or ~/.config", function()
-    local p = build({ env = { PATH = "/home/alice/.local/bin:/home/alice/bin:/usr/bin" } },
-      vim.tbl_extend("force", fs, { ["/home/alice/bin"] = "directory" }))
+    local p = build(
+      { env = { PATH = "/home/alice/.local/bin:/home/alice/bin:/usr/bin" } },
+      vim.tbl_extend("force", fs, { ["/home/alice/bin"] = "directory" })
+    )
     for _, a in ipairs(p.homes.allow) do
       H.not_ok(a.path == "/home/alice" or a.path == "/home/alice/.local" or a.path == "/home/alice/.config", a.path)
     end
   end)
 
   it("a link in a $PATH directory shows its target file only", function()
-    local p = build({ env = { PATH = "/home/alice/.local/bin:/usr/bin" } },
+    local p = build(
+      { env = { PATH = "/home/alice/.local/bin:/usr/bin" } },
       vim.tbl_extend("force", fs, { ["/home/alice/.local/bin/tool"] = "file" }),
-      { ["/home/alice/.local/bin/tool"] = "/home/alice/.local/share/tool/bin/tool" })
-    local shown = vim.tbl_map(function(a) return a.path end, p.homes.allow)
+      { ["/home/alice/.local/bin/tool"] = "/home/alice/.local/share/tool/bin/tool" }
+    )
+    local shown = vim.tbl_map(function(a)
+      return a.path
+    end, p.homes.allow)
     H.has(shown, "/home/alice/.local/share/tool/bin/tool")
     H.not_ok(vim.tbl_contains(shown, "/home/alice/.local/share/tool"))
   end)
 
   it("toolchain variables and the agent command are shown, read-only, and nothing else of that home", function()
-    local p = build({ env = { PATH = "/usr/bin", CARGO_HOME = "/home/alice/.cargo" }, cmd = { "/home/alice/.local/share/tool/bin/tool" } }, fs)
-    local shown = vim.tbl_map(function(a) return a.path end, p.homes.allow)
+    local p = build({
+      env = { PATH = "/usr/bin", CARGO_HOME = "/home/alice/.cargo" },
+      cmd = { "/home/alice/.local/share/tool/bin/tool" },
+    }, fs)
+    local shown = vim.tbl_map(function(a)
+      return a.path
+    end, p.homes.allow)
     H.has(shown, "/home/alice/.cargo")
     H.has(shown, "/home/alice/.local/share/tool/bin/tool")
     H.not_ok(vim.tbl_contains(shown, "/home/alice/secret-notes"))
   end)
 
   it("a project in another home is still writable (bound after the tmpfs)", function()
-    local p = build({ project = "/home/alice/work", tmp_dir = HOME .. "/scratch" }, { ["/home/alice/work"] = "directory" })
+    local p = build(
+      { project = "/home/alice/work", tmp_dir = HOME .. "/scratch" },
+      { ["/home/alice/work"] = "directory" }
+    )
     local h = index_of(p, "homes", "--tmpfs /home")
     local w = index_of(p, "writable", "--bind /home/alice/work /home/alice/work")
     H.ok(h and w and h < w, ops_text(p))
   end)
 
   it("a symlink in the project that points into a hidden home is not readable", function()
-    local p = build({}, { [HOME .. "/proj/notes"] = "file", ["/home/alice/secret-notes/a"] = "file" },
-      { [HOME .. "/proj/notes"] = "/home/alice/secret-notes/a" })
+    local p = build(
+      {},
+      { [HOME .. "/proj/notes"] = "file", ["/home/alice/secret-notes/a"] = "file" },
+      { [HOME .. "/proj/notes"] = "/home/alice/secret-notes/a" }
+    )
     local l = p.symlinks[1]
     H.ok(l, "the symlink is listed")
     H.eq(false, l.readable)
@@ -189,7 +254,11 @@ describe("a real sandbox", function()
     f:close()
     sb.config.network = "open"
     local project, tmp = H.tmpdir(), H.tmpdir()
-    local cmd, err, h = sb.wrap({ "bash", "-c", 'cat "$1" 2>&1; ls -A "$(dirname "$1")" 2>&1 | head -5; echo end', "x", canary }, project, tmp)
+    local cmd, err, h = sb.wrap(
+      { "bash", "-c", 'cat "$1" 2>&1; ls -A "$(dirname "$1")" 2>&1 | head -5; echo end', "x", canary },
+      project,
+      tmp
+    )
     H.ok(cmd, err)
     local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
     h.release()
@@ -204,7 +273,8 @@ describe("a real sandbox", function()
     local sb = require("xyno_sandbox")
     sb.config.network = "open"
     local project, tmp = H.tmpdir(), H.tmpdir()
-    local cmd, err, h = sb.wrap({ "bash", "-c", 'echo hi > made.txt && ls "$HOME/.claude" >/dev/null && echo fine' }, project, tmp)
+    local cmd, err, h =
+      sb.wrap({ "bash", "-c", 'echo hi > made.txt && ls "$HOME/.claude" >/dev/null && echo fine' }, project, tmp)
     H.ok(cmd, err)
     local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
     h.release()

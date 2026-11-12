@@ -92,7 +92,12 @@ function M.parse_entry(s)
   if wildcard and not name:find(".", 1, true) then
     return nil, "a wildcard needs a suffix of at least two labels"
   end
-  return { host = name, port = port, wildcard = wildcard, text = (wildcard and "*." or "") .. name .. (port ~= 443 and (":" .. port) or "") }
+  return {
+    host = name,
+    port = port,
+    wildcard = wildcard,
+    text = (wildcard and "*." or "") .. name .. (port ~= 443 and (":" .. port) or ""),
+  }
 end
 
 --- Normalize a list of entries (strings or parsed) and drop duplicates. Raises on a bad entry.
@@ -148,15 +153,33 @@ end
 
 local function public_v4(t)
   local a, b, c = t[1], t[2], t[3]
-  if a == 0 or a == 10 or a == 127 or a >= 224 then return false end
-  if a == 100 and b >= 64 and b <= 127 then return false end
-  if a == 169 and b == 254 then return false end
-  if a == 172 and b >= 16 and b <= 31 then return false end
-  if a == 192 and b == 0 and (c == 0 or c == 2) then return false end
-  if a == 192 and b == 168 then return false end
-  if a == 198 and (b == 18 or b == 19) then return false end
-  if a == 198 and b == 51 and c == 100 then return false end
-  if a == 203 and b == 0 and c == 113 then return false end
+  if a == 0 or a == 10 or a == 127 or a >= 224 then
+    return false
+  end
+  if a == 100 and b >= 64 and b <= 127 then
+    return false
+  end
+  if a == 169 and b == 254 then
+    return false
+  end
+  if a == 172 and b >= 16 and b <= 31 then
+    return false
+  end
+  if a == 192 and b == 0 and (c == 0 or c == 2) then
+    return false
+  end
+  if a == 192 and b == 168 then
+    return false
+  end
+  if a == 198 and (b == 18 or b == 19) then
+    return false
+  end
+  if a == 198 and b == 51 and c == 100 then
+    return false
+  end
+  if a == 203 and b == 0 and c == 113 then
+    return false
+  end
   return true
 end
 
@@ -165,36 +188,52 @@ local function v6_groups(ip)
   local tail = ip:match(":(%d+%.%d+%.%d+%.%d+)$")
   if tail then
     local t = v4_bytes(tail)
-    if not t then return nil end
+    if not t then
+      return nil
+    end
     ip = ip:sub(1, #ip - #tail) .. ("%x:%x"):format(t[1] * 256 + t[2], t[3] * 256 + t[4])
   end
   local head, rest = ip, nil
   local dc = ip:find("::", 1, true)
   if dc then
     head, rest = ip:sub(1, dc - 1), ip:sub(dc + 2)
-    if rest:find("::", 1, true) then return nil end
+    if rest:find("::", 1, true) then
+      return nil
+    end
   end
   local function split(s)
     local g = {}
     if s ~= "" then
       for p in (s .. ":"):gmatch("([^:]*):") do
-        if not p:match("^%x%x?%x?%x?$") then return nil end
+        if not p:match("^%x%x?%x?%x?$") then
+          return nil
+        end
         g[#g + 1] = tonumber(p, 16)
       end
     end
     return g
   end
   local h = split(head)
-  if not h then return nil end
+  if not h then
+    return nil
+  end
   if not rest then
     return #h == 8 and h or nil
   end
   local r = split(rest)
-  if not r or #h + #r > 7 then return nil end
+  if not r or #h + #r > 7 then
+    return nil
+  end
   local out = {}
-  for _, v in ipairs(h) do out[#out + 1] = v end
-  for _ = 1, 8 - #h - #r do out[#out + 1] = 0 end
-  for _, v in ipairs(r) do out[#out + 1] = v end
+  for _, v in ipairs(h) do
+    out[#out + 1] = v
+  end
+  for _ = 1, 8 - #h - #r do
+    out[#out + 1] = 0
+  end
+  for _, v in ipairs(r) do
+    out[#out + 1] = v
+  end
   return out
 end
 
@@ -211,21 +250,33 @@ function M.is_public_ip(ip)
   end
   local zero_to = function(n)
     for i = 1, n do
-      if g[i] ~= 0 then return false end
+      if g[i] ~= 0 then
+        return false
+      end
     end
     return true
   end
   if zero_to(5) and (g[6] == 0xffff or g[6] == 0) then -- ::, ::1, ::ffff:a.b.c.d, ::a.b.c.d
-    if g[6] == 0 and g[7] == 0 and g[8] <= 1 then return false end
+    if g[6] == 0 and g[7] == 0 and g[8] <= 1 then
+      return false
+    end
     return public_v4({ math.floor(g[7] / 256), g[7] % 256, math.floor(g[8] / 256), g[8] % 256 })
   end
   if g[1] == 0x64 and g[2] == 0xff9b and g[3] == 0 and g[4] == 0 and g[5] == 0 and g[6] == 0 then -- NAT64
     return public_v4({ math.floor(g[7] / 256), g[7] % 256, math.floor(g[8] / 256), g[8] % 256 })
   end
-  if g[1] >= 0xfe80 and g[1] <= 0xfebf then return false end -- link-local
-  if g[1] >= 0xfc00 and g[1] <= 0xfdff then return false end -- unique local
-  if g[1] >= 0xff00 then return false end -- multicast
-  if g[1] == 0x2001 and g[2] == 0x0db8 then return false end -- documentation
+  if g[1] >= 0xfe80 and g[1] <= 0xfebf then
+    return false
+  end -- link-local
+  if g[1] >= 0xfc00 and g[1] <= 0xfdff then
+    return false
+  end -- unique local
+  if g[1] >= 0xff00 then
+    return false
+  end -- multicast
+  if g[1] == 0x2001 and g[2] == 0x0db8 then
+    return false
+  end -- documentation
   if g[1] == 0x2002 then -- 6to4 embeds an IPv4 address
     return public_v4({ math.floor(g[2] / 256), g[2] % 256, math.floor(g[3] / 256), g[3] % 256 })
   end
@@ -326,23 +377,37 @@ function M.start(opts)
     local timer = uv.new_timer()
     local last = uv.now()
     local function close_all()
-      if closed then return end
+      if closed then
+        return
+      end
       closed = true
       proxy.conns = proxy.conns - 1
       active[client] = nil
-      if timer then timer:stop() safe_close(timer) end
+      if timer then
+        timer:stop()
+        safe_close(timer)
+      end
       safe_close(upstream)
       safe_close(client)
     end
     active[client] = close_all
     local function reply(code, text, msg)
-      if closed or client:is_closing() then return end
+      if closed or client:is_closing() then
+        return
+      end
       client:read_stop()
       local body = "xyno-sandbox: " .. msg .. "\n"
-      client:write(("HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s")
-        :format(code, text, #body, body), function()
-        close_all()
-      end)
+      client:write(
+        ("HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s"):format(
+          code,
+          text,
+          #body,
+          body
+        ),
+        function()
+          close_all()
+        end
+      )
     end
     if proxy.conns > max_conns then
       return reply(503, "Service Unavailable", "too many connections")
@@ -378,7 +443,11 @@ function M.start(opts)
       local host = h and M.hostname(h)
       if not host or not port or port < 1 or port > 65535 then
         decide({ allowed = false, host = (h or target):sub(1, 80), port = port or 0, reason = "not a DNS host name" })
-        return reply(403, "Forbidden", "blocked: " .. target:sub(1, 80) .. " is not an allowed DNS host name (raw IPs are refused)")
+        return reply(
+          403,
+          "Forbidden",
+          "blocked: " .. target:sub(1, 80) .. " is not an allowed DNS host name (raw IPs are refused)"
+        )
       end
       if not M.match(entries, host, port) then
         decide({ allowed = false, host = host, port = port, reason = "not on the allowlist" })
@@ -386,7 +455,9 @@ function M.start(opts)
       end
 
       resolve(host, function(addrs, rerr2)
-        if closed then return end
+        if closed then
+          return
+        end
         local usable = {}
         for _, a in ipairs(addrs or {}) do
           if opts.allow_private or M.allow_private or M.is_public_ip(a) then
@@ -394,14 +465,17 @@ function M.start(opts)
           end
         end
         if #usable == 0 then
-          local why = (addrs and #addrs > 0) and "resolves only to non-public addresses" or ("cannot resolve: " .. tostring(rerr2))
+          local why = (addrs and #addrs > 0) and "resolves only to non-public addresses"
+            or ("cannot resolve: " .. tostring(rerr2))
           decide({ allowed = false, host = host, port = port, reason = why })
           return reply(502, "Bad Gateway", ("blocked: %s %s"):format(host, why))
         end
         local i = 0
         local function try()
           i = i + 1
-          if closed then return end
+          if closed then
+            return
+          end
           if i > #usable then
             decide({ allowed = false, host = host, port = port, reason = "connect failed" })
             return reply(502, "Bad Gateway", "cannot connect to " .. host)
@@ -416,25 +490,38 @@ function M.start(opts)
             try()
           end)
           tcp:connect(usable[i], port, function(cerr)
-            if cancelled then return end
-            ct:stop() safe_close(ct)
+            if cancelled then
+              return
+            end
+            ct:stop()
+            safe_close(ct)
             if cerr then
               safe_close(tcp)
               return try()
             end
-            if closed then return safe_close(tcp) end
+            if closed then
+              return safe_close(tcp)
+            end
             upstream = tcp
             decide({ allowed = true, host = host, port = port })
             client:write("HTTP/1.1 200 Connection Established\r\n\r\n", function(werr)
-              if werr then return close_all() end
-              local function touch() last = uv.now() end
+              if werr then
+                return close_all()
+              end
+              local function touch()
+                last = uv.now()
+              end
               local ended = 0
               local function one_done()
                 ended = ended + 1
-                if ended == 2 then close_all() end
+                if ended == 2 then
+                  close_all()
+                end
               end
               timer:start(60000, 60000, function()
-                if uv.now() - last > IDLE_MS then close_all() end
+                if uv.now() - last > IDLE_MS then
+                  close_all()
+                end
               end)
               local function start_pumps()
                 pump(client, upstream, touch, one_done, close_all)
@@ -442,7 +529,9 @@ function M.start(opts)
               end
               if #rest > 0 then
                 upstream:write(rest, function(w2)
-                  if w2 then return close_all() end
+                  if w2 then
+                    return close_all()
+                  end
                   start_pumps()
                 end)
               else
@@ -457,7 +546,9 @@ function M.start(opts)
   end
 
   local lok, lerr = server:listen(128, function(e)
-    if e then return end
+    if e then
+      return
+    end
     local c = uv.new_pipe(false)
     if server:accept(c) then
       on_connection(c)
@@ -471,7 +562,9 @@ function M.start(opts)
   end
 
   function proxy.close()
-    if proxy.closed then return end
+    if proxy.closed then
+      return
+    end
     proxy.closed = true
     safe_close(server)
     for _, f in pairs(vim.tbl_values(active)) do

@@ -9,7 +9,9 @@ after_each(function()
   sb.config = vim.deepcopy(saved)
 end)
 
-local function mkdir(p) vim.fn.mkdir(p, "p") end
+local function mkdir(p)
+  vim.fn.mkdir(p, "p")
+end
 
 --- Run bash `script` in the sandbox of `project`; returns stdout+stderr, handle.
 local function inside(project, script, keep_handle)
@@ -27,13 +29,16 @@ end
 describe("absent project files", function()
   it(".envrc and .vscode/tasks.json cannot be created, .mise.toml and .mcp.json neither", function()
     local project = H.tmpdir()
-    local out = inside(project, table.concat({
-      'echo "export EVIL=1" > .envrc 2>/dev/null && echo PLANTED-ENVRC',
-      'mkdir -p .vscode 2>/dev/null; echo "{}" > .vscode/tasks.json 2>/dev/null && echo PLANTED-TASKS',
-      'echo x > .mise.toml 2>/dev/null && echo PLANTED-MISE',
-      'echo x > .mcp.json 2>/dev/null && echo PLANTED-MCP',
-      "echo done",
-    }, "\n"))
+    local out = inside(
+      project,
+      table.concat({
+        'echo "export EVIL=1" > .envrc 2>/dev/null && echo PLANTED-ENVRC',
+        'mkdir -p .vscode 2>/dev/null; echo "{}" > .vscode/tasks.json 2>/dev/null && echo PLANTED-TASKS',
+        "echo x > .mise.toml 2>/dev/null && echo PLANTED-MISE",
+        "echo x > .mcp.json 2>/dev/null && echo PLANTED-MCP",
+        "echo done",
+      }, "\n")
+    )
     H.match(out, "done", true, out)
     for _, w in ipairs({ "PLANTED-ENVRC", "PLANTED-TASKS", "PLANTED-MISE", "PLANTED-MCP" }) do
       H.no_match(out, w, true, out)
@@ -44,7 +49,18 @@ describe("absent project files", function()
     local project = H.tmpdir()
     inside(project, "echo ok > normal.txt")
     H.eq(1, vim.fn.filereadable(project .. "/normal.txt"))
-    for _, rel in ipairs({ ".envrc", ".mise.toml", ".mcp.json", ".nvim.lua", ".exrc", ".nvimrc", ".vscode", ".cargo", ".git", ".claude" }) do
+    for _, rel in ipairs({
+      ".envrc",
+      ".mise.toml",
+      ".mcp.json",
+      ".nvim.lua",
+      ".exrc",
+      ".nvimrc",
+      ".vscode",
+      ".cargo",
+      ".git",
+      ".claude",
+    }) do
       H.eq(nil, vim.uv.fs_stat(project .. "/" .. rel), rel .. " should not be left behind")
     end
   end)
@@ -52,7 +68,7 @@ describe("absent project files", function()
   it("a real .envrc of the project is only locked, never emptied or removed", function()
     local project = H.tmpdir()
     vim.fn.writefile({ "export A=1" }, project .. "/.envrc")
-    local out = inside(project, 'cat .envrc; echo x >> .envrc 2>/dev/null && echo WRITABLE; echo done')
+    local out = inside(project, "cat .envrc; echo x >> .envrc 2>/dev/null && echo WRITABLE; echo done")
     H.match(out, "export A=1", true)
     H.no_match(out, "WRITABLE", true)
     H.eq({ "export A=1" }, vim.fn.readfile(project .. "/.envrc"))
@@ -74,22 +90,25 @@ describe("absent project files", function()
     H.eq(nil, vim.uv.fs_stat(project .. "/.vscode"))
   end)
 
-  it("release() is idempotent; a file with content that appeared is never lost: it is quarantined, not deleted", function()
-    H.need_sandbox()
-    local project, tmp = H.tmpdir(), H.tmpdir()
-    local _, _, h = sb.wrap({ "true" }, project, tmp)
-    vim.fn.writefile({ "real" }, project .. "/.envrc")
-    mkdir(project .. "/.vscode")
-    vim.fn.writefile({ "{}" }, project .. "/.vscode/tasks.json")
-    h.release()
-    h.release()
-    -- (the end-of-run sweep takes new names that act outside the sandbox out of the project, with a copy)
-    H.eq(nil, vim.uv.fs_stat(project .. "/.envrc"))
-    H.eq({ "real" }, vim.fn.readfile(h.quarantine .. "/.envrc"))
-    H.eq({ "{}" }, vim.fn.readfile(h.quarantine .. "/.vscode/tasks.json"))
-    H.ok(sb.dirty(project), "the project is marked for review")
-    sb.clear_dirty(project)
-  end)
+  it(
+    "release() is idempotent; a file with content that appeared is never lost: it is quarantined, not deleted",
+    function()
+      H.need_sandbox()
+      local project, tmp = H.tmpdir(), H.tmpdir()
+      local _, _, h = sb.wrap({ "true" }, project, tmp)
+      vim.fn.writefile({ "real" }, project .. "/.envrc")
+      mkdir(project .. "/.vscode")
+      vim.fn.writefile({ "{}" }, project .. "/.vscode/tasks.json")
+      h.release()
+      h.release()
+      -- (the end-of-run sweep takes new names that act outside the sandbox out of the project, with a copy)
+      H.eq(nil, vim.uv.fs_stat(project .. "/.envrc"))
+      H.eq({ "real" }, vim.fn.readfile(h.quarantine .. "/.envrc"))
+      H.eq({ "{}" }, vim.fn.readfile(h.quarantine .. "/.vscode/tasks.json"))
+      H.ok(sb.dirty(project), "the project is marked for review")
+      sb.clear_dirty(project)
+    end
+  )
 end)
 
 describe("deeper nesting", function()
@@ -97,7 +116,7 @@ describe("deeper nesting", function()
     local project = H.tmpdir()
     local deep = project .. "/a/b/c/d/e/f"
     mkdir(deep .. "/.git")
-    local out = inside(project, 'cd a/b/c/d/e/f && echo x > .git/config 2>/dev/null && echo WRITABLE; echo done')
+    local out = inside(project, "cd a/b/c/d/e/f && echo x > .git/config 2>/dev/null && echo WRITABLE; echo done")
     H.match(out, "done", true)
     H.no_match(out, "WRITABLE", true, out)
   end)
@@ -107,7 +126,10 @@ describe("deeper nesting", function()
     local m = project .. "/crates/x/y/z/member"
     mkdir(m)
     vim.fn.writefile({ "[package]" }, m .. "/Cargo.toml")
-    local out = inside(project, 'cd crates/x/y/z/member && mkdir -p .cargo 2>/dev/null; echo "[build]" > .cargo/config.toml 2>/dev/null && echo PLANTED; echo done')
+    local out = inside(
+      project,
+      'cd crates/x/y/z/member && mkdir -p .cargo 2>/dev/null; echo "[build]" > .cargo/config.toml 2>/dev/null && echo PLANTED; echo done'
+    )
     H.match(out, "done", true)
     H.no_match(out, "PLANTED", true, out)
     H.eq(nil, vim.uv.fs_stat(m .. "/.cargo"), "the mask is removed afterwards")
@@ -140,10 +162,16 @@ describe("temp files", function()
 end)
 
 describe("known limits, kept visible", function()
-  xfail("a .git the agent creates itself in a NEW deep directory is read-only",
-    "inside the run a fresh nested repository (git init in a new directory beyond the masked shallow directories) can still be planted; the end-of-run sweep quarantines it (round6_spec)", function()
+  xfail(
+    "a .git the agent creates itself in a NEW deep directory is read-only",
+    "inside the run a fresh nested repository (git init in a new directory beyond the masked shallow directories) can still be planted; the end-of-run sweep quarantines it (round6_spec)",
+    function()
       local project = H.tmpdir()
-      local out = inside(project, "mkdir -p fresh/sub && cd fresh/sub && git init -q . 2>/dev/null && echo 'x' >> .git/config && echo PLANTED")
+      local out = inside(
+        project,
+        "mkdir -p fresh/sub && cd fresh/sub && git init -q . 2>/dev/null && echo 'x' >> .git/config && echo PLANTED"
+      )
       H.no_match(out, "PLANTED", true, out)
-    end)
+    end
+  )
 end)

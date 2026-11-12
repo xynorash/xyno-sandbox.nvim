@@ -29,9 +29,16 @@ M.WRITABLE = {
 -- Re-bound read-only on top of the writable binds when they exist. Whatever an
 -- agent planted here would run (or steer a tool) outside the sandbox later.
 M.HOME_READONLY = {
-  "/.claude/settings.json", "/.claude/settings.local.json", "/.claude/CLAUDE.md",
-  "/.claude/keybindings.json", "/.claude/hooks", "/.claude/commands", "/.claude/agents",
-  "/.claude/skills", "/.claude/plugins", "/.claude/output-styles",
+  "/.claude/settings.json",
+  "/.claude/settings.local.json",
+  "/.claude/CLAUDE.md",
+  "/.claude/keybindings.json",
+  "/.claude/hooks",
+  "/.claude/commands",
+  "/.claude/agents",
+  "/.claude/skills",
+  "/.claude/plugins",
+  "/.claude/output-styles",
   "/.claude/.credentials.json", -- the login: the sandbox may use it, not rewrite it (the allowlist view binds it read-only too)
   "/.claude/ide", -- IDE lock files make claude connect to a local server
   "/.claude/rules",
@@ -43,8 +50,13 @@ M.HOME_READONLY = {
 -- claude would load them: prompt injection), so mask them with an empty
 -- read-only dir (leaves one empty dir behind in ~/.claude).
 M.HOME_MASK_IF_ABSENT = {
-  "/.claude/hooks", "/.claude/commands", "/.claude/agents", "/.claude/skills", "/.claude/rules",
-  "/.claude/output-styles", "/.claude/security",
+  "/.claude/hooks",
+  "/.claude/commands",
+  "/.claude/agents",
+  "/.claude/skills",
+  "/.claude/rules",
+  "/.claude/output-styles",
+  "/.claude/security",
 }
 
 -- Ephemeral inside the sandbox: claude sources these before running commands.
@@ -52,33 +64,83 @@ M.HOME_EPHEMERAL = { "/.claude/shell-snapshots", "/.claude/session-env" }
 
 -- Project-relative auto-executing / tool-steering files (locked when present).
 M.PROJECT_READONLY = {
-  ".gitmodules", ".envrc", ".mise.toml", ".tool-versions", ".nvim.lua", ".nvimrc", ".exrc",
-  ".vscode/tasks.json", ".vscode/settings.json",
+  ".gitmodules",
+  ".envrc",
+  ".mise.toml",
+  ".tool-versions",
+  ".nvim.lua",
+  ".nvimrc",
+  ".exrc",
+  ".vscode/tasks.json",
+  ".vscode/settings.json",
   ".cargo", -- whole dir: config.toml sets runner / linker / rustflags and runs on the next cargo build
   ".vscode", -- whole dir, so tasks.json cannot be swapped by renaming the parent
   ".mcp.json",
   -- editors and tools of other people on the team that act outside the sandbox: Zed tasks, JetBrains run
   -- configurations, Helix language servers, husky hooks (core.hooksPath), pre-commit hooks, dev containers,
   -- debugger init files
-  ".zed", ".idea", ".helix", ".husky", ".devcontainer", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit",
+  ".zed",
+  ".idea",
+  ".helix",
+  ".husky",
+  ".devcontainer",
+  ".pre-commit-config.yaml",
+  ".lldbinit",
+  ".gdbinit",
   -- mise runs these tasks and tool installs from the user's shell; rustup downloads and runs whatever
   -- toolchain a rust-toolchain file names (a malicious override triggers a download on the next cargo)
-  "mise.toml", "mise.local.toml", ".mise.local.toml", ".mise", ".config/mise.toml", ".config/mise",
-  "rust-toolchain", "rust-toolchain.toml",
+  "mise.toml",
+  "mise.local.toml",
+  ".mise.local.toml",
+  ".mise",
+  ".config/mise.toml",
+  ".config/mise",
+  "rust-toolchain",
+  "rust-toolchain.toml",
   -- tools that load these from the project without asking: git (core.hooksPath = .githooks), maven (.mvn/extensions.xml
   -- loads a jar), pnpm (the pnpmfile rewrites dependencies), Emacs (.dir-locals.el evaluates code), vim (.lvimrc plugin)
-  ".githooks", ".mvn", ".pnpmfile.cjs", ".dir-locals.el", ".lvimrc",
+  ".githooks",
+  ".mvn",
+  ".pnpmfile.cjs",
+  ".dir-locals.el",
+  ".lvimrc",
 }
 -- Locked in every subdirectory the project walk found (when PRESENT there): cargo reads .cargo/config from
 -- every ancestor of the directory it runs in, direnv the nearest .envrc, claude the .claude of its
 -- directory, the editors their own. A file that is ABSENT there can still be created (one mount per
 -- directory and name would be thousands): the run reports those when it ends, see M.WATCH_NAMES.
 M.MEMBER_READONLY = {
-  ".cargo", ".envrc", ".mise.toml", ".nvim.lua", ".nvimrc", ".exrc", ".claude", ".mcp.json", ".vscode", ".zed", ".idea",
-  ".helix", ".husky", ".devcontainer", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit",
-  ".tool-versions", "mise.toml", "mise.local.toml", ".mise.local.toml", ".mise", ".config/mise.toml", ".config/mise",
-  "rust-toolchain", "rust-toolchain.toml",
-  ".githooks", ".mvn", ".pnpmfile.cjs", ".dir-locals.el", ".lvimrc",
+  ".cargo",
+  ".envrc",
+  ".mise.toml",
+  ".nvim.lua",
+  ".nvimrc",
+  ".exrc",
+  ".claude",
+  ".mcp.json",
+  ".vscode",
+  ".zed",
+  ".idea",
+  ".helix",
+  ".husky",
+  ".devcontainer",
+  ".pre-commit-config.yaml",
+  ".lldbinit",
+  ".gdbinit",
+  ".tool-versions",
+  "mise.toml",
+  "mise.local.toml",
+  ".mise.local.toml",
+  ".mise",
+  ".config/mise.toml",
+  ".config/mise",
+  "rust-toolchain",
+  "rust-toolchain.toml",
+  ".githooks",
+  ".mvn",
+  ".pnpmfile.cjs",
+  ".dir-locals.el",
+  ".lvimrc",
 }
 -- Names that are only guarded while ABSENT and watched (never locked as such): the package managers' own config files
 -- (.npmrc script-shell, .yarnrc.yml yarnPath run a program of the project's choosing). When they exist they are hidden
@@ -92,28 +154,66 @@ M.WATCH_DIRS_MAX = 400
 -- locked; the preview lists the ones that exist and the end-of-run report summarises what changed in them
 -- (xyno_sandbox.guard). Every file directly in a .github/workflows directory counts too.
 M.REVIEW_NAMES = {
-  "Makefile", "makefile", "GNUmakefile", "justfile", "Justfile", "Taskfile.yml", "Taskfile.yaml", "package.json",
-  "Cargo.toml", "build.rs", "pyproject.toml", "setup.py", "noxfile.py", "tox.ini", ".gitlab-ci.yml",
+  "Makefile",
+  "makefile",
+  "GNUmakefile",
+  "justfile",
+  "Justfile",
+  "Taskfile.yml",
+  "Taskfile.yaml",
+  "package.json",
+  "Cargo.toml",
+  "build.rs",
+  "pyproject.toml",
+  "setup.py",
+  "noxfile.py",
+  "tox.ini",
+  ".gitlab-ci.yml",
   -- loaded automatically by the test runner / bun / the git hook manager, edited by the agent for a reason
-  "conftest.py", "bunfig.toml", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml",
+  "conftest.py",
+  "bunfig.toml",
+  "lefthook.yml",
+  "lefthook.yaml",
+  ".lefthook.yml",
+  ".lefthook.yaml",
 }
 -- Absent directories that are masked (an empty read-only directory is mounted there, so the agent cannot
 -- create them) in the SHALLOWEST subdirectories, at most this many mounts: a mount per directory and name for
 -- a whole tree would be thousands. Deeper directories are covered by the end-of-run sweep (xyno_sandbox.guard).
 M.SUBDIR_MASK_DIRS = { ".cargo", ".claude", ".vscode", ".git" }
 -- Absent files that are bound to an empty read-only file in the same directories (cleaned up when the run ends).
-M.SUBDIR_GUARD_FILES = { ".envrc", ".mcp.json", ".nvim.lua", ".mise.toml", ".exrc", ".npmrc", ".yarnrc.yml", ".dir-locals.el", ".lvimrc" }
+M.SUBDIR_GUARD_FILES =
+  { ".envrc", ".mcp.json", ".nvim.lua", ".mise.toml", ".exrc", ".npmrc", ".yarnrc.yml", ".dir-locals.el", ".lvimrc" }
 M.SUBDIR_MASK_MAX = 360
 -- Created empty-and-read-only when absent at the project root: a planted .cargo/config.toml is
 -- the one that bites. .git too: without one the agent ran `git init` and planted
 -- `core.fsmonitor = <cmd>` in .git/config, which the user's next unsandboxed `git status`
 -- executed. .vscode: a planted tasks.json runs from the user's editor. The launcher removes the
 -- empty leftovers when the run ends (see xyno_sandbox.wrap, handle.release).
-M.PROJECT_MASK_IF_ABSENT = { ".cargo", ".git", ".vscode", ".zed", ".idea", ".helix", ".husky", ".devcontainer", ".githooks", ".mvn" }
+M.PROJECT_MASK_IF_ABSENT =
+  { ".cargo", ".git", ".vscode", ".zed", ".idea", ".helix", ".husky", ".devcontainer", ".githooks", ".mvn" }
 -- Files that run unsandboxed later when planted. When absent they are bound to an empty
 -- read-only file for the run (the launcher removes the placeholder afterwards).
-M.PROJECT_GUARD_FILES = { ".envrc", ".mise.toml", "mise.toml", "mise.local.toml", ".mise.local.toml", ".nvim.lua", ".nvimrc", ".exrc", ".mcp.json", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit",
-  ".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs", ".dir-locals.el", ".lvimrc" }
+M.PROJECT_GUARD_FILES = {
+  ".envrc",
+  ".mise.toml",
+  "mise.toml",
+  "mise.local.toml",
+  ".mise.local.toml",
+  ".nvim.lua",
+  ".nvimrc",
+  ".exrc",
+  ".mcp.json",
+  ".pre-commit-config.yaml",
+  ".lldbinit",
+  ".gdbinit",
+  ".npmrc",
+  ".yarnrc",
+  ".yarnrc.yml",
+  ".pnpmfile.cjs",
+  ".dir-locals.el",
+  ".lvimrc",
+}
 -- Project dir that is ALWAYS locked: read-only when present, otherwise masked.
 M.PROJECT_MASKED = ".claude"
 
@@ -121,29 +221,84 @@ M.PROJECT_MASKED = ".claude"
 -- read-only view of the whole filesystem, so best effort: anything not listed is readable.
 M.HIDDEN = {
   -- shell/CLI credentials
-  "/.ssh", "/.gnupg", "/.aws", "/.azure", "/.gsutil", "/.boto", "/.docker", "/.kube",
-  "/.terraform.d", "/.vault-token", "/.netrc", "/.git-credentials", "/.npmrc", "/.pypirc",
-  "/.cargo/credentials", "/.cargo/credentials.toml", "/.pub-cache/credentials.json",
-  "/.android/adbkey", "/.pki", "/.password-store", "/.Xauthority", "/.pulse-cookie",
+  "/.ssh",
+  "/.gnupg",
+  "/.aws",
+  "/.azure",
+  "/.gsutil",
+  "/.boto",
+  "/.docker",
+  "/.kube",
+  "/.terraform.d",
+  "/.vault-token",
+  "/.netrc",
+  "/.git-credentials",
+  "/.npmrc",
+  "/.pypirc",
+  "/.cargo/credentials",
+  "/.cargo/credentials.toml",
+  "/.pub-cache/credentials.json",
+  "/.android/adbkey",
+  "/.pki",
+  "/.password-store",
+  "/.Xauthority",
+  "/.pulse-cookie",
   -- ~/.config
-  "/.config/gh", "/.config/git/credentials", "/.config/rclone", "/.config/pulumi",
-  "/.config/helm", "/.config/gcloud", "/.config/op", "/.config/doctl", "/.config/hub",
-  "/.config/Bitwarden", "/.config/1Password", "/.config/keepassxc", "/.config/pulse",
-  "/.config/Slack", "/.config/discord", "/.config/Signal", "/.config/rustdesk",
-  "/.config/winapps", "/.config/freerdp", "/.config/obs-studio", "/.config/JetBrains",
-  "/.config/spotify", "/.config/herdr", "/.anydesk", "/.neuralstark-live",
+  "/.config/gh",
+  "/.config/git/credentials",
+  "/.config/rclone",
+  "/.config/pulumi",
+  "/.config/helm",
+  "/.config/gcloud",
+  "/.config/op",
+  "/.config/doctl",
+  "/.config/hub",
+  "/.config/Bitwarden",
+  "/.config/1Password",
+  "/.config/keepassxc",
+  "/.config/pulse",
+  "/.config/Slack",
+  "/.config/discord",
+  "/.config/Signal",
+  "/.config/rustdesk",
+  "/.config/winapps",
+  "/.config/freerdp",
+  "/.config/obs-studio",
+  "/.config/JetBrains",
+  "/.config/spotify",
+  "/.config/herdr",
+  "/.anydesk",
+  "/.neuralstark-live",
   -- package-index logins and key files of tools that are not in the list above
-  "/.config/sops", "/.gem/credentials", "/.config/pypoetry/auth.toml", "/.pip/pip.conf", "/.config/pip/pip.conf", "/.npm/_logs",
+  "/.config/sops",
+  "/.gem/credentials",
+  "/.config/pypoetry/auth.toml",
+  "/.pip/pip.conf",
+  "/.config/pip/pip.conf",
+  "/.npm/_logs",
   -- browsers / mail
-  "/.config/google-chrome", "/.config/google-chrome-headless", "/.config/Google",
-  "/.config/chromium", "/.config/BraveSoftware", "/.config/microsoft-edge",
-  "/.config/vivaldi", "/.config/opera", "/.mozilla", "/.thunderbird", "/.cache/google-chrome",
+  "/.config/google-chrome",
+  "/.config/google-chrome-headless",
+  "/.config/Google",
+  "/.config/chromium",
+  "/.config/BraveSoftware",
+  "/.config/microsoft-edge",
+  "/.config/vivaldi",
+  "/.config/opera",
+  "/.mozilla",
+  "/.thunderbird",
+  "/.cache/google-chrome",
   -- ~/.local/share
-  "/.local/share/keyrings", "/.local/share/password-store", "/.local/share/gnome-keyring",
-  "/.local/share/kwalletd", "/.local/share/TelegramDesktop", "/.local/share/fish",
+  "/.local/share/keyrings",
+  "/.local/share/password-store",
+  "/.local/share/gnome-keyring",
+  "/.local/share/kwalletd",
+  "/.local/share/TelegramDesktop",
+  "/.local/share/fish",
   "/.local/share/winapps",
   -- remote-control keys of other claude sessions / the claude daemon
-  "/.claude/daemon", "/.claude/sessions",
+  "/.claude/daemon",
+  "/.claude/sessions",
   -- every prompt typed in any project (readable, and it was writable too)
   "/.claude/history.jsonl",
 }
@@ -162,64 +317,234 @@ M.MASKED_IF_DIR = { "/var/run" }
 M.RUN_KEEP = { "/run/current-system", "/run/booted-system", "/run/opengl-driver" }
 -- Environment variables that name a socket or directory the agent could be reached through; the
 -- path is hidden as well when it lives outside the masked directories.
-M.SOCKET_ENV = { "SSH_AUTH_SOCK", "GPG_AGENT_INFO", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "WAYLAND_DISPLAY", "NVIM", "NVIM_LISTEN_ADDRESS" }
+M.SOCKET_ENV = {
+  "SSH_AUTH_SOCK",
+  "GPG_AGENT_INFO",
+  "XDG_RUNTIME_DIR",
+  "DBUS_SESSION_BUS_ADDRESS",
+  "WAYLAND_DISPLAY",
+  "NVIM",
+  "NVIM_LISTEN_ADDRESS",
+}
 
 -- $HOME in "allowlist" mode (the default): $HOME is an empty tmpfs and only these paths (when they
 -- exist) are bound back read-only, plus the project, the scratch directory, the writable agent and
 -- cargo caches, the directory of the agent binary and the directories on $PATH that live under
 -- $HOME. Credentials inside them (~/.cargo/credentials, ~/.config/git/credentials) stay hidden.
 M.HOME_ALLOW = {
-  "/.cargo", "/.rustup", -- toolchains (registry and git are writable, see WRITABLE)
+  "/.cargo",
+  "/.rustup", -- toolchains (registry and git are writable, see WRITABLE)
   "/.local/share/claude", -- the agent binary
-  "/.gitconfig", "/.config/git", -- git identity and settings
+  "/.gitconfig",
+  "/.config/git", -- git identity and settings
 }
 
 -- Toolchain directories named by environment variables; shown read-only (when they are under $HOME).
 M.HOME_ALLOW_ENV = {
-  "CARGO_HOME", "RUSTUP_HOME", "GOROOT", "GOPATH", "GOBIN", "NVM_DIR", "PYENV_ROOT", "VOLTA_HOME", "BUN_INSTALL",
-  "DENO_INSTALL", "SDKMAN_DIR", "JAVA_HOME", "ANDROID_HOME", "ASDF_DIR", "ASDF_DATA_DIR", "MISE_DATA_DIR",
-  "N_PREFIX", "PNPM_HOME", "RBENV_ROOT", "FNM_DIR", "NPM_CONFIG_PREFIX", "DOTNET_ROOT", "FLUTTER_ROOT",
+  "CARGO_HOME",
+  "RUSTUP_HOME",
+  "GOROOT",
+  "GOPATH",
+  "GOBIN",
+  "NVM_DIR",
+  "PYENV_ROOT",
+  "VOLTA_HOME",
+  "BUN_INSTALL",
+  "DENO_INSTALL",
+  "SDKMAN_DIR",
+  "JAVA_HOME",
+  "ANDROID_HOME",
+  "ASDF_DIR",
+  "ASDF_DATA_DIR",
+  "MISE_DATA_DIR",
+  "N_PREFIX",
+  "PNPM_HOME",
+  "RBENV_ROOT",
+  "FNM_DIR",
+  "NPM_CONFIG_PREFIX",
+  "DOTNET_ROOT",
+  "FLUTTER_ROOT",
 }
 
 -- Project secrets (matched against the lower-cased base name, `*` = any characters): hidden with
 -- an empty read-only file. Templates (.env.example ...) are not secrets and stay readable.
 M.PROJECT_SECRET_GLOBS = {
-  ".env", ".env.*", "*.env", ".envrc.local", ".npmrc", ".yarnrc.yml", ".pypirc", ".netrc", "_netrc",
-  ".git-credentials", ".dockercfg", ".htpasswd", "credentials", "credentials.*", "secrets", "secrets.*",
-  "secret.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.kdbx", "id_rsa", "id_dsa",
-  "id_ecdsa", "id_ed25519", "*service-account*.json", "*service_account*.json", "client_secret*.json", "*-credentials.json",
-  "*.tfvars", "terraform.tfstate", "terraform.tfstate.*", "*.tfstate", "kubeconfig", "*.kubeconfig",
+  ".env",
+  ".env.*",
+  "*.env",
+  ".envrc.local",
+  ".npmrc",
+  ".yarnrc.yml",
+  ".pypirc",
+  ".netrc",
+  "_netrc",
+  ".git-credentials",
+  ".dockercfg",
+  ".htpasswd",
+  "credentials",
+  "credentials.*",
+  "secrets",
+  "secrets.*",
+  "secret.*",
+  "*.pem",
+  "*.key",
+  "*.p12",
+  "*.pfx",
+  "*.jks",
+  "*.keystore",
+  "*.kdbx",
+  "id_rsa",
+  "id_dsa",
+  "id_ecdsa",
+  "id_ed25519",
+  "*service-account*.json",
+  "*service_account*.json",
+  "client_secret*.json",
+  "*-credentials.json",
+  "*.tfvars",
+  "terraform.tfstate",
+  "terraform.tfstate.*",
+  "*.tfstate",
+  "kubeconfig",
+  "*.kubeconfig",
   -- frameworks and clouds
-  ".dev.vars", ".dev.vars.*", -- Cloudflare Workers
-  "serviceaccountkey.json", "*serviceaccountkey*.json", "firebase-adminsdk*.json", "google-services.json",
-  "googleservice-info.plist", "gha-creds-*.json", "credentials.tfrc.json", -- Firebase, Google, GitHub Actions, Terraform
-  "wp-config.php", "wp-config-*.php", "local.settings.json", -- WordPress, Azure Functions
-  "token", "tokens", "api_key", "api_keys", "apikey", "apikeys", "api-key", "api-keys", "password", "passwords", "passwd",
-  "application-prod.*", "application-production.*", "appsettings.production.json", "appsettings.secrets.json",
-  "master.key", "*.key.pem", "secrets.yml", "secrets.yaml", "secrets.json", "secrets.toml", ".secrets", -- Spring, .NET, Rails, generic
-  "keystore.properties", "gradle.properties.local", "*.ppk", "*.p8", "*.pkcs12", "*.mobileprovision.secret",
+  ".dev.vars",
+  ".dev.vars.*", -- Cloudflare Workers
+  "serviceaccountkey.json",
+  "*serviceaccountkey*.json",
+  "firebase-adminsdk*.json",
+  "google-services.json",
+  "googleservice-info.plist",
+  "gha-creds-*.json",
+  "credentials.tfrc.json", -- Firebase, Google, GitHub Actions, Terraform
+  "wp-config.php",
+  "wp-config-*.php",
+  "local.settings.json", -- WordPress, Azure Functions
+  "token",
+  "tokens",
+  "api_key",
+  "api_keys",
+  "apikey",
+  "apikeys",
+  "api-key",
+  "api-keys",
+  "password",
+  "passwords",
+  "passwd",
+  "application-prod.*",
+  "application-production.*",
+  "appsettings.production.json",
+  "appsettings.secrets.json",
+  "master.key",
+  "*.key.pem",
+  "secrets.yml",
+  "secrets.yaml",
+  "secrets.json",
+  "secrets.toml",
+  ".secrets", -- Spring, .NET, Rails, generic
+  "keystore.properties",
+  "gradle.properties.local",
+  "*.ppk",
+  "*.p8",
+  "*.pkcs12",
+  "*.mobileprovision.secret",
   -- client configs that keep a password or token
-  ".pgpass", ".my.cnf", ".mylogin.cnf", ".s3cfg", ".boto", ".yarnrc", ".sentryclirc", ".vault_pass", ".vault-password",
-  "vault_pass*", "vault-password*", ".git-credentials", ".gem-credentials", "oauth2.json", "client_secrets.json",
+  ".pgpass",
+  ".my.cnf",
+  ".mylogin.cnf",
+  ".s3cfg",
+  ".boto",
+  ".yarnrc",
+  ".sentryclirc",
+  ".vault_pass",
+  ".vault-password",
+  "vault_pass*",
+  "vault-password*",
+  ".git-credentials",
+  ".gem-credentials",
+  "oauth2.json",
+  "client_secrets.json",
   -- tool tokens and logins, editor backups of secrets, key variants
-  ".vault-token", ".env~", ".env*~", ".secret", ".npmrc.*", ".npmrc~", ".pypirc.*", "auth.json", "rclone.conf", ".terraformrc",
-  "terraform.rc", "creds.json", "creds.yml", "creds.yaml", "oauth_token", "oauth_token.*", "oauth-token", "wallet.dat",
-  "sa.json", "serviceaccount.json", "*serviceaccount*.json", "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*",
-  "*.pem.*", "*.key.*", "*.key~", "*.keystore.*", "*.jks.*", ".s3cfg.*", ".pgpass.*", "secret", "private.key", "private_key",
-  "private_key.*", "privatekey.*",
+  ".vault-token",
+  ".env~",
+  ".env*~",
+  ".secret",
+  ".npmrc.*",
+  ".npmrc~",
+  ".pypirc.*",
+  "auth.json",
+  "rclone.conf",
+  ".terraformrc",
+  "terraform.rc",
+  "creds.json",
+  "creds.yml",
+  "creds.yaml",
+  "oauth_token",
+  "oauth_token.*",
+  "oauth-token",
+  "wallet.dat",
+  "sa.json",
+  "serviceaccount.json",
+  "*serviceaccount*.json",
+  "id_rsa*",
+  "id_dsa*",
+  "id_ecdsa*",
+  "id_ed25519*",
+  "*.pem.*",
+  "*.key.*",
+  "*.key~",
+  "*.keystore.*",
+  "*.jks.*",
+  ".s3cfg.*",
+  ".pgpass.*",
+  "secret",
+  "private.key",
+  "private_key",
+  "private_key.*",
+  "privatekey.*",
 }
 -- Secrets that a base name alone cannot say (config.json): matched as the END of the path, lower-cased.
 M.PROJECT_SECRET_PATHS = {
-  ".docker/config.json", ".config/gh/hosts.yml", ".config/gh/config.yml", ".composer/auth.json", ".m2/settings.xml",
-  ".m2/settings-security.xml", ".gradle/gradle.properties", ".cargo/credentials", ".cargo/credentials.toml", ".kube/config",
-  ".config/gcloud/credentials.db", ".config/gcloud/application_default_credentials.json", ".azure/accesstokens.json",
-  ".bundle/config", ".config/pip/pip.conf", ".config/helm/repositories.yaml", ".config/rclone/rclone.conf",
+  ".docker/config.json",
+  ".config/gh/hosts.yml",
+  ".config/gh/config.yml",
+  ".composer/auth.json",
+  ".m2/settings.xml",
+  ".m2/settings-security.xml",
+  ".gradle/gradle.properties",
+  ".cargo/credentials",
+  ".cargo/credentials.toml",
+  ".kube/config",
+  ".config/gcloud/credentials.db",
+  ".config/gcloud/application_default_credentials.json",
+  ".azure/accesstokens.json",
+  ".bundle/config",
+  ".config/pip/pip.conf",
+  ".config/helm/repositories.yaml",
+  ".config/rclone/rclone.conf",
 }
 -- Names that mean "a secret" only as a data file: token.txt, api_keys.json ... but not tokenizer.rs or
 -- api_key.rs (source code that merely handles keys stays readable).
 do
-  local bases = { "token", "tokens", "api_key", "api_keys", "apikey", "apikeys", "api-key", "api-keys", "password", "passwords",
-    "passwd", "secret", "private_key", "privatekey", "access_token", "auth_token", "bearer_token" }
+  local bases = {
+    "token",
+    "tokens",
+    "api_key",
+    "api_keys",
+    "apikey",
+    "apikeys",
+    "api-key",
+    "api-keys",
+    "password",
+    "passwords",
+    "passwd",
+    "secret",
+    "private_key",
+    "privatekey",
+    "access_token",
+    "auth_token",
+    "bearer_token",
+  }
   local exts = { "txt", "json", "yml", "yaml", "ini", "cfg", "conf", "properties", "toml", "env", "dat", "text" }
   for _, b in ipairs(bases) do
     for _, e in ipairs(exts) do
@@ -228,24 +553,84 @@ do
   end
 end
 M.PROJECT_SECRET_EXCEPT = {
-  ".env.example", ".env.sample", ".env.template", ".env.dist", ".env.defaults", ".env.schema", ".env.tpl",
-  ".env.local.example", ".env.test.example", "example.env", "sample.env", "template.env",
+  ".env.example",
+  ".env.sample",
+  ".env.template",
+  ".env.dist",
+  ".env.defaults",
+  ".env.schema",
+  ".env.tpl",
+  ".env.local.example",
+  ".env.test.example",
+  "example.env",
+  "sample.env",
+  "template.env",
 }
 -- Directories of that kind inside a project (hidden with an empty tmpfs).
 M.PROJECT_SECRET_DIRS = { ".aws", ".ssh", ".gnupg", ".kube", ".azure", ".envs", ".secrets" }
 -- Extra directory names that are hidden inside the TOOLCHAIN trees the sandbox shows from $HOME
 -- (never inside the project, where a `secrets/` directory can be source code).
-M.TREE_SECRET_DIRS = { ".aws", ".ssh", ".gnupg", ".kube", ".azure", ".envs", ".secrets", "secrets", "secret", ".secret", ".private", "private-keys" }
+M.TREE_SECRET_DIRS = {
+  ".aws",
+  ".ssh",
+  ".gnupg",
+  ".kube",
+  ".azure",
+  ".envs",
+  ".secrets",
+  "secrets",
+  "secret",
+  ".secret",
+  ".private",
+  "private-keys",
+}
 -- Directories the tree walk does not enter: package caches and build output (large, and no credentials of the user's).
-M.TREE_SKIP = { registry = true, git = true, toolchains = true, node_modules = true, target = true, [".git"] = true, ["site-packages"] = true, pkg = true }
+M.TREE_SKIP = {
+  registry = true,
+  git = true,
+  toolchains = true,
+  node_modules = true,
+  target = true,
+  [".git"] = true,
+  ["site-packages"] = true,
+  pkg = true,
+}
 
 -- Exceptions that are refused outright (a decision, not a policy knob).
-M.WRITABLE_FORBIDDEN = { "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/boot", "/proc", "/sys", "/dev", "/run", "/var/run", "/root" }
+M.WRITABLE_FORBIDDEN = {
+  "/etc",
+  "/usr",
+  "/bin",
+  "/sbin",
+  "/lib",
+  "/lib32",
+  "/lib64",
+  "/boot",
+  "/proc",
+  "/sys",
+  "/dev",
+  "/run",
+  "/var/run",
+  "/root",
+}
 -- Shared system directories that are refused as a whole (a project directory BELOW them is fine): a
 -- writable bind of one would expose every other user's and every other program's files in it.
 M.WRITABLE_FORBIDDEN_EXACT = {
-  "/tmp", "/var", "/var/tmp", "/var/lib", "/var/cache", "/var/log", "/var/spool", "/mnt", "/media", "/srv", "/opt",
-  "/home", "/dev/shm", "/nix", "/lost+found",
+  "/tmp",
+  "/var",
+  "/var/tmp",
+  "/var/lib",
+  "/var/cache",
+  "/var/log",
+  "/var/spool",
+  "/mnt",
+  "/media",
+  "/srv",
+  "/opt",
+  "/home",
+  "/dev/shm",
+  "/nix",
+  "/lost+found",
 }
 -- Under $HOME: files and directories that run, or steer tools, outside the sandbox later. The list
 -- is GENERATED from the categories below (documented in the README): a path is a member when some
@@ -255,39 +640,198 @@ M.WRITABLE_FORBIDDEN_EXACT = {
 -- ~/.config would contain ~/.config/nvim). There is no override for this: expert_exceptions only
 -- concerns environment variables.
 M.CODE_RUNS_OUTSIDE = {
-  { category = "shell startup files", paths = {
-    "/.bashrc", "/.bash_profile", "/.bash_login", "/.bash_logout", "/.bash_aliases", "/.profile", "/.zshrc", "/.zshenv",
-    "/.zprofile", "/.zlogin", "/.zlogout", "/.zsh", "/.zim", "/.zimrc", "/.oh-my-zsh", "/.inputrc", "/.config/zsh",
-    "/.config/fish", "/.config/nushell", "/.config/xonsh", "/.xonshrc", "/.config/elvish", "/.cshrc", "/.tcshrc", "/.kshrc",
-    "/.config/starship.toml", "/.pam_environment", "/.config/environment.d" } },
-  { category = "login session and desktop", paths = {
-    "/.xinitrc", "/.xprofile", "/.xsession", "/.xsessionrc", "/.Xresources", "/.Xdefaults", "/.config/autostart",
-    "/.config/systemd", "/.local/share/systemd", "/.config/plasma-workspace", "/.config/i3", "/.config/sway",
-    "/.config/hypr", "/.config/bspwm", "/.config/sxhkd", "/.config/awesome", "/.config/openbox", "/.config/xfce4",
-    "/.local/share/applications", "/.local/share/dbus-1", "/.config/dbus-1", "/.local/share/gnome-shell" } },
+  {
+    category = "shell startup files",
+    paths = {
+      "/.bashrc",
+      "/.bash_profile",
+      "/.bash_login",
+      "/.bash_logout",
+      "/.bash_aliases",
+      "/.profile",
+      "/.zshrc",
+      "/.zshenv",
+      "/.zprofile",
+      "/.zlogin",
+      "/.zlogout",
+      "/.zsh",
+      "/.zim",
+      "/.zimrc",
+      "/.oh-my-zsh",
+      "/.inputrc",
+      "/.config/zsh",
+      "/.config/fish",
+      "/.config/nushell",
+      "/.config/xonsh",
+      "/.xonshrc",
+      "/.config/elvish",
+      "/.cshrc",
+      "/.tcshrc",
+      "/.kshrc",
+      "/.config/starship.toml",
+      "/.pam_environment",
+      "/.config/environment.d",
+    },
+  },
+  {
+    category = "login session and desktop",
+    paths = {
+      "/.xinitrc",
+      "/.xprofile",
+      "/.xsession",
+      "/.xsessionrc",
+      "/.Xresources",
+      "/.Xdefaults",
+      "/.config/autostart",
+      "/.config/systemd",
+      "/.local/share/systemd",
+      "/.config/plasma-workspace",
+      "/.config/i3",
+      "/.config/sway",
+      "/.config/hypr",
+      "/.config/bspwm",
+      "/.config/sxhkd",
+      "/.config/awesome",
+      "/.config/openbox",
+      "/.config/xfce4",
+      "/.local/share/applications",
+      "/.local/share/dbus-1",
+      "/.config/dbus-1",
+      "/.local/share/gnome-shell",
+    },
+  },
   { category = "git", paths = { "/.gitconfig", "/.config/git", "/.git-templates", "/.config/gh" } },
   { category = "remote access", paths = { "/.ssh", "/.gnupg" } },
-  { category = "editors and their plugins", paths = {
-    "/.config/nvim", "/.local/share/nvim", "/.vim", "/.vimrc", "/.config/vim", "/.emacs", "/.emacs.d",
-    "/.config/emacs", "/.config/helix", "/.config/zed", "/.local/share/zed", "/.config/Code", "/.config/Code - OSS",
-    "/.config/VSCodium", "/.config/Cursor", "/.vscode", "/.vscode-oss", "/.cursor", "/.config/JetBrains", "/.config/sublime-text",
-    "/.config/micro", "/.nanorc", "/.config/nano" } },
-  { category = "terminals and multiplexers", paths = {
-    "/.tmux.conf", "/.tmux", "/.config/tmux", "/.screenrc", "/.config/kitty", "/.config/alacritty", "/.config/wezterm",
-    "/.wezterm.lua", "/.config/ghostty", "/.config/foot", "/.config/zellij" } },
-  { category = "environment and version managers", paths = {
-    "/.config/direnv", "/.local/share/direnv", "/.direnvrc", "/.config/mise", "/.local/share/mise", "/.mise.toml", "/.tool-versions",
-    "/.asdf", "/.asdfrc", "/.config/asdf", "/.pyenv", "/.rbenv", "/.nvm", "/.sdkman", "/.jenv", "/.goenv", "/.nodenv", "/.volta",
-    "/.config/nix", "/.nix-profile", "/.nix-defexpr", "/.config/home-manager", "/.config/nixpkgs", "/.config/devbox" } },
-  { category = "toolchains and package manager configuration", paths = {
-    "/.local/bin", "/bin", "/.cargo/bin", "/.cargo/config", "/.cargo/config.toml", "/.cargo/env", "/.rustup", "/go/bin",
-    "/.npmrc", "/.yarnrc", "/.yarnrc.yml", "/.npm-global", "/.config/pip", "/.pip", "/.config/uv", "/.config/pypoetry",
-    "/.gradle/init.d", "/.gradle/gradle.properties", "/.m2/settings.xml", "/.m2/toolchains.xml", "/.bunfig.toml", "/.bun/bin",
-    "/.deno/bin", "/.config/conda", "/.condarc", "/.conda", "/.config/containers", "/.docker/config.json", "/.docker/cli-plugins" } },
-  { category = "agents: hooks, commands, MCP servers", paths = {
-    "/.claude/settings.json", "/.claude/settings.local.json", "/.claude/hooks", "/.claude/commands", "/.claude/agents",
-    "/.claude/skills", "/.claude/plugins", "/.claude/CLAUDE.md", "/.claude/keybindings.json", "/.claude/.credentials.json", "/.claude.json", "/.mcp.json",
-    "/.codex", "/.gemini", "/.config/opencode", "/.aider.conf.yml", "/.config/goose", "/.config/claude" } },
+  {
+    category = "editors and their plugins",
+    paths = {
+      "/.config/nvim",
+      "/.local/share/nvim",
+      "/.vim",
+      "/.vimrc",
+      "/.config/vim",
+      "/.emacs",
+      "/.emacs.d",
+      "/.config/emacs",
+      "/.config/helix",
+      "/.config/zed",
+      "/.local/share/zed",
+      "/.config/Code",
+      "/.config/Code - OSS",
+      "/.config/VSCodium",
+      "/.config/Cursor",
+      "/.vscode",
+      "/.vscode-oss",
+      "/.cursor",
+      "/.config/JetBrains",
+      "/.config/sublime-text",
+      "/.config/micro",
+      "/.nanorc",
+      "/.config/nano",
+    },
+  },
+  {
+    category = "terminals and multiplexers",
+    paths = {
+      "/.tmux.conf",
+      "/.tmux",
+      "/.config/tmux",
+      "/.screenrc",
+      "/.config/kitty",
+      "/.config/alacritty",
+      "/.config/wezterm",
+      "/.wezterm.lua",
+      "/.config/ghostty",
+      "/.config/foot",
+      "/.config/zellij",
+    },
+  },
+  {
+    category = "environment and version managers",
+    paths = {
+      "/.config/direnv",
+      "/.local/share/direnv",
+      "/.direnvrc",
+      "/.config/mise",
+      "/.local/share/mise",
+      "/.mise.toml",
+      "/.tool-versions",
+      "/.asdf",
+      "/.asdfrc",
+      "/.config/asdf",
+      "/.pyenv",
+      "/.rbenv",
+      "/.nvm",
+      "/.sdkman",
+      "/.jenv",
+      "/.goenv",
+      "/.nodenv",
+      "/.volta",
+      "/.config/nix",
+      "/.nix-profile",
+      "/.nix-defexpr",
+      "/.config/home-manager",
+      "/.config/nixpkgs",
+      "/.config/devbox",
+    },
+  },
+  {
+    category = "toolchains and package manager configuration",
+    paths = {
+      "/.local/bin",
+      "/bin",
+      "/.cargo/bin",
+      "/.cargo/config",
+      "/.cargo/config.toml",
+      "/.cargo/env",
+      "/.rustup",
+      "/go/bin",
+      "/.npmrc",
+      "/.yarnrc",
+      "/.yarnrc.yml",
+      "/.npm-global",
+      "/.config/pip",
+      "/.pip",
+      "/.config/uv",
+      "/.config/pypoetry",
+      "/.gradle/init.d",
+      "/.gradle/gradle.properties",
+      "/.m2/settings.xml",
+      "/.m2/toolchains.xml",
+      "/.bunfig.toml",
+      "/.bun/bin",
+      "/.deno/bin",
+      "/.config/conda",
+      "/.condarc",
+      "/.conda",
+      "/.config/containers",
+      "/.docker/config.json",
+      "/.docker/cli-plugins",
+    },
+  },
+  {
+    category = "agents: hooks, commands, MCP servers",
+    paths = {
+      "/.claude/settings.json",
+      "/.claude/settings.local.json",
+      "/.claude/hooks",
+      "/.claude/commands",
+      "/.claude/agents",
+      "/.claude/skills",
+      "/.claude/plugins",
+      "/.claude/CLAUDE.md",
+      "/.claude/keybindings.json",
+      "/.claude/.credentials.json",
+      "/.claude.json",
+      "/.mcp.json",
+      "/.codex",
+      "/.gemini",
+      "/.config/opencode",
+      "/.aider.conf.yml",
+      "/.config/goose",
+      "/.config/claude",
+    },
+  },
 }
 M.WRITABLE_FORBIDDEN_HOME = {}
 for _, group in ipairs(M.CODE_RUNS_OUTSIDE) do
@@ -306,21 +850,68 @@ local function code_runs_category(rel)
   end
 end
 -- System secrets that "unhide" never reveals.
-M.UNHIDE_FORBIDDEN = { "/etc/shadow", "/etc/gshadow", "/etc/shadow-", "/etc/gshadow-", "/etc/sudoers", "/etc/sudoers.d", "/etc/ssh", "/etc/security", "/root" }
+M.UNHIDE_FORBIDDEN = {
+  "/etc/shadow",
+  "/etc/gshadow",
+  "/etc/shadow-",
+  "/etc/gshadow-",
+  "/etc/sudoers",
+  "/etc/sudoers.d",
+  "/etc/ssh",
+  "/etc/security",
+  "/root",
+}
 -- Environment variables that decide which code runs; "env" exceptions for them need the expert flag.
 M.ENV_DANGEROUS_EXACT = {
-  PATH = true, LD_PRELOAD = true, LD_LIBRARY_PATH = true, LD_AUDIT = true, LD_DEBUG_OUTPUT = true, BASH_ENV = true,
-  ENV = true, PYTHONPATH = true, PYTHONSTARTUP = true, PYTHONHOME = true, NODE_OPTIONS = true, NODE_PATH = true,
-  PERL5OPT = true, PERL5LIB = true, RUBYOPT = true, RUBYLIB = true, GIT_SSH_COMMAND = true, GIT_EXEC_PATH = true,
-  CARGO_BUILD_RUSTC_WRAPPER = true, RUSTC_WRAPPER = true, RUSTC_WORKSPACE_WRAPPER = true, RUSTFLAGS = true,
-  SHELLOPTS = true, PS4 = true, PROMPT_COMMAND = true, IFS = true, HOME = true, SHELL = true,
+  PATH = true,
+  LD_PRELOAD = true,
+  LD_LIBRARY_PATH = true,
+  LD_AUDIT = true,
+  LD_DEBUG_OUTPUT = true,
+  BASH_ENV = true,
+  ENV = true,
+  PYTHONPATH = true,
+  PYTHONSTARTUP = true,
+  PYTHONHOME = true,
+  NODE_OPTIONS = true,
+  NODE_PATH = true,
+  PERL5OPT = true,
+  PERL5LIB = true,
+  RUBYOPT = true,
+  RUBYLIB = true,
+  GIT_SSH_COMMAND = true,
+  GIT_EXEC_PATH = true,
+  CARGO_BUILD_RUSTC_WRAPPER = true,
+  RUSTC_WRAPPER = true,
+  RUSTC_WORKSPACE_WRAPPER = true,
+  RUSTFLAGS = true,
+  SHELLOPTS = true,
+  PS4 = true,
+  PROMPT_COMMAND = true,
+  IFS = true,
+  HOME = true,
+  SHELL = true,
 }
 M.ENV_DANGEROUS_PREFIX = { "LD_", "DYLD_", "BASH_FUNC_" }
 
 -- Environment scrub: any variable whose name contains one of these ...
 M.ENV_CONTAINS = {
-  "TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "APIKEY", "CREDENTIAL", "PRIVATE_KEY",
-  "ACCESS_KEY", "AUTH_SOCK", "AGENT_INFO", "PASSPHRASE", "ASKPASS", "JWT", "COOKIE", "BEARER",
+  "TOKEN",
+  "SECRET",
+  "PASSWORD",
+  "PASSWD",
+  "API_KEY",
+  "APIKEY",
+  "CREDENTIAL",
+  "PRIVATE_KEY",
+  "ACCESS_KEY",
+  "AUTH_SOCK",
+  "AGENT_INFO",
+  "PASSPHRASE",
+  "ASKPASS",
+  "JWT",
+  "COOKIE",
+  "BEARER",
 }
 -- ... or ends with one of these (OPENROUTER_KEY, SENTRY_DSN, BW_SESSION, ...) ...
 M.ENV_SUFFIX = { "_KEY", "_DSN", "_SESSION", "_AUTH", "_PWD", "_PASS", "_SECRETS" }
@@ -328,16 +919,43 @@ M.ENV_SUFFIX = { "_KEY", "_DSN", "_SESSION", "_AUTH", "_PWD", "_PASS", "_SECRETS
 M.ENV_SUFFIX_OK = { DESKTOP_SESSION = true }
 -- ... or starts with one of these ...
 M.ENV_PREFIX = {
-  "AWS_", "AZURE_", "GOOGLE_", "GCP_", "GCLOUD_", "DOCKER_", "KUBE", "GH_", "GITHUB_", "GITLAB_",
-  "NPM_", "CARGO_REGISTR", "VAULT_", "OPENAI_", "STRIPE_",
+  "AWS_",
+  "AZURE_",
+  "GOOGLE_",
+  "GCP_",
+  "GCLOUD_",
+  "DOCKER_",
+  "KUBE",
+  "GH_",
+  "GITHUB_",
+  "GITLAB_",
+  "NPM_",
+  "CARGO_REGISTR",
+  "VAULT_",
+  "OPENAI_",
+  "STRIPE_",
 }
 -- ... or is exactly one of these (session bus / display access).
 M.ENV_EXACT = {
-  DATABASE_URL = true, DBUS_SESSION_BUS_ADDRESS = true, DISPLAY = true, WAYLAND_DISPLAY = true,
-  XAUTHORITY = true, SSH_AUTH_SOCK = true, GPG_AGENT_INFO = true, KUBECONFIG = true,
-  NVIM = true, NVIM_LISTEN_ADDRESS = true, -- the editor's RPC socket: full control of the editor
-  MYSQL_PWD = true, SSHPASS = true, -- not a "PASSWORD" by name; a bare PWD would also be the cwd
-  KEY = true, DSN = true, SESSION = true, AUTH = true, SERPAPI = true, PASS = true, PGPASSFILE = true,
+  DATABASE_URL = true,
+  DBUS_SESSION_BUS_ADDRESS = true,
+  DISPLAY = true,
+  WAYLAND_DISPLAY = true,
+  XAUTHORITY = true,
+  SSH_AUTH_SOCK = true,
+  GPG_AGENT_INFO = true,
+  KUBECONFIG = true,
+  NVIM = true,
+  NVIM_LISTEN_ADDRESS = true, -- the editor's RPC socket: full control of the editor
+  MYSQL_PWD = true,
+  SSHPASS = true, -- not a "PASSWORD" by name; a bare PWD would also be the cwd
+  KEY = true,
+  DSN = true,
+  SESSION = true,
+  AUTH = true,
+  SERPAPI = true,
+  PASS = true,
+  PGPASSFILE = true,
 }
 -- ... or whose VALUE looks like a secret (a known token format, a private key, credentials in a URL:
 -- see xyno_sandbox.scan). The name decides first; this catches a token under a name nobody listed.
@@ -348,8 +966,15 @@ M.ENV_CLAUDE_AUTH = { "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_
 
 -- Skipped by the directory walk (still locked when they ARE the project's own .git).
 M.SCAN_SKIP = {
-  target = true, node_modules = true, [".git"] = true, [".cache"] = true,
-  [".venv"] = true, venv = true, __pycache__ = true, [".mypy_cache"] = true, [".tox"] = true,
+  target = true,
+  node_modules = true,
+  [".git"] = true,
+  [".cache"] = true,
+  [".venv"] = true,
+  venv = true,
+  __pycache__ = true,
+  [".mypy_cache"] = true,
+  [".tox"] = true,
 }
 M.HARDLINK_CODE_MAX = 1500 -- files compared with the project's multi-link files (hard-link check of code that runs outside)
 M.SCAN_DEPTH = 8 -- nested .git and workspace members are found down to this depth
@@ -366,10 +991,14 @@ M.SKIP_PERMISSIONS_FLAGS = { "--dangerously-skip-permissions", "--allow-dangerou
 M.ISOLATION_FLAGS = {
   "--die-with-parent",
   "--new-session", -- no controlling tty: TIOCSTI keystroke injection
-  "--unshare-user", "--disable-userns", -- no nested bwrap / unshare -r
+  "--unshare-user",
+  "--disable-userns", -- no nested bwrap / unshare -r
   "--unshare-pid", -- other processes (/proc/PID/environ, /proc/PID/root) invisible
-  "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try",
-  "--cap-drop", "ALL",
+  "--unshare-ipc",
+  "--unshare-uts",
+  "--unshare-cgroup-try",
+  "--cap-drop",
+  "ALL",
 }
 
 -- ----------------------------------------------------------------- probes
@@ -496,7 +1125,13 @@ function M.scrub_names(env, file_login, extra)
     for _, s in ipairs(M.ENV_SUFFIX) do
       hit = hit or (#u > #s and u:sub(-#s) == s and not M.ENV_SUFFIX_OK[u])
     end
-    if not hit and M.ENV_VALUE_SCAN and type(env[name]) == "string" and #env[name] >= 12 and not M.ENV_DANGEROUS_EXACT[u] then
+    if
+      not hit
+      and M.ENV_VALUE_SCAN
+      and type(env[name]) == "string"
+      and #env[name] >= 12
+      and not M.ENV_DANGEROUS_EXACT[u]
+    then
       hit = #require("xyno_sandbox.scan").text(env[name]) > 0
     end
     for _, s in ipairs(extra.prefix or {}) do
@@ -727,7 +1362,14 @@ local function walk(probes, project, depth, opts)
     end
   end
   scan(project, 0)
-  return { gits = gits, members = members, secrets = secrets, links = links, truncated = truncated, sock_truncated = sock_truncated }
+  return {
+    gits = gits,
+    members = members,
+    secrets = secrets,
+    links = links,
+    truncated = truncated,
+    sock_truncated = sock_truncated,
+  }
 end
 
 --- Secret names inside a toolchain tree shown from $HOME: breadth first (the top of the tree is always
@@ -867,7 +1509,10 @@ function M.writable_forbidden(p, home, masked)
   for _, rel in ipairs(M.WRITABLE_FORBIDDEN_HOME) do
     local f = home .. rel
     if inside(p, f) or inside(f, p) then
-      return f .. " would run, or steer tools, outside the sandbox later (" .. (code_runs_category(rel) or "code") .. ")"
+      return f
+        .. " would run, or steer tools, outside the sandbox later ("
+        .. (code_runs_category(rel) or "code")
+        .. ")"
     end
   end
 end
@@ -911,7 +1556,8 @@ function M.validate_exception(exc, ctx)
       return false, "not an environment variable name: " .. v
     end
     if is_dangerous_env(v) and not ctx.expert then
-      return false, v .. " decides which code runs inside the sandbox; refused (setup({ expert_exceptions = true }) allows it)"
+      return false,
+        v .. " decides which code runs inside the sandbox; refused (setup({ expert_exceptions = true }) allows it)"
     end
     if #M.scrub_names({ [v] = "x" }, ctx.file_login == true, ctx.scrub) == 0 then
       return false, v .. " is not stripped by the policy: there is nothing to let through"
@@ -944,9 +1590,12 @@ function M.validate_exception(exc, ctx)
         hit = hit or h.path == p
       end
       if not hit then
-        return false, "the policy does not hide " .. p .. " (nothing to show"
-          .. (ctx.baseline.home_mode == "allowlist" and "; outside the home allowlist it is not visible anyway, see policy.home_allow" or "")
-          .. ")"
+        return false,
+          "the policy does not hide "
+            .. p
+            .. " (nothing to show"
+            .. (ctx.baseline.home_mode == "allowlist" and "; outside the home allowlist it is not visible anyway, see policy.home_allow" or "")
+            .. ")"
       end
     end
     return true
@@ -984,7 +1633,15 @@ function M.claude_share_ok(rel)
     return false
   end
   local first = rel:match("^([^/]+)")
-  for _, bad in ipairs({ ".credentials.json", "projects", "history.jsonl", "daemon", "sessions", "shell-snapshots", "session-env" }) do
+  for _, bad in ipairs({
+    ".credentials.json",
+    "projects",
+    "history.jsonl",
+    "daemon",
+    "sessions",
+    "shell-snapshots",
+    "session-env",
+  }) do
     if first == bad then
       return false
     end
@@ -1011,8 +1668,29 @@ end
 -- leaves placeholders in them (a stray empty .git in /tmp made unrelated tools think /tmp is a
 -- repository).
 M.SHARED_ROOTS = {
-  "/", "/tmp", "/var/tmp", "/dev/shm", "/run", "/var", "/usr", "/etc", "/opt", "/srv", "/mnt", "/media",
-  "/home", "/root", "/boot", "/sys", "/proc", "/dev", "/bin", "/sbin", "/lib", "/lib64", "/nix",
+  "/",
+  "/tmp",
+  "/var/tmp",
+  "/dev/shm",
+  "/run",
+  "/var",
+  "/usr",
+  "/etc",
+  "/opt",
+  "/srv",
+  "/mnt",
+  "/media",
+  "/home",
+  "/root",
+  "/boot",
+  "/sys",
+  "/proc",
+  "/dev",
+  "/bin",
+  "/sbin",
+  "/lib",
+  "/lib64",
+  "/nix",
 }
 
 --- Is `project` a shared system directory (or a parent of $HOME)?
@@ -1084,7 +1762,8 @@ function M.build(input)
     claude_json = nil,
   }
   if shared then
-    plan.notes[#plan.notes + 1] = project .. " is a shared system directory (or contains $HOME): it is not mounted writable"
+    plan.notes[#plan.notes + 1] = project
+      .. " is a shared system directory (or contains $HOME): it is not mounted writable"
       .. " and no guard placeholders are created in it; start the agent in a project directory"
   end
 
@@ -1104,8 +1783,13 @@ function M.build(input)
       end
     end
     plan.net = {
-      dir = dir, sock = dir .. "/proxy.sock", relay = dir .. "/relay.lua", port = net.PORT,
-      nvim = input.nvim or "nvim", hosts = hosts, seen = seen,
+      dir = dir,
+      sock = dir .. "/proxy.sock",
+      relay = dir .. "/relay.lua",
+      port = net.PORT,
+      nvim = input.nvim or "nvim",
+      hosts = hosts,
+      seen = seen,
     }
   end
 
@@ -1140,7 +1824,11 @@ function M.build(input)
   -- applicable exceptions
   local exc_by = { env = {}, unhide = {}, writable = {}, host = {} }
   local vctx = {
-    home = home, state_dir = input.state_dir, probes = probes, file_login = file_login, scrub = policy.scrub,
+    home = home,
+    state_dir = input.state_dir,
+    probes = probes,
+    file_login = file_login,
+    scrub = policy.scrub,
     expert = cfg.expert_exceptions == true,
   }
   for _, e in ipairs(input.exceptions or {}) do
@@ -1175,7 +1863,8 @@ function M.build(input)
     local keep = {}
     for _, e in ipairs(plan.exceptions) do
       if e.kind == "host" then
-        plan.rejected[#plan.rejected + 1] = { kind = e.kind, value = e.value, reason = "the network is open, there is no allowlist" }
+        plan.rejected[#plan.rejected + 1] =
+          { kind = e.kind, value = e.value, reason = "the network is open, there is no allowlist" }
       else
         keep[#keep + 1] = e
       end
@@ -1210,8 +1899,12 @@ function M.build(input)
   local function writable(p, why)
     -- ~/.claude is created by the launcher before bwrap runs, so it counts as present
     if exists(p) or (p == home .. "/.claude" and claude_dir) then
-      plan.writable[#plan.writable + 1] = { path = p, why = why, exception = why == "approved exception" or nil,
-        policy = why == "policy.writable" or nil }
+      plan.writable[#plan.writable + 1] = {
+        path = p,
+        why = why,
+        exception = why == "approved exception" or nil,
+        policy = why == "policy.writable" or nil,
+      }
     end
   end
   if not at_home then
@@ -1341,8 +2034,13 @@ function M.build(input)
         allow(v, "$" .. name)
       end
     end
-    local not_roots = { [home .. "/.local"] = true, [home .. "/.config"] = true, [home .. "/.cache"] = true,
-      [home .. "/.local/share"] = true, [home .. "/.local/state"] = true }
+    local not_roots = {
+      [home .. "/.local"] = true,
+      [home .. "/.config"] = true,
+      [home .. "/.cache"] = true,
+      [home .. "/.local/share"] = true,
+      [home .. "/.local/state"] = true,
+    }
     for dir in (env.PATH or ""):gmatch("[^:]+") do
       local d = M.normalize(dir)
       if d and inside(d, home) and d ~= home then
@@ -1710,17 +2408,23 @@ function M.build(input)
       end
     end
     w = walk(probes, project, tonumber(policy.scan_depth) or M.SCAN_DEPTH, {
-      secrets = globs, except = except, secret_dirs = want_secrets and M.PROJECT_SECRET_DIRS or nil,
+      secrets = globs,
+      except = except,
+      secret_dirs = want_secrets and M.PROJECT_SECRET_DIRS or nil,
       paths = want_secrets and M.PROJECT_SECRET_PATHS or nil,
     })
   end
   if w.sock_truncated then
-    plan.notes[#plan.notes + 1] = ("socket search stopped (more than %d directories or deeper than %d levels below the project):"
-      .. " a unix socket further down stays connectable from inside the sandbox"):format(M.SOCK_MAX_DIRS, M.SOCK_DEPTH)
+    plan.notes[#plan.notes + 1] = (
+      "socket search stopped (more than %d directories or deeper than %d levels below the project):"
+      .. " a unix socket further down stays connectable from inside the sandbox"
+    ):format(M.SOCK_MAX_DIRS, M.SOCK_DEPTH)
   end
   if w.truncated then
-    plan.notes[#plan.notes + 1] = ("directory walk stopped after %d directories: deeper .git and member"
-      .. " directories, secrets and symlinks are not handled"):format(M.SCAN_MAX_DIRS)
+    plan.notes[#plan.notes + 1] = (
+      "directory walk stopped after %d directories: deeper .git and member"
+      .. " directories, secrets and symlinks are not handled"
+    ):format(M.SCAN_MAX_DIRS)
   end
   for _, p in ipairs(w.gits) do
     lock(p, "git")
@@ -1762,11 +2466,19 @@ function M.build(input)
   if not shared and not at_home and probes.scan_project then
     local content = policy.content_scan ~= false
     local sc = probes.scan_project(project, { content = content }) or {}
-    plan.scan = { enabled = content, files = sc.files or 0, truncated = sc.truncated or false, why = sc.why, hits = #(sc.hits or {}),
-      unread = sc.unread }
+    plan.scan = {
+      enabled = content,
+      files = sc.files or 0,
+      truncated = sc.truncated or false,
+      why = sc.why,
+      hits = #(sc.hits or {}),
+      unread = sc.unread,
+    }
     multi = sc.multi or {}
     if sc.truncated then
-      plan.notes[#plan.notes + 1] = ("project scan stopped (%s): files beyond that were not checked for secrets or hard links"):format(sc.why or "limit")
+      plan.notes[#plan.notes + 1] = ("project scan stopped (%s): files beyond that were not checked for secrets or hard links"):format(
+        sc.why or "limit"
+      )
     end
     for _, h in ipairs(sc.hits or {}) do
       local rel = h.path:sub(#project + 2)
@@ -1800,10 +2512,14 @@ function M.build(input)
       if t == "file" then
         nfound = nfound + 1
         local info = probes.stat_info(p)
-        local names = info and info.nlink and info.nlink > 1 and by_inode[tostring(info.dev) .. ":" .. tostring(info.ino)]
+        local names = info
+          and info.nlink
+          and info.nlink > 1
+          and by_inode[tostring(info.dev) .. ":" .. tostring(info.ino)]
         for _, name in ipairs(names or {}) do
           hide(name, "hard link of the credential " .. p)
-          plan.hardlinks[#plan.hardlinks + 1] = { path = p, links = info.nlink, masked = 1, unaccounted = 0, alias = name }
+          plan.hardlinks[#plan.hardlinks + 1] =
+            { path = p, links = info.nlink, masked = 1, unaccounted = 0, alias = name }
         end
       elseif t == "directory" and d < 4 then
         for _, e in ipairs(probes.list(p)) do
@@ -1835,7 +2551,8 @@ function M.build(input)
         covered[name] = true
         if not M.shadow(plan, name) then
           hide(name, "hard link of " .. p .. ", which runs outside the sandbox")
-          plan.hardlinks[#plan.hardlinks + 1] = { path = p, links = info.nlink, masked = 1, unaccounted = 0, alias = name, code = true }
+          plan.hardlinks[#plan.hardlinks + 1] =
+            { path = p, links = info.nlink, masked = 1, unaccounted = 0, alias = name, code = true }
         end
       end
     end
@@ -1877,8 +2594,10 @@ function M.build(input)
       end
     end
     if code.stopped then
-      plan.notes[#plan.notes + 1] = ("hard-link check of files that run outside the sandbox stopped after %d files:"
-        .. " names beyond that were not compared with the project's multi-link files"):format(M.HARDLINK_CODE_MAX)
+      plan.notes[#plan.notes + 1] = (
+        "hard-link check of files that run outside the sandbox stopped after %d files:"
+        .. " names beyond that were not compared with the project's multi-link files"
+      ):format(M.HARDLINK_CODE_MAX)
     end
     -- every other multi-link file: its other names cannot be seen from here
     local unknown = {}
@@ -1895,9 +2614,15 @@ function M.build(input)
     end
     if #unknown > 0 then
       plan.multilinks = { count = #unknown, sample = vim.list_slice(unknown, 1, 5) }
-      plan.notes[#plan.notes + 1] = ("%d project file%s ha%s other hard links that are not a known credential or a file that runs outside the sandbox"
-        .. " (e.g. %s): a write through such a name also changes the other names, wherever they are"):format(
-        #unknown, #unknown == 1 and "" or "s", #unknown == 1 and "s" or "ve", table.concat(vim.list_slice(unknown, 1, 3), ", "))
+      plan.notes[#plan.notes + 1] = (
+        "%d project file%s ha%s other hard links that are not a known credential or a file that runs outside the sandbox"
+        .. " (e.g. %s): a write through such a name also changes the other names, wherever they are"
+      ):format(
+        #unknown,
+        #unknown == 1 and "" or "s",
+        #unknown == 1 and "s" or "ve",
+        table.concat(vim.list_slice(unknown, 1, 3), ", ")
+      )
     end
   end
   if probes.stat_info then
@@ -1913,10 +2638,13 @@ function M.build(input)
           end
         end
         local unaccounted = info.nlink - 1 - found
-        plan.hardlinks[#plan.hardlinks + 1] = { path = h.path, links = info.nlink, masked = found, unaccounted = math.max(unaccounted, 0) }
+        plan.hardlinks[#plan.hardlinks + 1] =
+          { path = h.path, links = info.nlink, masked = found, unaccounted = math.max(unaccounted, 0) }
         if unaccounted > 0 then
-          plan.notes[#plan.notes + 1] = ("%s has %d more hard link%s outside the project (or beyond the scan): the sandbox hides this name only;"
-            .. " another name that the sandbox shows would still read it"):format(h.path, unaccounted, unaccounted == 1 and "" or "s")
+          plan.notes[#plan.notes + 1] = (
+            "%s has %d more hard link%s outside the project (or beyond the scan): the sandbox hides this name only;"
+            .. " another name that the sandbox shows would still read it"
+          ):format(h.path, unaccounted, unaccounted == 1 and "" or "s")
         end
       end
     end
@@ -1983,7 +2711,8 @@ function M.build(input)
       for _, rel in ipairs(aux.empty and M.SUBDIR_GUARD_FILES or {}) do
         local p = o.m.dir .. "/" .. rel
         if budget > 0 and not exists(p) then
-          plan.guard_files[#plan.guard_files + 1] = { path = p, why = "absent " .. rel .. " in a subdirectory", cleanup = true }
+          plan.guard_files[#plan.guard_files + 1] =
+            { path = p, why = "absent " .. rel .. " in a subdirectory", cleanup = true }
           plan.needs.empty_file = aux.empty
           budget = budget - 1
           plan.subdir_masks = plan.subdir_masks + 1
@@ -2042,7 +2771,8 @@ function M.build(input)
       local rp = resolve_user_path(rel, home, project)
       if rp and not gseen[rp] and not exists(rp) and aux.empty then
         gseen[rp] = true
-        plan.guard_files[#plan.guard_files + 1] = { path = rp, why = "absent " .. rel, cleanup = inside(rp, project) or nil }
+        plan.guard_files[#plan.guard_files + 1] =
+          { path = rp, why = "absent " .. rel, cleanup = inside(rp, project) or nil }
         plan.needs.empty_file = aux.empty
       end
     end
@@ -2062,10 +2792,12 @@ function M.build(input)
       end
     end
     if #w.members > 0 then
-      plan.notes[#plan.notes + 1] = ("files that run outside the sandbox (.cargo/config.toml, .envrc, .claude/settings.json, an editor's task file...)"
+      plan.notes[#plan.notes + 1] = (
+        "files that run outside the sandbox (.cargo/config.toml, .envrc, .claude/settings.json, an editor's task file...)"
         .. " that the agent CREATES in a subdirectory: the ones that exist are read-only, %d absent .cargo/.claude/.vscode/.git directories and .envrc/.mcp.json/.nvim.lua/.mise.toml/.exrc files in the"
         .. " shallowest subdirectories are masked, any other new one is moved into a quarantine when the run ends and the project is marked"
-        .. " for review (the next launch is refused until you cleared it)"):format(plan.subdir_masks or 0)
+        .. " for review (the next launch is refused until you cleared it)"
+      ):format(plan.subdir_masks or 0)
     end
   end
   plan.runs_later = {}
@@ -2121,7 +2853,10 @@ function M.build(input)
     local wr = plan.writable[i]
     local sh = wr.policy and M.shadow(plan, wr.path)
     if sh then
-      plan.notes[#plan.notes + 1] = ("policy.writable %s has no effect: %s is mounted read-only afterwards"):format(wr.path, sh)
+      plan.notes[#plan.notes + 1] = ("policy.writable %s has no effect: %s is mounted read-only afterwards"):format(
+        wr.path,
+        sh
+      )
       table.remove(plan.writable, i)
     end
   end
@@ -2166,7 +2901,12 @@ function M.build(input)
   for _, l in ipairs(w.links) do
     if not hseen[l] then
       local target = probes.realpath(l)
-      if target and not inside(target, project) and not inside(target, real_project) and not inside(target, tmp_dir) then
+      if
+        target
+        and not inside(target, project)
+        and not inside(target, real_project)
+        and not inside(target, tmp_dir)
+      then
         local r = visible(target)
         readable = readable + (r and 1 or 0)
         plan.symlinks[#plan.symlinks + 1] = { path = l, target = target, readable = r }
@@ -2177,8 +2917,10 @@ function M.build(input)
     local first = vim.tbl_filter(function(s)
       return s.readable
     end, plan.symlinks)[1]
-    plan.blocked = ("%d project symlink(s) point outside the project and their targets are readable in the sandbox"
-      .. " (first: %s -> %s); policy.symlinks = \"refuse\""):format(readable, first.path, first.target)
+    plan.blocked = (
+      "%d project symlink(s) point outside the project and their targets are readable in the sandbox"
+      .. ' (first: %s -> %s); policy.symlinks = "refuse"'
+    ):format(readable, first.path, first.target)
   end
 
   -- git directories locked (a view of readonly for the preview)
@@ -2201,7 +2943,8 @@ function M.build(input)
     local function add_config(src)
       if not gseen2[src] and probes.stat_type(src) == "file" then
         gseen2[src] = true
-        plan.git_configs[#plan.git_configs + 1] = { src = src, copy = ("%s/%d.config"):format(aux.git_dir, #plan.git_configs + 1) }
+        plan.git_configs[#plan.git_configs + 1] =
+          { src = src, copy = ("%s/%d.config"):format(aux.git_dir, #plan.git_configs + 1) }
       end
     end
     for _, g in ipairs(w.gits) do
@@ -2233,7 +2976,6 @@ function M.build(input)
   plan.empty_file = plan.needs.empty_file
   return plan
 end
-
 
 -- -------------------------------------------------------------------- argv
 
@@ -2268,8 +3010,16 @@ end
 
 -- Number of arguments of the bwrap options the plan uses (for splitting an op into its options).
 M.FLAG_ARITY = {
-  ["--bind"] = 2, ["--ro-bind"] = 2, ["--setenv"] = 2, ["--unsetenv"] = 1, ["--tmpfs"] = 1, ["--dev"] = 1, ["--proc"] = 1,
-  ["--remount-ro"] = 1, ["--chdir"] = 1, ["--cap-drop"] = 1,
+  ["--bind"] = 2,
+  ["--ro-bind"] = 2,
+  ["--setenv"] = 2,
+  ["--unsetenv"] = 1,
+  ["--tmpfs"] = 1,
+  ["--dev"] = 1,
+  ["--proc"] = 1,
+  ["--remount-ro"] = 1,
+  ["--chdir"] = 1,
+  ["--cap-drop"] = 1,
 }
 
 --- Split the arguments of an op into single bwrap options: { { "--tmpfs", "/x" }, { "--remount-ro", "/x" } }.
@@ -2293,7 +3043,11 @@ function M.ops(plan)
   local function add(section, why, ...)
     ops[#ops + 1] = { section = section, why = why, args = { ... } }
   end
-  ops[#ops + 1] = { section = "isolation", why = "namespaces, capabilities, no controlling terminal", args = copy_list(plan.flags or {}) }
+  ops[#ops + 1] = {
+    section = "isolation",
+    why = "namespaces, capabilities, no controlling terminal",
+    args = copy_list(plan.flags or {}),
+  }
   add("base", "the whole filesystem, read-only", "--ro-bind", "/", "/")
   add("base", "private device nodes", "--dev", "/dev")
   add("base", "fresh /proc of the sandbox's own pid namespace", "--proc", "/proc")
@@ -2309,7 +3063,7 @@ function M.ops(plan)
     add("homes", h.why .. ": hidden (empty tmpfs)", "--tmpfs", h.path)
   end
   if homes.rebind_home then
-    add("homes", "your own home, read-only again (home = \"denylist\")", "--ro-bind", plan.home, plan.home)
+    add("homes", 'your own home, read-only again (home = "denylist")', "--ro-bind", plan.home, plan.home)
   end
   for _, a in ipairs(homes.allow) do
     add("homes", a.why .. " (read-only)", "--ro-bind", a.path, a.path)
@@ -2336,7 +3090,12 @@ function M.ops(plan)
   end
   local cl = plan.claude or { mode = "full", shared = {} }
   if cl.mode == "minimal" then
-    add("claude", "agent state of this run only (nothing of the real ~/.claude, thrown away at exit)", "--tmpfs", plan.home .. "/.claude")
+    add(
+      "claude",
+      "agent state of this run only (nothing of the real ~/.claude, thrown away at exit)",
+      "--tmpfs",
+      plan.home .. "/.claude"
+    )
     if cl.credentials then
       add("claude", "the agent's login, read-only", "--ro-bind", cl.credentials, cl.credentials)
     end

@@ -20,8 +20,19 @@ after_each(function()
 end)
 
 local DIRS = {
-  [".cargo"] = true, [".vscode"] = true, [".zed"] = true, [".idea"] = true, [".helix"] = true, [".husky"] = true,
-  [".devcontainer"] = true, [".mise"] = true, [".config/mise"] = true, [".claude"] = true, [".git"] = true, [".githooks"] = true, [".mvn"] = true,
+  [".cargo"] = true,
+  [".vscode"] = true,
+  [".zed"] = true,
+  [".idea"] = true,
+  [".helix"] = true,
+  [".husky"] = true,
+  [".devcontainer"] = true,
+  [".mise"] = true,
+  [".config/mise"] = true,
+  [".claude"] = true,
+  [".git"] = true,
+  [".githooks"] = true,
+  [".mvn"] = true,
 }
 local function is_dir_entry(rel, project_names)
   rel = rel:gsub("^/", "")
@@ -29,11 +40,29 @@ local function is_dir_entry(rel, project_names)
     return DIRS[rel] or false
   end
   local base = vim.fs.basename(rel)
-  if base:match("%.json$") or base:match("%.jsonl$") or base:match("%.toml$") or base:match("%.conf$") or base:match("%.md$") then
+  if
+    base:match("%.json$")
+    or base:match("%.jsonl$")
+    or base:match("%.toml$")
+    or base:match("%.conf$")
+    or base:match("%.md$")
+  then
     return false
   end
-  for _, f in ipairs({ ".vault-token", ".netrc", ".git-credentials", ".npmrc", ".pypirc", ".Xauthority", ".pulse-cookie", "credentials",
-    "adbkey", ".boto", "fish_history", ".lesshst" }) do
+  for _, f in ipairs({
+    ".vault-token",
+    ".netrc",
+    ".git-credentials",
+    ".npmrc",
+    ".pypirc",
+    ".Xauthority",
+    ".pulse-cookie",
+    "credentials",
+    "adbkey",
+    ".boto",
+    "fish_history",
+    ".lesshst",
+  }) do
     if base == f then
       return false
     end
@@ -81,7 +110,11 @@ describe("every entry of the policy tables is effective in a real run", function
         paths[#paths + 1] = p
       end
     end
-    local globs = { ["/.*_history*"] = "/.xyno_r6_history", ["/.lesshst"] = "/.lesshst", ["/.config/fish/fish_history"] = "/.config/fish/fish_history" }
+    local globs = {
+      ["/.*_history*"] = "/.xyno_r6_history",
+      ["/.lesshst"] = "/.lesshst",
+      ["/.config/fish/fish_history"] = "/.config/fish/fish_history",
+    }
     for _, g in ipairs(EXPECT.HIDDEN_GLOBS) do
       local rel = assert(globs[g], "add a sample name for the glob " .. g)
       if mk(home .. rel, false, "CANARY-" .. g) then
@@ -116,8 +149,9 @@ describe("every entry of the policy tables is effective in a real run", function
     end
     H.ok(n > 100, "the glob table is not empty")
     local listing = table.concat(paths, "\n")
-    local script = "while IFS= read -r p; do if grep -rsl CANARY \"$p\" >/dev/null 2>&1; then echo \"LEAK:$p\"; fi; done <<'EOF_LIST'\n"
-      .. listing .. "\nEOF_LIST\necho done"
+    local script = 'while IFS= read -r p; do if grep -rsl CANARY "$p" >/dev/null 2>&1; then echo "LEAK:$p"; fi; done <<\'EOF_LIST\'\n'
+      .. listing
+      .. "\nEOF_LIST\necho done"
     local cmd, err, h = sb.wrap({ "bash", "-c", script }, project, H.tmpdir())
     H.ok(cmd, err)
     local r = vim.system(cmd, { text = true, cwd = project }):wait(120000)
@@ -144,9 +178,21 @@ describe("every entry of the policy tables is effective in a real run", function
       targets[#targets + 1] = { p, as_dir }
     end
     for _, rel in ipairs(EXPECT.HOME_READONLY) do
-      plant(home, rel, DIRS[rel:gsub("^/", "")] or rel:match("/hooks$") or rel:match("/commands$") or rel:match("/agents$")
-        or rel:match("/skills$") or rel:match("/plugins$") or rel:match("/output%-styles$") or rel:match("/ide$")
-        or rel:match("/rules$") or rel:match("/chrome$") or rel:match("/security$"))
+      plant(
+        home,
+        rel,
+        DIRS[rel:gsub("^/", "")]
+          or rel:match("/hooks$")
+          or rel:match("/commands$")
+          or rel:match("/agents$")
+          or rel:match("/skills$")
+          or rel:match("/plugins$")
+          or rel:match("/output%-styles$")
+          or rel:match("/ide$")
+          or rel:match("/rules$")
+          or rel:match("/chrome$")
+          or rel:match("/security$")
+      )
     end
     for _, rel in ipairs(EXPECT.PROJECT_READONLY) do
       plant(project, rel, DIRS[rel] or false)
@@ -165,7 +211,10 @@ describe("every entry of the policy tables is effective in a real run", function
     -- absent names that must not be creatable at the project root
     for _, rel in ipairs(EXPECT.PROJECT_GUARD_FILES) do
       lines[#lines + 1] = ("if [ ! -e '%s' ] && ( : > '%s' ) 2>/dev/null; then echo 'CREATED:%s'; fi"):format(
-        project .. "/" .. rel .. ".absent-check", project .. "/" .. rel, rel)
+        project .. "/" .. rel .. ".absent-check",
+        project .. "/" .. rel,
+        rel
+      )
     end
     lines[#lines + 1] = "echo done"
     -- (the guard files / masks are only for ABSENT names: use a second project where none exists)
@@ -209,7 +258,8 @@ describe("every entry of the policy tables is effective in a real run", function
     for _, k in ipairs(plan.RUN_KEEP) do
       keep[vim.fs.basename(k)] = true
     end
-    local cmd, err, h = sb.wrap({ "bash", "-c", "ls -A /run; echo ===; ls -A /var/tmp; echo done" }, project, H.tmpdir())
+    local cmd, err, h =
+      sb.wrap({ "bash", "-c", "ls -A /run; echo ===; ls -A /var/tmp; echo done" }, project, H.tmpdir())
     H.ok(cmd, err)
     local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
     h.release()
@@ -242,9 +292,16 @@ describe("every entry of the policy tables is effective in a real run", function
       vim.list_extend(code, g.paths)
     end
     local actual = vim.tbl_extend("force", {}, {
-      HIDDEN = plan.HIDDEN, HIDDEN_GLOBS = plan.HIDDEN_GLOBS, HOME_READONLY = plan.HOME_READONLY, PROJECT_READONLY = plan.PROJECT_READONLY,
-      MEMBER_READONLY = plan.MEMBER_READONLY, PROJECT_SECRET_DIRS = plan.PROJECT_SECRET_DIRS, PROJECT_SECRET_PATHS = plan.PROJECT_SECRET_PATHS,
-      MASKED_SYSTEM = plan.MASKED_SYSTEM, PROJECT_GUARD_FILES = plan.PROJECT_GUARD_FILES, PROJECT_MASK_IF_ABSENT = plan.PROJECT_MASK_IF_ABSENT,
+      HIDDEN = plan.HIDDEN,
+      HIDDEN_GLOBS = plan.HIDDEN_GLOBS,
+      HOME_READONLY = plan.HOME_READONLY,
+      PROJECT_READONLY = plan.PROJECT_READONLY,
+      MEMBER_READONLY = plan.MEMBER_READONLY,
+      PROJECT_SECRET_DIRS = plan.PROJECT_SECRET_DIRS,
+      PROJECT_SECRET_PATHS = plan.PROJECT_SECRET_PATHS,
+      MASKED_SYSTEM = plan.MASKED_SYSTEM,
+      PROJECT_GUARD_FILES = plan.PROJECT_GUARD_FILES,
+      PROJECT_MASK_IF_ABSENT = plan.PROJECT_MASK_IF_ABSENT,
       CODE_RUNS_OUTSIDE = code,
     })
     for name, list in pairs(actual) do

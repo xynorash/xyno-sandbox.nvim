@@ -12,8 +12,12 @@ local function fakefs(entries, lines)
     fs[p] = t
   end
   local probes = {
-    stat_type = function(p) return fs[p] end,
-    exists = function(p) return fs[p] ~= nil end,
+    stat_type = function(p)
+      return fs[p]
+    end,
+    exists = function(p)
+      return fs[p] ~= nil
+    end,
     list = function(dir)
       local out, prefix = {}, dir == "/" and "/" or (dir .. "/")
       for p, t in pairs(fs) do
@@ -21,7 +25,9 @@ local function fakefs(entries, lines)
           out[#out + 1] = { p:sub(#prefix + 1), t }
         end
       end
-      table.sort(out, function(a, b) return a[1] < b[1] end)
+      table.sort(out, function(a, b)
+        return a[1] < b[1]
+      end)
       return out
     end,
     glob = function(pat)
@@ -35,14 +41,21 @@ local function fakefs(entries, lines)
       table.sort(out)
       return out
     end,
-    read_line = function(p) return (lines or {})[p] end,
-    realpath = function(p) return fs[p] and p or nil end,
+    read_line = function(p)
+      return (lines or {})[p]
+    end,
+    realpath = function(p)
+      return fs[p] and p or nil
+    end,
   }
   return probes, fs
 end
 
 local BASE = {
-  [HOME] = "directory", [HOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory",
+  [HOME] = "directory",
+  [HOME .. "/.claude"] = "directory",
+  [PROJECT] = "directory",
+  [TMP] = "directory",
   [PROJECT .. "/.git"] = "directory",
 }
 
@@ -60,7 +73,12 @@ local function input(over, fs_entries, lines)
     over.config = vim.tbl_extend("force", { network = "open", home = "denylist" }, over.config)
   end
   return vim.tbl_extend("force", {
-    project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, probes = probes,
+    project = PROJECT,
+    tmp_dir = TMP,
+    cwd = PROJECT,
+    home = HOME,
+    uid = 1000,
+    probes = probes,
     env = { PATH = "/bin", HOME = HOME, GITHUB_TOKEN = "SECRET-VALUE-1", MY_API_KEY = "SECRET-VALUE-2" },
     cmd = { "agent", "--dangerously-skip-permissions", "-p", "do it" },
     aux = { empty = "/aux/empty", claude_json = "/aux/claude.json" },
@@ -109,7 +127,9 @@ describe("plan contents", function()
 
   it("hidden credential paths: dirs as tmpfs, files as empty files, only the existing ones", function()
     local p = plan.build(input({}, {
-      [HOME .. "/.ssh"] = "directory", [HOME .. "/.netrc"] = "file", [HOME .. "/.bash_history"] = "file",
+      [HOME .. "/.ssh"] = "directory",
+      [HOME .. "/.netrc"] = "file",
+      [HOME .. "/.bash_history"] = "file",
     }))
     local by = {}
     for _, h in ipairs(p.hidden) do
@@ -151,7 +171,12 @@ describe("plan contents", function()
     H.eq({ "env", "-i" }, vim.list_slice(a, 1, 2))
     H.has(a, "bwrap")
     H.has(a, "PATH=/bin")
-    H.no_match(table.concat(a, "\0"), "SECRET-VALUE", true, "stripped values must not appear anywhere in the command line")
+    H.no_match(
+      table.concat(a, "\0"),
+      "SECRET-VALUE",
+      true,
+      "stripped values must not appear anywhere in the command line"
+    )
     H.no_match(table.concat(a, "\0"), "GITHUB_TOKEN=", true)
     for _, w in ipairs(p.writable) do
       H.has(table.concat(a, "\0"), "--bind\0" .. w.path .. "\0" .. w.path)
@@ -159,7 +184,10 @@ describe("plan contents", function()
     for _, n in ipairs(p.env_strip) do
       H.has(table.concat(a, "\0"), "--unsetenv\0" .. n)
     end
-    H.eq({ "--chdir", PROJECT, "--", "agent", "--dangerously-skip-permissions", "-p", "do it" }, vim.list_slice(a, #a - 6))
+    H.eq(
+      { "--chdir", PROJECT, "--", "agent", "--dangerously-skip-permissions", "-p", "do it" },
+      vim.list_slice(a, #a - 6)
+    )
   end)
 
   it("masks absent project dirs and guards absent project files (.envrc, .vscode)", function()
@@ -177,8 +205,11 @@ describe("plan contents", function()
   end)
 
   it("a present .envrc / .vscode is locked instead of guarded", function()
-    local p = plan.build(input({}, { [PROJECT .. "/.envrc"] = "file", [PROJECT .. "/.vscode"] = "directory",
-      [PROJECT .. "/.vscode/tasks.json"] = "file" }))
+    local p = plan.build(input({}, {
+      [PROJECT .. "/.envrc"] = "file",
+      [PROJECT .. "/.vscode"] = "directory",
+      [PROJECT .. "/.vscode/tasks.json"] = "file",
+    }))
     H.has(paths(p.readonly), PROJECT .. "/.envrc")
     H.has(paths(p.readonly), PROJECT .. "/.vscode")
     H.not_ok(vim.tbl_contains(paths(p.guard_files), PROJECT .. "/.envrc"))
@@ -250,8 +281,11 @@ describe("nested git directories and members", function()
 
   it("skips target, node_modules and hidden dirs for members", function()
     local p = plan.build(input({}, {
-      [PROJECT .. "/target"] = "directory", [PROJECT .. "/target/x"] = "directory", [PROJECT .. "/target/x/.cargo"] = "directory",
-      [PROJECT .. "/.hid"] = "directory", [PROJECT .. "/.hid/.cargo"] = "directory",
+      [PROJECT .. "/target"] = "directory",
+      [PROJECT .. "/target/x"] = "directory",
+      [PROJECT .. "/target/x/.cargo"] = "directory",
+      [PROJECT .. "/.hid"] = "directory",
+      [PROJECT .. "/.hid/.cargo"] = "directory",
     }))
     H.not_ok(vim.tbl_contains(paths(p.readonly), PROJECT .. "/target/x/.cargo"))
     H.not_ok(vim.tbl_contains(paths(p.readonly), PROJECT .. "/.hid/.cargo"))
@@ -277,8 +311,12 @@ end)
 
 describe("policy lists", function()
   it("policy.readonly locks extra project-relative and absolute paths when present", function()
-    local p = plan.build(input({ config = { policy = { readonly = { "deploy.sh", "/h/shared/x", "~/.toolrc", "missing" } } } },
-      { [PROJECT .. "/deploy.sh"] = "file", ["/h/shared/x"] = "file", [HOME .. "/.toolrc"] = "file" }))
+    local p = plan.build(
+      input(
+        { config = { policy = { readonly = { "deploy.sh", "/h/shared/x", "~/.toolrc", "missing" } } } },
+        { [PROJECT .. "/deploy.sh"] = "file", ["/h/shared/x"] = "file", [HOME .. "/.toolrc"] = "file" }
+      )
+    )
     H.has(paths(p.readonly), PROJECT .. "/deploy.sh")
     H.has(paths(p.readonly), "/h/shared/x")
     H.has(paths(p.readonly), HOME .. "/.toolrc")
@@ -286,8 +324,14 @@ describe("policy lists", function()
   end)
 
   it("policy.writable and policy.hidden add existing paths", function()
-    local p = plan.build(input({ config = { policy = { writable = { "/data/out" }, hidden = { "~/.secrets", "/data/priv" } } } },
-      { ["/data"] = "directory", ["/data/out"] = "directory", [HOME .. "/.secrets"] = "directory", ["/data/priv"] = "file" }))
+    local p = plan.build(
+      input({ config = { policy = { writable = { "/data/out" }, hidden = { "~/.secrets", "/data/priv" } } } }, {
+        ["/data"] = "directory",
+        ["/data/out"] = "directory",
+        [HOME .. "/.secrets"] = "directory",
+        ["/data/priv"] = "file",
+      })
+    )
     H.has(paths(p.writable), "/data/out")
     H.has(paths(p.hidden), HOME .. "/.secrets")
     H.has(paths(p.hidden), "/data/priv")
@@ -327,19 +371,28 @@ describe("exceptions in the plan", function()
 
   it("writable adds an existing path; unknown paths and the dangerous ones are rejected", function()
     local fs = { ["/data"] = "directory" }
-    local p = plan.build(input({ exceptions = {
-      { kind = "writable", value = "/data" }, { kind = "writable", value = "/nope" },
-      { kind = "writable", value = "/" }, { kind = "writable", value = HOME }, { kind = "writable", value = "/data/../etc" },
-      { kind = "env", value = "bad name" }, { kind = "frob", value = "x" },
-    } }, fs))
+    local p = plan.build(input({
+      exceptions = {
+        { kind = "writable", value = "/data" },
+        { kind = "writable", value = "/nope" },
+        { kind = "writable", value = "/" },
+        { kind = "writable", value = HOME },
+        { kind = "writable", value = "/data/../etc" },
+        { kind = "env", value = "bad name" },
+        { kind = "frob", value = "x" },
+      },
+    }, fs))
     H.has(paths(p.writable), "/data")
     H.eq(1, #p.exceptions)
     H.eq(6, #p.rejected)
   end)
 
   it("a writable exception cannot cover the approvals themselves", function()
-    local ok, why = plan.validate_exception({ kind = "writable", value = HOME .. "/.local/state/nvim" },
-      { home = HOME, state_dir = HOME .. "/.local/state/nvim/xyno-sandbox", probes = fakefs({ [HOME .. "/.local/state/nvim"] = "directory" }) })
+    local ok, why = plan.validate_exception({ kind = "writable", value = HOME .. "/.local/state/nvim" }, {
+      home = HOME,
+      state_dir = HOME .. "/.local/state/nvim/xyno-sandbox",
+      probes = fakefs({ [HOME .. "/.local/state/nvim"] = "directory" }),
+    })
     H.eq(false, ok)
     H.match(why, "approvals", true)
   end)

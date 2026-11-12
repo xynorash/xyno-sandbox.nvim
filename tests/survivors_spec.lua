@@ -24,9 +24,15 @@ local HOME, PROJECT, TMP = "/h", "/h/proj", "/h/scratch"
 
 local function fakefs(entries)
   return {
-    stat_type = function(x) return entries[x] end,
-    lstat_type = function(x) return entries[x] end,
-    exists = function(x) return entries[x] ~= nil end,
+    stat_type = function(x)
+      return entries[x]
+    end,
+    lstat_type = function(x)
+      return entries[x]
+    end,
+    exists = function(x)
+      return entries[x] ~= nil
+    end,
     list = function(dir)
       local out, prefix = {}, dir == "/" and "/" or (dir .. "/")
       for x, t in pairs(entries) do
@@ -34,7 +40,9 @@ local function fakefs(entries)
           out[#out + 1] = { x:sub(#prefix + 1), t }
         end
       end
-      table.sort(out, function(a, b) return a[1] < b[1] end)
+      table.sort(out, function(a, b)
+        return a[1] < b[1]
+      end)
       return out
     end,
     glob = function(pat)
@@ -48,19 +56,33 @@ local function fakefs(entries)
       table.sort(out)
       return out
     end,
-    read_line = function() return nil end,
-    realpath = function(x) return entries[x] and x or nil end,
+    read_line = function()
+      return nil
+    end,
+    realpath = function(x)
+      return entries[x] and x or nil
+    end,
   }
 end
 
 local function build(extra, over)
   local entries = vim.tbl_extend("force", {
-    [HOME] = "directory", [HOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory",
+    [HOME] = "directory",
+    [HOME .. "/.claude"] = "directory",
+    [PROJECT] = "directory",
+    [TMP] = "directory",
     [PROJECT .. "/.git"] = "directory",
   }, extra or {})
   return plan.build(vim.tbl_extend("force", {
-    project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, probes = fakefs(entries),
-    env = { PATH = "/usr/bin" }, cmd = { "agent" }, aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
+    project = PROJECT,
+    tmp_dir = TMP,
+    cwd = PROJECT,
+    home = HOME,
+    uid = 1000,
+    probes = fakefs(entries),
+    env = { PATH = "/usr/bin" },
+    cmd = { "agent" },
+    aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
     config = { network = "open", home = "denylist" },
   }, over or {}))
 end
@@ -68,8 +90,10 @@ end
 describe("git configs of submodules", function()
   it("are sanitized too: <gitdir>/modules/*/config gets a copy", function()
     local p = build({
-      [PROJECT .. "/.git/config"] = "file", [PROJECT .. "/.git/modules"] = "directory",
-      [PROJECT .. "/.git/modules/sub"] = "directory", [PROJECT .. "/.git/modules/sub/config"] = "file",
+      [PROJECT .. "/.git/config"] = "file",
+      [PROJECT .. "/.git/modules"] = "directory",
+      [PROJECT .. "/.git/modules/sub"] = "directory",
+      [PROJECT .. "/.git/modules/sub/config"] = "file",
     })
     local srcs = {}
     for _, g in ipairs(p.git_configs) do
@@ -90,7 +114,8 @@ describe("sanitize.git_config, every branch", function()
     H.match(out, "url = https://h/x", true)
   end)
   it("drops all continuation lines of a dropped value, not only the first", function()
-    local out = clean('[http]\n\textraHeader = Authorization: a \\\n\t  second-secret \\\n\t  third-secret\n\tproxy = http://p\n')
+    local out =
+      clean("[http]\n\textraHeader = Authorization: a \\\n\t  second-secret \\\n\t  third-secret\n\tproxy = http://p\n")
     H.no_match(out, "second-secret", true)
     H.no_match(out, "third-secret", true)
     H.match(out, "proxy = http://p", true)
@@ -99,7 +124,7 @@ describe("sanitize.git_config, every branch", function()
     local out = clean('[CREDENTIAL "https://h"]\n\tHelper = store --file=/home/u/.secret\n\tusername = bob\n')
     H.no_match(out, ".secret", true)
     H.match(out, "username = bob", true)
-    local out2 = clean('[HTTP]\n\tExtraHeader = Authorization: Bearer x\n')
+    local out2 = clean("[HTTP]\n\tExtraHeader = Authorization: Bearer x\n")
     H.no_match(out2, "Bearer", true)
   end)
 end)
@@ -140,7 +165,10 @@ describe("host directories that hold sockets", function()
 
   it("a socket named by $NVIM / $NVIM_LISTEN_ADDRESS outside the masked directories is hidden", function()
     for _, var in ipairs({ "NVIM", "NVIM_LISTEN_ADDRESS" }) do
-      local p = build({ ["/srv-x"] = "directory", ["/srv-x/nvim.sock"] = "socket" }, { env = { PATH = "/usr/bin", [var] = "/srv-x/nvim.sock" } })
+      local p = build(
+        { ["/srv-x"] = "directory", ["/srv-x/nvim.sock"] = "socket" },
+        { env = { PATH = "/usr/bin", [var] = "/srv-x/nvim.sock" } }
+      )
       local found
       for _, h in ipairs(p.hidden) do
         if h.path == "/srv-x/nvim.sock" then
@@ -161,15 +189,27 @@ describe("the relay", function()
     local port = 20000 + (uv.hrtime() % 20000)
     local ready = dir .. "/ready"
     local script = ('"%s" -u NONE -i NONE --headless -l "%s" "%s" %d "%s" </dev/null >/dev/null 2>&1 & wait'):format(
-      vim.v.progpath, RELAY, dir .. "/net/proxy.sock", port, ready)
+      vim.v.progpath,
+      RELAY,
+      dir .. "/net/proxy.sock",
+      port,
+      ready
+    )
     local sh = vim.system({ "sh", "-c", script, "xyno-r3-parent" })
-    H.ok(vim.wait(10000, function() return uv.fs_stat(ready) ~= nil end, 50), "the relay did not come up")
+    H.ok(
+      vim.wait(10000, function()
+        return uv.fs_stat(ready) ~= nil
+      end, 50),
+      "the relay did not come up"
+    )
     return { sh = sh, marker = dir .. "/net/proxy.sock", port = port }
   end
 
   it("exits on SIGHUP", function()
     local r = start()
-    local ps = vim.tbl_filter(function(p) return not p[2]:match("^sh ") end, H.procs(r.marker))
+    local ps = vim.tbl_filter(function(p)
+      return not p[2]:match("^sh ")
+    end, H.procs(r.marker))
     H.eq(1, #ps)
     uv.kill(ps[1][1], 1)
     H.eq({}, H.wait_gone(r.marker, 4000), "the relay ignored SIGHUP")

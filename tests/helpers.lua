@@ -143,7 +143,11 @@ function H.need_sandbox()
   local ok, why = H.sandbox_available()
   if not ok then
     if vim.env.XYNO_TEST_SANDBOX_OK == "1" then
-      error("bubblewrap works on this machine (the runner probed it) but the plugin cannot start a sandbox: " .. tostring(why), 2)
+      error(
+        "bubblewrap works on this machine (the runner probed it) but the plugin cannot start a sandbox: "
+          .. tostring(why),
+        2
+      )
     end
     harness.skip(why)
   end

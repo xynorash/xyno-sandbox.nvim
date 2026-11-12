@@ -33,16 +33,32 @@ end
 
 describe("sanitize.git_config", function()
   local SRC = table.concat({
-    "[core]", "\trepositoryformatversion = 0",
-    '[remote "origin"]', "\turl = https://user:" .. TOKEN .. "@github.com/x/y.git", "\tfetch = +refs/heads/*:refs/remotes/origin/*",
-    '[remote "bare"]', "\turl = https://" .. TOKEN .. "@gitlab.com/x/z.git", "\tpushurl = ssh://git:hunter2pw@example.org/z.git",
-    '[remote "scp"]', "\turl = git@github.com:x/y.git",
-    "[credential]", "\thelper = store --file=/home/u/.secret-creds",
-    '[credential "https://github.com"]', "\thelper = !f() { echo password=x; }; f", "\tusername = bob",
-    "[http]", "\textraHeader = Authorization: Bearer abc123",
-    '[http "https://git.example.com/"]', "\textraheader = Authorization: Basic Zm9vOmJhcg== \\", "\t  continued-secret",
-    '[url "https://' .. TOKEN .. '@github.com/"]', "\tinsteadOf = gh:",
-    "[user]", "\tname = Bob", "\temail = bob@example.org", "",
+    "[core]",
+    "\trepositoryformatversion = 0",
+    '[remote "origin"]',
+    "\turl = https://user:" .. TOKEN .. "@github.com/x/y.git",
+    "\tfetch = +refs/heads/*:refs/remotes/origin/*",
+    '[remote "bare"]',
+    "\turl = https://" .. TOKEN .. "@gitlab.com/x/z.git",
+    "\tpushurl = ssh://git:hunter2pw@example.org/z.git",
+    '[remote "scp"]',
+    "\turl = git@github.com:x/y.git",
+    "[credential]",
+    "\thelper = store --file=/home/u/.secret-creds",
+    '[credential "https://github.com"]',
+    "\thelper = !f() { echo password=x; }; f",
+    "\tusername = bob",
+    "[http]",
+    "\textraHeader = Authorization: Bearer abc123",
+    '[http "https://git.example.com/"]',
+    "\textraheader = Authorization: Basic Zm9vOmJhcg== \\",
+    "\t  continued-secret",
+    '[url "https://' .. TOKEN .. '@github.com/"]',
+    "\tinsteadOf = gh:",
+    "[user]",
+    "\tname = Bob",
+    "\temail = bob@example.org",
+    "",
   }, "\n")
 
   it("removes URL credentials of http(s) remotes, the password of other schemes, and keeps the rest", function()
@@ -53,7 +69,7 @@ describe("sanitize.git_config", function()
     H.match(out, "url = https://gitlab.com/x/z.git", true)
     H.match(out, "pushurl = ssh://git@example.org/z.git", true)
     H.match(out, "url = git@github.com:x/y.git", true, "an scp-style remote has no secret in it")
-    H.match(out, "[url \"https://github.com/\"]", true, "the token in a [url] section header is gone too")
+    H.match(out, '[url "https://github.com/"]', true, "the token in a [url] section header is gone too")
     H.match(out, "insteadOf = gh:", true)
     H.match(out, "name = Bob", true)
     H.match(out, "fetch = +refs/heads/*:refs/remotes/origin/*", true)
@@ -74,7 +90,7 @@ describe("sanitize.git_config", function()
     local out, changes = sanitize.git_config(SRC)
     H.no_match(table.concat(changes, "\n"), TOKEN, true)
     H.eq(out, (sanitize.git_config(out)))
-    local clean = "[core]\n\tbare = false\n[remote \"o\"]\n\turl = https://github.com/a/b.git\n"
+    local clean = '[core]\n\tbare = false\n[remote "o"]\n\turl = https://github.com/a/b.git\n'
     local same, none = sanitize.git_config(clean)
     H.eq(clean, same)
     H.eq({}, none)
@@ -98,7 +114,8 @@ describe("a git config inside the sandbox", function()
     local project = H.fixture("basic", { git = true })
     H.git(project, "remote", "add", "origin", "https://bob:" .. TOKEN .. "@github.com/x/y.git")
     H.git(project, "config", "credential.helper", "store --file=/home/u/.hidden-store")
-    local out, h = inside("cat .git/config; git remote -v; git config --get credential.helper; echo end", project, H.tmpdir())
+    local out, h =
+      inside("cat .git/config; git remote -v; git config --get credential.helper; echo end", project, H.tmpdir())
     local copy_dir = h.plan.needs.git_dir
     H.ok(vim.uv.fs_stat(copy_dir), "the sanitized copies exist while the sandbox runs")
     h.release()
@@ -115,7 +132,11 @@ describe("a git config inside the sandbox", function()
       return harness.skip("git not installed")
     end
     local project = H.fixture("basic", { git = true })
-    local out, h = inside("git config user.name hacked 2>&1; echo x > .git/config 2>&1; git log --oneline | head -2", project, H.tmpdir())
+    local out, h = inside(
+      "git config user.name hacked 2>&1; echo x > .git/config 2>&1; git log --oneline | head -2",
+      project,
+      H.tmpdir()
+    )
     h.release()
     H.match(out, "init", true, out)
     H.no_match(table.concat(vim.fn.readfile(project .. "/.git/config"), "\n"), "hacked", true)
@@ -136,7 +157,12 @@ describe("a git config inside the sandbox", function()
     local home = vim.uv.os_homedir()
     local had = vim.uv.fs_stat(home .. "/.gitconfig") ~= nil
     H.ok(not had, "the suite's fake home has no .gitconfig")
-    write(home .. "/.gitconfig", '[url "https://' .. TOKEN .. '@github.com/"]\n\tinsteadOf = gh:\n[credential]\n\thelper = store\n[user]\n\tname = Zed\n')
+    write(
+      home .. "/.gitconfig",
+      '[url "https://'
+        .. TOKEN
+        .. '@github.com/"]\n\tinsteadOf = gh:\n[credential]\n\thelper = store\n[user]\n\tname = Zed\n'
+    )
     local project = H.tmpdir()
     local out, h = inside('cat "$HOME/.gitconfig"', project, H.tmpdir())
     h.release()
@@ -150,17 +176,51 @@ end)
 
 describe("default secret names", function()
   it("hide the files that tools and frameworks keep credentials in", function()
-    for _, n in ipairs({ ".dev.vars", "serviceAccountKey.json", "google-services.json", "GoogleService-Info.plist", "wp-config.php",
-      "token.txt", "api_keys.txt", "application-prod.properties", "application-production.yml", ".pgpass", ".my.cnf", "master.key",
-      "local.settings.json", "appsettings.Production.json", "firebase-adminsdk-abc12.json", "password.txt", "api-key.json" }) do
-      H.ok(plan.is_secret_name(n, plan.PROJECT_SECRET_GLOBS, plan.PROJECT_SECRET_EXCEPT), n .. " should be hidden by name")
+    for _, n in ipairs({
+      ".dev.vars",
+      "serviceAccountKey.json",
+      "google-services.json",
+      "GoogleService-Info.plist",
+      "wp-config.php",
+      "token.txt",
+      "api_keys.txt",
+      "application-prod.properties",
+      "application-production.yml",
+      ".pgpass",
+      ".my.cnf",
+      "master.key",
+      "local.settings.json",
+      "appsettings.Production.json",
+      "firebase-adminsdk-abc12.json",
+      "password.txt",
+      "api-key.json",
+    }) do
+      H.ok(
+        plan.is_secret_name(n, plan.PROJECT_SECRET_GLOBS, plan.PROJECT_SECRET_EXCEPT),
+        n .. " should be hidden by name"
+      )
     end
   end)
 
   it("leave source and ordinary config alone", function()
-    for _, n in ipairs({ "tokenizer.rs", "api_key.rs", "token.go", "passwords.md", "application.properties", "application-dev.properties",
-      "README.md", "Cargo.toml", "wp-config-sample.php.md", "settings.json", ".env.example", "package.json" }) do
-      H.not_ok(plan.is_secret_name(n, plan.PROJECT_SECRET_GLOBS, plan.PROJECT_SECRET_EXCEPT), n .. " must stay readable")
+    for _, n in ipairs({
+      "tokenizer.rs",
+      "api_key.rs",
+      "token.go",
+      "passwords.md",
+      "application.properties",
+      "application-dev.properties",
+      "README.md",
+      "Cargo.toml",
+      "wp-config-sample.php.md",
+      "settings.json",
+      ".env.example",
+      "package.json",
+    }) do
+      H.not_ok(
+        plan.is_secret_name(n, plan.PROJECT_SECRET_GLOBS, plan.PROJECT_SECRET_EXCEPT),
+        n .. " must stay readable"
+      )
     end
   end)
 
@@ -168,12 +228,21 @@ describe("default secret names", function()
     H.need_sandbox()
     sb.config.network = "open"
     local project = H.fixture("basic")
-    local names = { ".dev.vars", "serviceAccountKey.json", "google-services.json", "wp-config.php", "token.txt", "api_keys.txt", "application-prod.properties" }
+    local names = {
+      ".dev.vars",
+      "serviceAccountKey.json",
+      "google-services.json",
+      "wp-config.php",
+      "token.txt",
+      "api_keys.txt",
+      "application-prod.properties",
+    }
     for _, n in ipairs(names) do
       write(project .. "/" .. n, "NAME-SECRET-" .. n .. "\n")
     end
     write(project .. "/src/api_key.rs", "// NOT-A-SECRET\n")
-    local cmd, err, h = sb.wrap({ "bash", "-c", "cat " .. table.concat(names, " ") .. " src/api_key.rs" }, project, H.tmpdir())
+    local cmd, err, h =
+      sb.wrap({ "bash", "-c", "cat " .. table.concat(names, " ") .. " src/api_key.rs" }, project, H.tmpdir())
     H.ok(cmd, err)
     local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
     h.release()
@@ -221,11 +290,22 @@ describe("scan.text (known token formats)", function()
   it("does not flag look-alikes, placeholders and ordinary hashes", function()
     for _, text in ipairs({
       "aws_access_key_id = AKIAIOSFODNN7EXAMPLE", -- the documented example
-      "ghp_short", "token = ghp_" .. z(10, "a"), "sk-ant-short", "AKIA" .. z(8, "A"), "xoxb-1",
-      "sha256: " .. z(64, "a"), "uuid 123e4567-e89b-12d3-a456-426614174000", "https://user:password@localhost/db",
-      "https://deploy:${DEPLOY_TOKEN}@git.example.com/r.git", "https://x:<your-token>@host.example/", "-----BEGIN CERTIFICATE-----",
-      "-----BEGIN PUBLIC KEY-----", "your_api_key_here = 'sk-ant-" .. z(40, "x") .. "'", "base64: " .. z(120, "A"),
-      "aws_secret_access_key = " .. z(30, "k"), "see https://github.com/ghp_" .. z(36, "a") .. "/x" == nil and "" or "plain text",
+      "ghp_short",
+      "token = ghp_" .. z(10, "a"),
+      "sk-ant-short",
+      "AKIA" .. z(8, "A"),
+      "xoxb-1",
+      "sha256: " .. z(64, "a"),
+      "uuid 123e4567-e89b-12d3-a456-426614174000",
+      "https://user:password@localhost/db",
+      "https://deploy:${DEPLOY_TOKEN}@git.example.com/r.git",
+      "https://x:<your-token>@host.example/",
+      "-----BEGIN CERTIFICATE-----",
+      "-----BEGIN PUBLIC KEY-----",
+      "your_api_key_here = 'sk-ant-" .. z(40, "x") .. "'",
+      "base64: " .. z(120, "A"),
+      "aws_secret_access_key = " .. z(30, "k"),
+      "see https://github.com/ghp_" .. z(36, "a") .. "/x" == nil and "" or "plain text",
     }) do
       H.eq({}, kinds(text), text)
     end
@@ -242,7 +322,14 @@ describe("scan.text (known token formats)", function()
     local seed = 7
     for i = 1, 20000 do
       seed = (seed * 1103515245 + 12345) % 2147483648
-      lines[#lines + 1] = ("%08x%08x%08x%08x  id-%d  %s"):format(seed, seed * 3 % 2^32, seed * 7 % 2^32, seed * 11 % 2^32, i, ("QUJD"):rep(i % 20 + 1))
+      lines[#lines + 1] = ("%08x%08x%08x%08x  id-%d  %s"):format(
+        seed,
+        seed * 3 % 2 ^ 32,
+        seed * 7 % 2 ^ 32,
+        seed * 11 % 2 ^ 32,
+        i,
+        ("QUJD"):rep(i % 20 + 1)
+      )
     end
     H.eq({}, kinds(table.concat(lines, "\n")))
   end)
@@ -259,10 +346,19 @@ describe("scan.project", function()
   local GH = "token = " .. TOKEN .. "\n"
 
   it("returns the files with a hit, by kind, without the secret", function()
-    local dir = project_with({ ["deploy/ci.yml"] = GH, ["src/main.rs"] = "fn main() {}\n", ["notes.txt"] = "-----BEGIN RSA PRIVATE KEY-----\n" })
+    local dir = project_with({
+      ["deploy/ci.yml"] = GH,
+      ["src/main.rs"] = "fn main() {}\n",
+      ["notes.txt"] = "-----BEGIN RSA PRIVATE KEY-----\n",
+    })
     local r = scan.project(dir)
-    table.sort(r.hits, function(a, b) return a.path < b.path end)
-    H.eq({ { path = dir .. "/deploy/ci.yml", kind = "GitHub token" }, { path = dir .. "/notes.txt", kind = "private key" } }, r.hits)
+    table.sort(r.hits, function(a, b)
+      return a.path < b.path
+    end)
+    H.eq({
+      { path = dir .. "/deploy/ci.yml", kind = "GitHub token" },
+      { path = dir .. "/notes.txt", kind = "private key" },
+    }, r.hits)
     H.not_ok(r.truncated)
     H.eq(3, r.files)
     H.no_match(vim.inspect(r), TOKEN, true)
@@ -270,8 +366,11 @@ describe("scan.project", function()
 
   it("skips build and dependency directories, large files, binary files and symlinks", function()
     local dir = project_with({
-      ["node_modules/x/k.js"] = GH, ["target/debug/k.txt"] = GH, [".git/config"] = GH,
-      ["big.txt"] = GH .. string.rep("x", scan.MAX_FILE_BYTES + 10), ["bin.dat"] = "\0\0\0" .. GH,
+      ["node_modules/x/k.js"] = GH,
+      ["target/debug/k.txt"] = GH,
+      [".git/config"] = GH,
+      ["big.txt"] = GH .. string.rep("x", scan.MAX_FILE_BYTES + 10),
+      ["bin.dat"] = "\0\0\0" .. GH,
       ["ok/plain.txt"] = "nothing here\n",
     })
     vim.uv.fs_symlink(dir .. "/ok/plain.txt", dir .. "/link-to-file")
@@ -327,7 +426,7 @@ describe("scan.project", function()
     for d = 1, 40 do
       vim.fn.mkdir(dir .. "/d" .. d, "p")
       for i = 1, 100 do
-        write(("%s/d%d/f%d.rs"):format(dir, d, i), "fn f() { println!(\"hello\"); }\n")
+        write(("%s/d%d/f%d.rs"):format(dir, d, i), 'fn f() { println!("hello"); }\n')
       end
     end
     local t0 = vim.uv.hrtime()
@@ -346,16 +445,27 @@ describe("hidden by content", function()
     write(project .. "/src/lib.rs", "pub fn f() {}\n")
     local cfg = vim.tbl_extend("force", { network = "open" }, extra_cfg or {})
     return plan.build({
-      project = project, tmp_dir = H.tmpdir(), cwd = project, home = vim.uv.os_homedir(), uid = 1000, env = { PATH = "/usr/bin" },
-      cmd = { "agent" }, aux = { empty = "/aux/e" }, config = cfg, exceptions = exceptions or {},
-    }), project
+      project = project,
+      tmp_dir = H.tmpdir(),
+      cwd = project,
+      home = vim.uv.os_homedir(),
+      uid = 1000,
+      env = { PATH = "/usr/bin" },
+      cmd = { "agent" },
+      aux = { empty = "/aux/e" },
+      config = cfg,
+      exceptions = exceptions or {},
+    }),
+      project
   end
 
   it("a file whose content has a token is hidden by default and listed in the preview with its kind", function()
     local p, project = content_plan()
     local hidden
     for _, h in ipairs(p.hidden) do
-      if h.path == project .. "/deploy/ci.yml" then hidden = h end
+      if h.path == project .. "/deploy/ci.yml" then
+        hidden = h
+      end
     end
     H.ok(hidden, "deploy/ci.yml is hidden")
     H.eq("file", hidden.kind)
@@ -384,8 +494,15 @@ describe("hidden by content", function()
       H.not_ok(h.path == project .. "/deploy/ci.yml", "shown after approval")
     end
     local p2 = plan.build({
-      project = project, tmp_dir = H.tmpdir(), cwd = project, home = vim.uv.os_homedir(), uid = 1000, env = { PATH = "/usr/bin" },
-      cmd = { "agent" }, aux = { empty = "/aux/e" }, config = { network = "open", policy = { secret_allow = { "deploy/ci.yml" } } },
+      project = project,
+      tmp_dir = H.tmpdir(),
+      cwd = project,
+      home = vim.uv.os_homedir(),
+      uid = 1000,
+      env = { PATH = "/usr/bin" },
+      cmd = { "agent" },
+      aux = { empty = "/aux/e" },
+      config = { network = "open", policy = { secret_allow = { "deploy/ci.yml" } } },
     })
     for _, h in ipairs(p2.hidden) do
       H.not_ok(h.path == project .. "/deploy/ci.yml")
@@ -398,27 +515,51 @@ describe("hidden by content", function()
       H.not_ok(h.path:match("ci%.yml$"))
     end
     H.eq(false, p.scan.enabled)
-    H.throws(function() sb.setup({ policy = { content_scan = "no" } }) end, "content_scan")
+    H.throws(function()
+      sb.setup({ policy = { content_scan = "no" } })
+    end, "content_scan")
   end)
 
   it("a shared directory or $HOME as the project is not scanned", function()
     local scanned = 0
     local probes = plan.real_probes()
-    probes.scan_project = function() scanned = scanned + 1 return { hits = {}, multi = {}, files = 0 } end
+    probes.scan_project = function()
+      scanned = scanned + 1
+      return { hits = {}, multi = {}, files = 0 }
+    end
     for _, project in ipairs({ "/tmp", vim.uv.os_homedir() }) do
-      plan.build({ project = project, tmp_dir = H.tmpdir(), home = vim.uv.os_homedir(), uid = 1000, env = {}, cmd = { "a" },
-        aux = { empty = "/e" }, config = { network = "open" }, probes = probes })
+      plan.build({
+        project = project,
+        tmp_dir = H.tmpdir(),
+        home = vim.uv.os_homedir(),
+        uid = 1000,
+        env = {},
+        cmd = { "a" },
+        aux = { empty = "/e" },
+        config = { network = "open" },
+        probes = probes,
+      })
     end
     H.eq(0, scanned)
   end)
 
   it("a truncated scan is stated in the plan", function()
     local project = H.tmpdir() .. "/trunc"
-    for i = 1, 20 do write(("%s/f%d.txt"):format(project, i), "x\n") end
+    for i = 1, 20 do
+      write(("%s/f%d.txt"):format(project, i), "x\n")
+    end
     local old = scan.MAX_FILES
     scan.MAX_FILES = 5
-    local p = plan.build({ project = project, tmp_dir = H.tmpdir(), home = vim.uv.os_homedir(), uid = 1000, env = {}, cmd = { "a" },
-      aux = { empty = "/e" }, config = { network = "open" } })
+    local p = plan.build({
+      project = project,
+      tmp_dir = H.tmpdir(),
+      home = vim.uv.os_homedir(),
+      uid = 1000,
+      env = {},
+      cmd = { "a" },
+      aux = { empty = "/e" },
+      config = { network = "open" },
+    })
     scan.MAX_FILES = old
     H.eq(true, p.scan.truncated)
     H.match(table.concat(p.notes, "\n"), "project scan stopped", true)
@@ -431,7 +572,8 @@ describe("hidden by content", function()
     local project = H.fixture("basic")
     write(project .. "/deploy/ci.yml", "token = " .. TOKEN .. "\n")
     write(project .. "/deploy/other.yml", "harmless = 1\n")
-    local cmd, err, h = sb.wrap({ "bash", "-c", "cat deploy/ci.yml; cat deploy/other.yml; echo end" }, project, H.tmpdir())
+    local cmd, err, h =
+      sb.wrap({ "bash", "-c", "cat deploy/ci.yml; cat deploy/other.yml; echo end" }, project, H.tmpdir())
     H.ok(cmd, err)
     local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
     h.release()
@@ -458,7 +600,9 @@ describe("hard links to hidden files", function()
     H.eq(2, hl.links)
     H.eq(1, hl.masked)
     H.eq(0, hl.unaccounted)
-    local paths = vim.tbl_map(function(h) return h.path end, p.hidden)
+    local paths = vim.tbl_map(function(h)
+      return h.path
+    end, p.hidden)
     H.has(paths, project .. "/.env")
     H.has(paths, project .. "/src/notes.txt")
     local text = table.concat(ui.lines(p), "\n")
@@ -503,7 +647,9 @@ describe("hard links to hidden files", function()
     local p = sb.plan({ "agent" }, project, H.tmpdir())
     vim.uv.fs_unlink(home .. "/.netrc")
     vim.fn.delete(project, "rf")
-    local paths = vim.tbl_map(function(h) return h.path end, p.hidden)
+    local paths = vim.tbl_map(function(h)
+      return h.path
+    end, p.hidden)
     H.has(paths, home .. "/.netrc")
     H.has(paths, project .. "/netrc-copy.txt")
     H.eq(0, p.hardlinks[1].unaccounted)
@@ -532,19 +678,52 @@ describe("a symlink named like a secret", function()
 
   it("pointing outside: the visible target is hidden by path, never bound over the link itself", function()
     local entries = {
-      ["/p"] = "directory", ["/p/.npmrc"] = "file", ["/etc/outside-secret"] = "file", ["/h"] = "directory", ["/h/.claude"] = "directory",
+      ["/p"] = "directory",
+      ["/p/.npmrc"] = "file",
+      ["/etc/outside-secret"] = "file",
+      ["/h"] = "directory",
+      ["/h/.claude"] = "directory",
     }
     local probes = {
-      stat_type = function(x) return entries[x] end,
-      lstat_type = function(x) return x == "/p/.npmrc" and "link" or entries[x] end,
-      exists = function(x) return entries[x] ~= nil end,
-      list = function(d) if d == "/p" then return { { ".npmrc", "link" } } end return {} end,
-      glob = function() return {} end, read_line = function() return nil end,
-      realpath = function(x) return x == "/p/.npmrc" and "/etc/outside-secret" or (entries[x] and x or nil) end,
+      stat_type = function(x)
+        return entries[x]
+      end,
+      lstat_type = function(x)
+        return x == "/p/.npmrc" and "link" or entries[x]
+      end,
+      exists = function(x)
+        return entries[x] ~= nil
+      end,
+      list = function(d)
+        if d == "/p" then
+          return { { ".npmrc", "link" } }
+        end
+        return {}
+      end,
+      glob = function()
+        return {}
+      end,
+      read_line = function()
+        return nil
+      end,
+      realpath = function(x)
+        return x == "/p/.npmrc" and "/etc/outside-secret" or (entries[x] and x or nil)
+      end,
     }
-    local p = plan.build({ project = "/p", tmp_dir = "/h/s", home = "/h", uid = 1, env = { PATH = "/usr/bin" }, cmd = { "a" },
-      aux = { empty = "/e" }, config = { network = "open" }, probes = probes })
-    local paths = vim.tbl_map(function(h) return h.path end, p.hidden)
+    local p = plan.build({
+      project = "/p",
+      tmp_dir = "/h/s",
+      home = "/h",
+      uid = 1,
+      env = { PATH = "/usr/bin" },
+      cmd = { "a" },
+      aux = { empty = "/e" },
+      config = { network = "open" },
+      probes = probes,
+    })
+    local paths = vim.tbl_map(function(h)
+      return h.path
+    end, p.hidden)
     H.has(paths, "/etc/outside-secret")
     H.not_ok(vim.tbl_contains(paths, "/p/.npmrc"), "the link itself is never a mount destination")
   end)
@@ -558,23 +737,27 @@ describe("a symlink named like a secret", function()
     end
   end)
 
-  it("a credentials file of $HOME that is a symlink (dotfile manager): its target is hidden, bwrap starts (denylist view)", function()
-    H.need_sandbox()
-    local home = vim.uv.os_homedir()
-    write(home .. "/dotfiles/npmrc", "//registry:_authToken=DOTFILE-SECRET\n")
-    vim.uv.fs_symlink(home .. "/dotfiles/npmrc", home .. "/.npmrc")
-    sb.config.network = "open"
-    sb.config.home = "denylist"
-    local project = H.tmpdir()
-    local cmd, err, h = sb.wrap({ "bash", "-c", 'cat "$HOME/.npmrc" "$HOME/dotfiles/npmrc"; echo end' }, project, H.tmpdir())
-    H.ok(cmd, err)
-    local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
-    h.release()
-    vim.uv.fs_unlink(home .. "/.npmrc")
-    vim.fn.delete(home .. "/dotfiles", "rf")
-    local out = (r.stdout or "") .. (r.stderr or "")
-    H.no_match(out, "DOTFILE-SECRET", true, out)
-    H.no_match(out, "mount on symlink", true, out)
-    H.match(out, "end", true, out)
-  end)
+  it(
+    "a credentials file of $HOME that is a symlink (dotfile manager): its target is hidden, bwrap starts (denylist view)",
+    function()
+      H.need_sandbox()
+      local home = vim.uv.os_homedir()
+      write(home .. "/dotfiles/npmrc", "//registry:_authToken=DOTFILE-SECRET\n")
+      vim.uv.fs_symlink(home .. "/dotfiles/npmrc", home .. "/.npmrc")
+      sb.config.network = "open"
+      sb.config.home = "denylist"
+      local project = H.tmpdir()
+      local cmd, err, h =
+        sb.wrap({ "bash", "-c", 'cat "$HOME/.npmrc" "$HOME/dotfiles/npmrc"; echo end' }, project, H.tmpdir())
+      H.ok(cmd, err)
+      local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
+      h.release()
+      vim.uv.fs_unlink(home .. "/.npmrc")
+      vim.fn.delete(home .. "/dotfiles", "rf")
+      local out = (r.stdout or "") .. (r.stderr or "")
+      H.no_match(out, "DOTFILE-SECRET", true, out)
+      H.no_match(out, "mount on symlink", true, out)
+      H.match(out, "end", true, out)
+    end
+  )
 end)

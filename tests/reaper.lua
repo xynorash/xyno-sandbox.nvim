@@ -96,7 +96,12 @@ function M.bases(repo)
   end
   local bases = vim.list_extend({}, M.default_bases)
   local real = vim.uv.os_homedir() or ""
-  for _, b in ipairs({ vim.env.XYNO_TEST_BASE or "", real ~= "" and (real .. "/.cache") or "", vim.env.XDG_CACHE_HOME or "", repo .. "/.test-root" }) do
+  for _, b in ipairs({
+    vim.env.XYNO_TEST_BASE or "",
+    real ~= "" and (real .. "/.cache") or "",
+    vim.env.XDG_CACHE_HOME or "",
+    repo .. "/.test-root",
+  }) do
     if b:sub(1, 1) == "/" and vim.uv.fs_stat(b) then
       bases[#bases + 1] = b
     end

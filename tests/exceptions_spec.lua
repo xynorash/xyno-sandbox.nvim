@@ -19,7 +19,8 @@ end)
 
 local function plan_for(excs)
   return sb.plan({ "agent" }, project, data, {
-    exceptions = excs, aux = { empty = "/aux/empty", claude_json = "/aux/cj" },
+    exceptions = excs,
+    aux = { empty = "/aux/empty", claude_json = "/aux/cj" },
   })
 end
 
@@ -231,11 +232,29 @@ describe("approve() validation", function()
     refused("writable", "/usr/bin", "system path")
     refused("writable", "/run", "system path")
     refused("writable", "/home", "contains %$HOME")
-    for _, rel in ipairs({ "/.bashrc", "/.zshrc", "/.profile", "/.ssh", "/.local/bin", "/.config/autostart", "/.config/nvim", "/.gitconfig" }) do
+    for _, rel in ipairs({
+      "/.bashrc",
+      "/.zshrc",
+      "/.profile",
+      "/.ssh",
+      "/.local/bin",
+      "/.config/autostart",
+      "/.config/nvim",
+      "/.gitconfig",
+    }) do
       local p = home .. rel
       -- the check is on the path, so it also holds when the file does not exist (then "does not exist" comes first)
-      local ok, why = plan.validate_exception({ kind = "writable", value = p },
-        { home = home, probes = { exists = function() return true end, realpath = function(x) return x end } })
+      local ok, why = plan.validate_exception({ kind = "writable", value = p }, {
+        home = home,
+        probes = {
+          exists = function()
+            return true
+          end,
+          realpath = function(x)
+            return x
+          end,
+        },
+      })
       H.not_ok(ok, rel)
       H.match(why, "would run, or steer tools, outside the sandbox later", true, rel)
     end
@@ -263,7 +282,13 @@ describe("approve() validation", function()
   end)
 
   it("never reveals /etc/shadow & co. (unhide)", function()
-    for _, p in ipairs({ "/etc/shadow", "/etc/gshadow", "/etc/sudoers", "/etc/sudoers.d", "/etc/ssh/ssh_host_ed25519_key" }) do
+    for _, p in ipairs({
+      "/etc/shadow",
+      "/etc/gshadow",
+      "/etc/sudoers",
+      "/etc/sudoers.d",
+      "/etc/ssh/ssh_host_ed25519_key",
+    }) do
       refused("unhide", p, "never revealed")
     end
     local link = data .. "/shadow-link"
@@ -274,7 +299,16 @@ describe("approve() validation", function()
   end)
 
   it("refuses LD_PRELOAD, PATH, LD_LIBRARY_PATH & co. unless the expert flag is set, and logs it either way", function()
-    for _, name in ipairs({ "LD_PRELOAD", "PATH", "LD_LIBRARY_PATH", "LD_AUDIT", "BASH_ENV", "PYTHONPATH", "NODE_OPTIONS", "RUSTC_WRAPPER" }) do
+    for _, name in ipairs({
+      "LD_PRELOAD",
+      "PATH",
+      "LD_LIBRARY_PATH",
+      "LD_AUDIT",
+      "BASH_ENV",
+      "PYTHONPATH",
+      "NODE_OPTIONS",
+      "RUSTC_WRAPPER",
+    }) do
       local e, why = sb.approve(project, "env", name, "project")
       H.eq(nil, e, name)
       H.match(why, "decides which code runs", true, name)
@@ -315,7 +349,9 @@ describe("approve() validation", function()
   end)
 
   it("setup() takes expert_exceptions as a boolean only", function()
-    H.throws(function() sb.setup({ expert_exceptions = "yes" }) end, "expert_exceptions")
+    H.throws(function()
+      sb.setup({ expert_exceptions = "yes" })
+    end, "expert_exceptions")
     sb.setup({ preview = "never", expert_exceptions = true })
     H.eq(true, sb.config.expert_exceptions)
   end)

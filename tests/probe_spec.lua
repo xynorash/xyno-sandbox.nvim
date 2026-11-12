@@ -25,11 +25,15 @@ end
 
 describe("diagnose", function()
   local function sysctl(map)
-    return function(p) return map[p] end
+    return function(p)
+      return map[p]
+    end
   end
   it("names unprivileged_userns_clone", function()
-    local r, hint = probe.diagnose({ code = 1, stderr = "bwrap: No permissions to create new namespace" },
-      sysctl({ ["/proc/sys/kernel/unprivileged_userns_clone"] = "0" }))
+    local r, hint = probe.diagnose(
+      { code = 1, stderr = "bwrap: No permissions to create new namespace" },
+      sysctl({ ["/proc/sys/kernel/unprivileged_userns_clone"] = "0" })
+    )
     H.match(r, "kernel.unprivileged_userns_clone = 0", true)
     H.match(hint, "sysctl kernel.unprivileged_userns_clone=1", true)
   end)
@@ -39,8 +43,10 @@ describe("diagnose", function()
     H.match(hint, "sysctl user.max_user_namespaces", true)
   end)
   it("names AppArmor", function()
-    local r, hint = probe.diagnose({ code = 1, stderr = "x" },
-      sysctl({ ["/proc/sys/kernel/apparmor_restrict_unprivileged_userns"] = "1" }))
+    local r, hint = probe.diagnose(
+      { code = 1, stderr = "x" },
+      sysctl({ ["/proc/sys/kernel/apparmor_restrict_unprivileged_userns"] = "1" })
+    )
     H.match(r, "AppArmor", true)
     H.match(hint, "profile", true)
   end)
@@ -110,7 +116,12 @@ describe("async and cached", function()
     H.eq("bwrap", st.mode)
     H.eq("pending", st.ready)
     H.eq("sandbox: checking", sb.statusline())
-    H.ok(vim.wait(5000, function() return probe.cached() ~= nil end, 20), "probe finished")
+    H.ok(
+      vim.wait(5000, function()
+        return probe.cached() ~= nil
+      end, 20),
+      "probe finished"
+    )
     H.eq("ok", sb.status().ready)
     -- cached: remove the fake, the verdict stays
     local t1 = vim.uv.hrtime()
@@ -121,9 +132,15 @@ describe("async and cached", function()
   it("check() reports through the callback and joins a running probe", function()
     fake_bwrap("sleep 0.2; echo nope >&2; exit 1")
     local got = {}
-    sb.check(function(st) got[#got + 1] = st end)
-    sb.check(function(st) got[#got + 1] = st end)
-    H.ok(vim.wait(5000, function() return #got == 2 end, 20))
+    sb.check(function(st)
+      got[#got + 1] = st
+    end)
+    sb.check(function(st)
+      got[#got + 1] = st
+    end)
+    H.ok(vim.wait(5000, function()
+      return #got == 2
+    end, 20))
     H.eq("refused", got[1].mode)
     H.eq("refused", got[2].mode)
   end)

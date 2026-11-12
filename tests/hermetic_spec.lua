@@ -9,8 +9,12 @@ local function nested(body, env)
   f:write(body)
   f:close()
   local e = vim.tbl_extend("force", { XYNO_TEST_WORKER = "0" }, env or {})
-  local r = vim.system({ vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/inner_spec.lua" },
-    { text = true, env = e }):wait(120000)
+  local r = vim
+    .system(
+      { vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/inner_spec.lua" },
+      { text = true, env = e }
+    )
+    :wait(120000)
   return r.stdout or "", r.code, dir
 end
 
@@ -27,12 +31,15 @@ describe("the spec environment", function()
 
   it("the nested run's root and scratch directory are removed when it ends", function()
     local report = H.tmpdir() .. "/report"
-    local out, code = nested([[
+    local out, code = nested(
+      [[
       it("reports where it ran", function()
         vim.fn.writefile({ vim.env.XYNO_TEST_ROOT, vim.env.XYNO_TEST_SCRATCH, vim.uv.os_homedir() }, vim.env.XYNO_TEST_REPORT)
         assert(vim.uv.fs_stat(vim.uv.os_homedir() .. "/.claude/.credentials.json"))
       end)
-    ]], { XYNO_TEST_REPORT = report })
+    ]],
+      { XYNO_TEST_REPORT = report }
+    )
     H.eq(0, code, out)
     local paths = vim.fn.readfile(report)
     H.eq(3, #paths)
@@ -49,7 +56,8 @@ describe("a machine without a working bubblewrap", function()
     f:write("#!/bin/sh\necho 'bwrap: No permissions to create new namespace' >&2\nexit 1\n")
     f:close()
     vim.uv.fs_chmod(bin .. "/bwrap", tonumber("755", 8))
-    local out, code = nested([[
+    local out, code = nested(
+      [[
       local H = require("xynotest.helpers")
       it("still builds a plan", function()
         local sb = require("xyno_sandbox")
@@ -62,7 +70,9 @@ describe("a machine without a working bubblewrap", function()
         H.need_sandbox()
         error("must have been skipped")
       end)
-    ]], { PATH = bin .. ":" .. vim.env.PATH })
+    ]],
+      { PATH = bin .. ":" .. vim.env.PATH }
+    )
     H.eq(0, code, out)
     H.match(out, "no working bubblewrap", true)
     H.match(out, "skipped=1", true, out)

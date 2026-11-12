@@ -5,8 +5,24 @@ local plan = require("xyno_sandbox.plan")
 local sb = require("xyno_sandbox")
 
 describe("docs match the code", function()
-  local KEYS = { "readonly", "writable", "hidden", "guard_dirs", "guard_files", "scrub", "scan_depth", "home_allow", "keep_run",
-    "project_secrets", "secret_files", "secret_allow", "symlinks", "content_scan", "claude_share", "tree_secrets" }
+  local KEYS = {
+    "readonly",
+    "writable",
+    "hidden",
+    "guard_dirs",
+    "guard_files",
+    "scrub",
+    "scan_depth",
+    "home_allow",
+    "keep_run",
+    "project_secrets",
+    "secret_files",
+    "secret_allow",
+    "symlinks",
+    "content_scan",
+    "claude_share",
+    "tree_secrets",
+  }
 
   it("every policy key is accepted by setup() and appears in the README and the help file", function()
     local readme = io.open(H.repo .. "/README.md"):read("*a")
@@ -24,8 +40,18 @@ describe("docs match the code", function()
 
   it("the file names the README promises to hide are hidden by the default list", function()
     local readme = io.open(H.repo .. "/README.md"):read("*a")
-    for _, n in ipairs({ ".dev.vars", "serviceAccountKey.json", "google-services.json", "wp-config.php", "token.txt", "api_keys.json",
-      "application-prod.properties", "master.key", ".pgpass", "GoogleService-Info.plist" }) do
+    for _, n in ipairs({
+      ".dev.vars",
+      "serviceAccountKey.json",
+      "google-services.json",
+      "wp-config.php",
+      "token.txt",
+      "api_keys.json",
+      "application-prod.properties",
+      "master.key",
+      ".pgpass",
+      "GoogleService-Info.plist",
+    }) do
       H.match(readme, n == "application-prod.properties" and "application-prod.*" or n, true, n .. " not documented")
       H.ok(plan.is_secret_name(n, plan.PROJECT_SECRET_GLOBS, plan.PROJECT_SECRET_EXCEPT), n)
     end
@@ -33,8 +59,19 @@ describe("docs match the code", function()
 
   it("state what the content scan cannot catch, the bounds, and the read-only login", function()
     local text = H.docs_text()
-    for _, s in ipairs({ "What it cannot catch", "4000 files", "256 KB", "400 ms", "plain password", "approve-to-unhide",
-      "not saved", "hard link", "Other users' homes", "--die-with-parent", "throw-away" }) do
+    for _, s in ipairs({
+      "What it cannot catch",
+      "4000 files",
+      "256 KB",
+      "400 ms",
+      "plain password",
+      "approve-to-unhide",
+      "not saved",
+      "hard link",
+      "Other users' homes",
+      "--die-with-parent",
+      "throw-away",
+    }) do
       H.match(text, s, true, s)
     end
   end)
@@ -82,7 +119,12 @@ describe("docs match the code (fourth round)", function()
 
   it("the limits that remain are stated: a key in base64 only, kill -9 leftovers, unknown hard links", function()
     local text = H.docs_text()
-    for _, s in ipairs({ "inside base64", "emptied directory itself", "cannot remove them", "Anything an unlisted program reads and runs is not covered" }) do
+    for _, s in ipairs({
+      "inside base64",
+      "emptied directory itself",
+      "cannot remove them",
+      "Anything an unlisted program reads and runs is not covered",
+    }) do
       H.match(text, s, true, s)
     end
   end)

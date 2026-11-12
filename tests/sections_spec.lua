@@ -9,9 +9,15 @@ local SECRET_VALUE = "TOPSECRETVALUE"
 
 local function fakefs(entries)
   return {
-    stat_type = function(p) return entries[p] end,
-    lstat_type = function(p) return entries[p] end,
-    exists = function(p) return entries[p] ~= nil end,
+    stat_type = function(p)
+      return entries[p]
+    end,
+    lstat_type = function(p)
+      return entries[p]
+    end,
+    exists = function(p)
+      return entries[p] ~= nil
+    end,
     list = function(dir)
       local out, prefix = {}, dir .. "/"
       for p, t in pairs(entries) do
@@ -19,36 +25,64 @@ local function fakefs(entries)
           out[#out + 1] = { p:sub(#prefix + 1), t }
         end
       end
-      table.sort(out, function(a, b) return a[1] < b[1] end)
+      table.sort(out, function(a, b)
+        return a[1] < b[1]
+      end)
       return out
     end,
     glob = function(pat)
       local out = {}
       local lp = "^" .. pat:gsub("[%-%.%+%[%]%(%)%$%^%%]", "%%%0"):gsub("%*", "[^/]*") .. "$"
       for p in pairs(entries) do
-        if p:match(lp) then out[#out + 1] = p end
+        if p:match(lp) then
+          out[#out + 1] = p
+        end
       end
       table.sort(out)
       return out
     end,
-    read_line = function() return nil end,
-    realpath = function(p) return entries[p] and p or nil end,
+    read_line = function()
+      return nil
+    end,
+    realpath = function(p)
+      return entries[p] and p or nil
+    end,
   }
 end
 
 local ENTRIES = {
-  [HOME] = "directory", [HOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory",
-  [PROJECT .. "/.git"] = "directory", [PROJECT .. "/.env"] = "file", [PROJECT .. "/.mise.toml"] = "file",
-  [PROJECT .. "/.vscode"] = "directory", [HOME .. "/.ssh"] = "directory", ["/run"] = "directory", ["/var/tmp"] = "directory",
-  [HOME .. "/.claude/projects"] = "directory", [HOME .. "/.claude/projects/-h-proj"] = "directory",
-  [HOME .. "/.claude/.credentials.json"] = "file", [HOME .. "/.claude/shell-snapshots"] = "directory",
+  [HOME] = "directory",
+  [HOME .. "/.claude"] = "directory",
+  [PROJECT] = "directory",
+  [TMP] = "directory",
+  [PROJECT .. "/.git"] = "directory",
+  [PROJECT .. "/.env"] = "file",
+  [PROJECT .. "/.mise.toml"] = "file",
+  [PROJECT .. "/.vscode"] = "directory",
+  [HOME .. "/.ssh"] = "directory",
+  ["/run"] = "directory",
+  ["/var/tmp"] = "directory",
+  [HOME .. "/.claude/projects"] = "directory",
+  [HOME .. "/.claude/projects/-h-proj"] = "directory",
+  [HOME .. "/.claude/.credentials.json"] = "file",
+  [HOME .. "/.claude/shell-snapshots"] = "directory",
 }
 
 local function build(cfg, env)
   return plan.build({
-    project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, probes = fakefs(ENTRIES),
-    env = vim.tbl_extend("force", { PATH = "/usr/bin", GITHUB_TOKEN = SECRET_VALUE, MY_API_KEY = SECRET_VALUE, TERM = "xterm" }, env or {}),
-    cmd = { "agent", "-p", "prompt" }, aux = { empty = "/aux/empty", claude_json = "/aux/cj", net_dir = "/aux/net" },
+    project = PROJECT,
+    tmp_dir = TMP,
+    cwd = PROJECT,
+    home = HOME,
+    uid = 1000,
+    probes = fakefs(ENTRIES),
+    env = vim.tbl_extend(
+      "force",
+      { PATH = "/usr/bin", GITHUB_TOKEN = SECRET_VALUE, MY_API_KEY = SECRET_VALUE, TERM = "xterm" },
+      env or {}
+    ),
+    cmd = { "agent", "-p", "prompt" },
+    aux = { empty = "/aux/empty", claude_json = "/aux/cj", net_dir = "/aux/net" },
     config = cfg,
   })
 end
@@ -138,7 +172,12 @@ describe("sections of the preview (allowlist, filtered network)", function()
     local b = H.ok(section(dl, "Hidden credential paths"), "credential section missing")
     H.match(text_of(b), "~/.ssh  [dir, credentials]", true)
     H.no_match(text_of(b), ".env", true)
-    H.match(text_of(section(lines, "Hidden credential paths")), "none", true, "in the allowlist view an unmounted ~/.ssh needs no hiding")
+    H.match(
+      text_of(section(lines, "Hidden credential paths")),
+      "none",
+      true,
+      "in the allowlist view an unmounted ~/.ssh needs no hiding"
+    )
   end)
 
   it("Stripped environment variables: names only, never a value", function()
@@ -151,7 +190,9 @@ describe("sections of the preview (allowlist, filtered network)", function()
   it("the `env -i` line states the number of variables passed and that stripped values do not exist", function()
     local line
     for _, l in ipairs(lines) do
-      if l:match("^Environment: ") then line = l end
+      if l:match("^Environment: ") then
+        line = l
+      end
     end
     H.ok(line, "Environment line missing")
     H.match(line, "bwrap starts with `env -i`", true)
@@ -168,7 +209,9 @@ describe("sections of the preview (allowlist, filtered network)", function()
   it("Isolation: the flag line", function()
     local line
     for _, l in ipairs(lines) do
-      if l:match("^Isolation  ") then line = l end
+      if l:match("^Isolation  ") then
+        line = l
+      end
     end
     H.ok(line)
     H.match(line, "--die-with-parent", true)
@@ -191,7 +234,12 @@ describe("sections of the preview in other modes", function()
   end)
 
   it("an unsandboxed plan states it and lists nothing else", function()
-    local text = text_of(ui.lines({ mode = "unsandboxed", via = "sandbox=false", reason = "off", project = PROJECT, agent = { cmd = { "a" } } }, { home = HOME }))
+    local text = text_of(
+      ui.lines(
+        { mode = "unsandboxed", via = "sandbox=false", reason = "off", project = PROJECT, agent = { cmd = { "a" } } },
+        { home = HOME }
+      )
+    )
     H.match(text, "UNSANDBOXED (sandbox=false): off", true)
     H.no_match(text, "Writable", true)
   end)
@@ -201,7 +249,9 @@ describe("the section checks bite", function()
   it("a preview that drops a section fails the specs above by name (spot check: ui.lines without 'net' ops)", function()
     local real = plan.ops
     plan.ops = function(pl)
-      return vim.tbl_filter(function(o) return o.section ~= "net" and o.section ~= "projects" end, real(pl))
+      return vim.tbl_filter(function(o)
+        return o.section ~= "net" and o.section ~= "projects"
+      end, real(pl))
     end
     local lines = sections({ home = "allowlist", network = "filtered" })
     plan.ops = real

@@ -77,9 +77,24 @@ describe("preview text", function()
   end)
 
   it("caps long lists and ':XynoSandboxPolicy!' (full) lists everything", function()
-    local p = { mode = "bwrap", project = project, home = "/h", agent = { cmd = { "a" } }, network = "open", writable = {},
-      git_locked = {}, readonly = {}, masks = {}, guard_files = {}, hidden = {}, exceptions = {}, rejected = {}, notes = {},
-      env_kept = {}, env_strip = {} }
+    local p = {
+      mode = "bwrap",
+      project = project,
+      home = "/h",
+      agent = { cmd = { "a" } },
+      network = "open",
+      writable = {},
+      git_locked = {},
+      readonly = {},
+      masks = {},
+      guard_files = {},
+      hidden = {},
+      exceptions = {},
+      rejected = {},
+      notes = {},
+      env_kept = {},
+      env_strip = {},
+    }
     for i = 1, 40 do
       p.env_strip[i] = "VAR_" .. i
     end
@@ -102,7 +117,12 @@ describe("the preview equals what runs", function()
   it("a plan whose guarded files appeared meanwhile is rebuilt, not run stale", function()
     need_bwrap()
     local p = sb.plan(CMD, project, tmp)
-    H.has(vim.tbl_map(function(g) return g.path end, p.guard_files), project .. "/.envrc")
+    H.has(
+      vim.tbl_map(function(g)
+        return g.path
+      end, p.guard_files),
+      project .. "/.envrc"
+    )
     vim.fn.writefile({ "export X=1" }, project .. "/.envrc")
     local wrapped, _, h = sb.wrap(CMD, project, tmp, { plan = p })
     local joined = table.concat(wrapped, "\0")
@@ -124,11 +144,15 @@ describe("launch-time confirm", function()
 
   it("preview = 'never' shows nothing and still hands back the plan", function()
     need_bwrap()
-    run.has_ui = function() return true end
+    run.has_ui = function()
+      return true
+    end
     sb.config.preview = "never"
     local shown = stub_ui()
     local ok, p
-    sb.confirm(CMD, project, tmp, function(a, b) ok, p = a, b end)
+    sb.confirm(CMD, project, tmp, function(a, b)
+      ok, p = a, b
+    end)
     H.eq(true, ok)
     H.eq(0, #shown)
     H.eq("bwrap", p.mode)
@@ -136,7 +160,9 @@ describe("launch-time confirm", function()
 
   it("preview = 'always' shows before every launch", function()
     need_bwrap()
-    run.has_ui = function() return true end
+    run.has_ui = function()
+      return true
+    end
     sb.config.preview = "always"
     local shown = stub_ui()
     for _ = 1, 3 do
@@ -147,7 +173,9 @@ describe("launch-time confirm", function()
 
   it("preview = 'once' shows the first launch of a project only, and remembers it", function()
     need_bwrap()
-    run.has_ui = function() return true end
+    run.has_ui = function()
+      return true
+    end
     sb.config.preview = "once"
     local shown = stub_ui()
     sb.confirm(CMD, project, tmp, function() end)
@@ -159,13 +187,17 @@ describe("launch-time confirm", function()
 
   it("cancelling starts nothing and is not remembered as seen", function()
     need_bwrap()
-    run.has_ui = function() return true end
+    run.has_ui = function()
+      return true
+    end
     sb.config.preview = "once"
     ui.show = function(opts)
       opts.on_done(false, nil, {})
     end
     local ok, why
-    sb.confirm(CMD, project, tmp, function(a, b) ok, why = a, b end)
+    sb.confirm(CMD, project, tmp, function(a, b)
+      ok, why = a, b
+    end)
     H.eq(false, ok)
     H.eq("cancelled", why)
     H.not_ok(store.seen(project))
@@ -173,22 +205,30 @@ describe("launch-time confirm", function()
 
   it("without a UI (headless) there is no window, whatever the setting", function()
     need_bwrap()
-    run.has_ui = function() return false end
+    run.has_ui = function()
+      return false
+    end
     sb.config.preview = "always"
     local shown = stub_ui()
     local ok
-    sb.confirm(CMD, project, tmp, function(a) ok = a end)
+    sb.confirm(CMD, project, tmp, function(a)
+      ok = a
+    end)
     H.eq(true, ok)
     H.eq(0, #shown)
   end)
 
   it("a refused backend is reported to the callback, no window", function()
-    run.has_ui = function() return true end
+    run.has_ui = function()
+      return true
+    end
     local old = vim.env.PATH
     vim.env.PATH = "/nonexistent-xyno-path"
     local shown = stub_ui()
     local ok, why
-    sb.confirm(CMD, project, tmp, function(a, b) ok, why = a, b end)
+    sb.confirm(CMD, project, tmp, function(a, b)
+      ok, why = a, b
+    end)
     vim.env.PATH = old
     H.eq(false, ok)
     H.match(why, "bwrap", true)
@@ -201,9 +241,15 @@ describe("real preview window", function()
     need_bwrap()
     local result
     local buf = ui.show({
-      project = project, confirm = true, status = sb.status,
-      build = function(once) return sb.plan(CMD, project, tmp, { exceptions = once }) end,
-      on_done = function(go) result = go end,
+      project = project,
+      confirm = true,
+      status = sb.status,
+      build = function(once)
+        return sb.plan(CMD, project, tmp, { exceptions = once })
+      end,
+      on_done = function(go)
+        result = go
+      end,
     })
     H.eq("xyno-sandbox", vim.bo[buf].filetype)
     H.eq(false, vim.bo[buf].modifiable)
@@ -212,60 +258,75 @@ describe("real preview window", function()
     H.eq(true, result)
     local result2
     local buf2 = ui.show({
-      project = project, confirm = true,
-      build = function(once) return sb.plan(CMD, project, tmp, { exceptions = once }) end,
-      on_done = function(go) result2 = go end,
+      project = project,
+      confirm = true,
+      build = function(once)
+        return sb.plan(CMD, project, tmp, { exceptions = once })
+      end,
+      on_done = function(go)
+        result2 = go
+      end,
     })
     vim.api.nvim_feedkeys("q", "x", false)
     H.eq(false, result2)
     H.not_ok(vim.api.nvim_buf_is_valid(buf2))
   end)
 
-  it("'e' approves one env var for this launch from the preview: logged, plan updated; refusing changes nothing", function()
-    need_bwrap()
-    local answers = {}
-    vim.ui.select = function(items, opts, cb)
-      local want = table.remove(answers, 1)
-      for i, it in ipairs(items) do
-        local label = type(it) == "table" and it.label or it
-        if label:find(want, 1, true) then
-          return cb(it, i)
+  it(
+    "'e' approves one env var for this launch from the preview: logged, plan updated; refusing changes nothing",
+    function()
+      need_bwrap()
+      local answers = {}
+      vim.ui.select = function(items, opts, cb)
+        local want = table.remove(answers, 1)
+        for i, it in ipairs(items) do
+          local label = type(it) == "table" and it.label or it
+          if label:find(want, 1, true) then
+            return cb(it, i)
+          end
         end
+        error("no item " .. want)
       end
-      error("no item " .. want)
+      local final
+      local buf = ui.show({
+        project = project,
+        confirm = true,
+        build = function(once)
+          return sb.plan(CMD, project, tmp, { exceptions = once })
+        end,
+        on_done = function(go, plan, once)
+          final = { go = go, plan = plan, once = once }
+        end,
+      })
+      local function lines()
+        return table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+      end
+      -- refuse first
+      answers = { "XS_TEST_API_KEY through", "Refuse" }
+      vim.api.nvim_feedkeys("e", "x", false)
+      H.match(lines(), "XS_TEST_API_KEY", true)
+      H.no_match(lines(), "Approved exceptions (1)", true)
+      -- then approve once
+      answers = { "XS_TEST_API_KEY through", "launch only" }
+      vim.api.nvim_feedkeys("e", "x", false)
+      H.match(lines(), "Approved exceptions (1)", true)
+      H.match(lines(), "env XS_TEST_API_KEY  [once]", true)
+      vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+      H.eq(true, final.go)
+      H.has(final.plan.env_kept, "XS_TEST_API_KEY")
+      H.not_ok(vim.tbl_contains(final.plan.env_strip, "XS_TEST_API_KEY"))
+      local log = store.read_log()
+      H.eq(2, #log)
+      H.eq("refused", log[1].decision)
+      H.eq("approved", log[2].decision)
+      H.eq("XS_TEST_API_KEY", log[2].name)
+      H.eq({}, sb.approvals(project), "once is not remembered")
+      -- and the launched argv really keeps the variable
+      local wrapped, _, h = sb.wrap(CMD, project, tmp, { plan = final.plan })
+      H.not_ok(vim.tbl_contains(wrapped, "XS_TEST_API_KEY"))
+      h.release()
     end
-    local final
-    local buf = ui.show({
-      project = project, confirm = true,
-      build = function(once) return sb.plan(CMD, project, tmp, { exceptions = once }) end,
-      on_done = function(go, plan, once) final = { go = go, plan = plan, once = once } end,
-    })
-    local function lines() return table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") end
-    -- refuse first
-    answers = { "XS_TEST_API_KEY through", "Refuse" }
-    vim.api.nvim_feedkeys("e", "x", false)
-    H.match(lines(), "XS_TEST_API_KEY", true)
-    H.no_match(lines(), "Approved exceptions (1)", true)
-    -- then approve once
-    answers = { "XS_TEST_API_KEY through", "launch only" }
-    vim.api.nvim_feedkeys("e", "x", false)
-    H.match(lines(), "Approved exceptions (1)", true)
-    H.match(lines(), "env XS_TEST_API_KEY  [once]", true)
-    vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
-    H.eq(true, final.go)
-    H.has(final.plan.env_kept, "XS_TEST_API_KEY")
-    H.not_ok(vim.tbl_contains(final.plan.env_strip, "XS_TEST_API_KEY"))
-    local log = store.read_log()
-    H.eq(2, #log)
-    H.eq("refused", log[1].decision)
-    H.eq("approved", log[2].decision)
-    H.eq("XS_TEST_API_KEY", log[2].name)
-    H.eq({}, sb.approvals(project), "once is not remembered")
-    -- and the launched argv really keeps the variable
-    local wrapped, _, h = sb.wrap(CMD, project, tmp, { plan = final.plan })
-    H.not_ok(vim.tbl_contains(wrapped, "XS_TEST_API_KEY"))
-    h.release()
-  end)
+  )
 end)
 
 describe("commands", function()
@@ -273,7 +334,9 @@ describe("commands", function()
     need_bwrap()
     sb.setup({ agent_cmd = { "agent", "--dangerously-skip-permissions" } })
     local seen
-    ui.show = function(opts) seen = opts end
+    ui.show = function(opts)
+      seen = opts
+    end
     vim.cmd("XynoSandboxPolicy")
     H.eq(false, seen.full or false)
     H.ok(seen.build({}).mode == "bwrap")
@@ -345,13 +408,26 @@ describe("run()", function()
     local w1, b1 = wins()
     H.eq(w0, w1, "no split left behind")
     H.eq(b0, b1, "no buffer left behind")
-    local errs = vim.tbl_filter(function(g) return g[2] == vim.log.levels.ERROR end, got)
+    local errs = vim.tbl_filter(function(g)
+      return g[2] == vim.log.levels.ERROR
+    end, got)
     H.eq(1, #errs)
     H.match(errs[1][1], "could not start", true)
   end)
 
   local function placeholders_gone()
-    for _, rel in ipairs({ ".envrc", ".vscode", ".cargo", ".mise.toml", ".git", ".claude", ".nvim.lua", ".nvimrc", ".exrc", ".mcp.json" }) do
+    for _, rel in ipairs({
+      ".envrc",
+      ".vscode",
+      ".cargo",
+      ".mise.toml",
+      ".git",
+      ".claude",
+      ".nvim.lua",
+      ".nvimrc",
+      ".exrc",
+      ".mcp.json",
+    }) do
       H.eq(nil, vim.uv.fs_stat(project .. "/" .. rel), rel .. " placeholder left behind")
     end
   end
@@ -370,30 +446,46 @@ describe("run()", function()
     H.eq(w0, w1, "no split left behind")
     H.eq(b0, b1, "no buffer left behind")
     H.eq(r0, sb.running(), "no sandbox handle left behind")
-    local errs = vim.tbl_filter(function(g) return g[2] == vim.log.levels.ERROR end, got)
+    local errs = vim.tbl_filter(function(g)
+      return g[2] == vim.log.levels.ERROR
+    end, got)
     H.eq(1, #errs)
     H.match(errs[1][1], "no such executable", true)
     placeholders_gone()
   end)
 
-  it("sandbox = true and an agent that cannot run INSIDE the sandbox: the handle is released and the placeholders removed", function()
-    H.need_sandbox()
-    sb.setup({ preview = "never", network = "open" })
-    local agent = project .. "/broken-agent"
-    vim.fn.writefile({ "#!/nonexistent/interpreter", "echo never" }, agent) -- executable on the host, exec fails in bwrap
-    vim.uv.fs_chmod(agent, tonumber("755", 8))
-    local job = sb.run({ agent }, { project = project, tmp_dir = tmp })
-    H.ok(job and job > 0, "bwrap itself starts")
-    H.ok(vim.fn.jobwait({ job }, 20000)[1] ~= 0, "and the agent fails")
-    H.ok(vim.wait(2000, function() return sb.running() == 0 end, 20), "handle released after the failed start")
-    placeholders_gone()
-    vim.cmd("silent! bwipeout!")
-  end)
+  it(
+    "sandbox = true and an agent that cannot run INSIDE the sandbox: the handle is released and the placeholders removed",
+    function()
+      H.need_sandbox()
+      sb.setup({ preview = "never", network = "open" })
+      local agent = project .. "/broken-agent"
+      vim.fn.writefile({ "#!/nonexistent/interpreter", "echo never" }, agent) -- executable on the host, exec fails in bwrap
+      vim.uv.fs_chmod(agent, tonumber("755", 8))
+      local job = sb.run({ agent }, { project = project, tmp_dir = tmp })
+      H.ok(job and job > 0, "bwrap itself starts")
+      H.ok(vim.fn.jobwait({ job }, 20000)[1] ~= 0, "and the agent fails")
+      H.ok(
+        vim.wait(2000, function()
+          return sb.running() == 0
+        end, 20),
+        "handle released after the failed start"
+      )
+      placeholders_gone()
+      vim.cmd("silent! bwipeout!")
+    end
+  )
 
   for name, stub in pairs({
-    ["returns 0"] = function() return 0 end,
-    ["returns -1"] = function() return -1 end,
-    ["raises"] = function() error("E475: simulated jobstart failure") end,
+    ["returns 0"] = function()
+      return 0
+    end,
+    ["returns -1"] = function()
+      return -1
+    end,
+    ["raises"] = function()
+      error("E475: simulated jobstart failure")
+    end,
   }) do
     it(("a jobstart that %s closes the new split and buffer and releases the sandbox"):format(name), function()
       H.need_sandbox()
@@ -415,7 +507,9 @@ describe("run()", function()
       H.eq(w0, w1, "the split opened for the terminal is closed again")
       H.eq(b0, b1, "and its buffer deleted")
       H.eq(0, sb.running(), "the sandbox handle is released")
-      local errs = vim.tbl_filter(function(g) return g[2] == vim.log.levels.ERROR end, got)
+      local errs = vim.tbl_filter(function(g)
+        return g[2] == vim.log.levels.ERROR
+      end, got)
       H.eq(1, #errs)
       H.match(errs[1][1], "could not start", true)
       placeholders_gone()
@@ -428,7 +522,12 @@ describe("run()", function()
     local job = sb.run({ "bash", "-c", "echo hi > made.txt" }, { project = project, tmp_dir = tmp })
     H.ok(job and job > 0)
     H.eq(0, vim.fn.jobwait({ job }, 20000)[1])
-    H.ok(vim.wait(2000, function() return sb.running() == 0 end, 20), "handle released")
+    H.ok(
+      vim.wait(2000, function()
+        return sb.running() == 0
+      end, 20),
+      "handle released"
+    )
     H.eq(1, vim.fn.filereadable(project .. "/made.txt"))
     for _, rel in ipairs({ ".envrc", ".vscode", ".cargo", ".mise.toml" }) do
       H.eq(nil, vim.uv.fs_stat(project .. "/" .. rel), rel .. " placeholder removed after the run")
@@ -439,12 +538,20 @@ describe("run()", function()
   it("with a UI the job starts after the confirm and on_start gets the job id", function()
     H.need_sandbox()
     sb.setup({ preview = "always" })
-    run.has_ui = function() return true end
+    run.has_ui = function()
+      return true
+    end
     ui.show = function(opts)
       opts.on_done(true, opts.build({}), {})
     end
     local started
-    local ret = sb.run({ "true" }, { project = project, tmp_dir = tmp, on_start = function(j) started = j end })
+    local ret = sb.run({ "true" }, {
+      project = project,
+      tmp_dir = tmp,
+      on_start = function(j)
+        started = j
+      end,
+    })
     H.eq(nil, ret)
     H.ok(started and started > 0, "on_start called")
     vim.fn.jobwait({ started }, 20000)
@@ -455,7 +562,8 @@ end)
 describe("stale confirmed plans", function()
   it("a rebuilt plan keeps the exceptions approved for this launch", function()
     need_bwrap()
-    local p = sb.plan(CMD, project, tmp, { exceptions = { { kind = "env", value = "XS_TEST_API_KEY", scope = "once" } } })
+    local p =
+      sb.plan(CMD, project, tmp, { exceptions = { { kind = "env", value = "XS_TEST_API_KEY", scope = "once" } } })
     H.has(p.env_kept, "XS_TEST_API_KEY")
     vim.fn.writefile({ "x" }, project .. "/.envrc") -- the guard assumed it absent: the plan is stale
     local wrapped, _, h = sb.wrap(CMD, project, tmp, { plan = p })

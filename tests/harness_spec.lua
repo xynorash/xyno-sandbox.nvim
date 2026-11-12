@@ -6,7 +6,9 @@ local function run_spec(body)
   local f = assert(io.open(dir .. "/x_spec.lua", "w"))
   f:write(body)
   f:close()
-  local r = vim.system({ vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/x_spec.lua" }, { text = true }):wait(60000)
+  local r = vim
+    .system({ vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/x_spec.lua" }, { text = true })
+    :wait(60000)
   return r.stdout or "", r.code
 end
 

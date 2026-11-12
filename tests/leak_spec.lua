@@ -39,11 +39,19 @@ local function host_relay()
   local port = 20000 + (uv.hrtime() % 20000)
   local ready = dir .. "/ready"
   local script = ('"%s" -u NONE -i NONE --headless -l "%s" "%s" %d "%s" </dev/null >/dev/null 2>&1 & wait'):format(
-    vim.v.progpath, RELAY, dir .. "/net/proxy.sock", port, ready)
+    vim.v.progpath,
+    RELAY,
+    dir .. "/net/proxy.sock",
+    port,
+    ready
+  )
   local sh = vim.system({ "sh", "-c", script, "xyno-leak-parent", marker })
-  H.ok(vim.wait(10000, function()
-    return uv.fs_stat(ready) ~= nil
-  end, 50), "the relay did not come up")
+  H.ok(
+    vim.wait(10000, function()
+      return uv.fs_stat(ready) ~= nil
+    end, 50),
+    "the relay did not come up"
+  )
   return { sh = sh, dir = dir, marker = marker, ready = ready }
 end
 
@@ -81,20 +89,39 @@ describe("a sandbox whose launcher dies", function()
     H.ok(cmd, err)
     -- a parent we can kill without touching bwrap itself
     local parent = vim.system({ "sh", "-c", '"$@" & wait', "xyno-leak-parent", unpack(cmd) }, { cwd = project })
-    H.ok(vim.wait(10000, function()
-      return #H.procs("proxy.sock") > 0 and #H.procs(project) > 0 and #H.procs("sleep 300") > 0
-        and vim.iter(H.procs("relay.lua")):any(function(p) return p[2]:find(h.net_dir, 1, true) end)
-    end, 100), "the sandbox did not come up")
+    H.ok(
+      vim.wait(10000, function()
+        return #H.procs("proxy.sock") > 0
+          and #H.procs(project) > 0
+          and #H.procs("sleep 300") > 0
+          and vim.iter(H.procs("relay.lua")):any(function(p)
+            return p[2]:find(h.net_dir, 1, true)
+          end)
+      end, 100),
+      "the sandbox did not come up"
+    )
     parent:kill(9)
     local left = H.wait_gone(project, 5000)
     local agent = procs("sleep 300")
-    local relay_left = vim.tbl_filter(function(p) return p[2]:find(h.net_dir, 1, true) end, H.procs(h.net_dir))
-    for _, p in ipairs(relay_left) do uv.kill(p[1], 9) end
+    local relay_left = vim.tbl_filter(function(p)
+      return p[2]:find(h.net_dir, 1, true)
+    end, H.procs(h.net_dir))
+    for _, p in ipairs(relay_left) do
+      uv.kill(p[1], 9)
+    end
     h.release()
     H.eq({}, left, "bwrap survived its parent")
     H.eq({}, relay_left, "the relay survived the sandbox")
-    for _, p in ipairs(agent) do uv.kill(p[1], 9) end
-    H.eq({}, vim.tbl_filter(function(p) return p[2] == "sleep 300 " or p[2] == "sleep 300" end, procs("sleep 300")), "the agent survived the sandbox")
+    for _, p in ipairs(agent) do
+      uv.kill(p[1], 9)
+    end
+    H.eq(
+      {},
+      vim.tbl_filter(function(p)
+        return p[2] == "sleep 300 " or p[2] == "sleep 300"
+      end, procs("sleep 300")),
+      "the agent survived the sandbox"
+    )
   end)
 
   it("the plan always carries --die-with-parent", function()
@@ -114,8 +141,15 @@ describe("release", function()
     H.ok(uv.fs_stat(sock), "the proxy socket exists while the sandbox is live")
     local pipe = uv.new_pipe(false)
     local ok_before
-    pipe:connect(sock, function(e) ok_before = e == nil end)
-    H.ok(vim.wait(2000, function() return ok_before ~= nil end), "no answer from the proxy")
+    pipe:connect(sock, function(e)
+      ok_before = e == nil
+    end)
+    H.ok(
+      vim.wait(2000, function()
+        return ok_before ~= nil
+      end),
+      "no answer from the proxy"
+    )
     H.ok(ok_before, "the proxy accepts connections while the sandbox is live")
     pipe:close()
     local proxy = h.proxy
@@ -125,8 +159,15 @@ describe("release", function()
     H.eq(nil, uv.fs_stat(h.net_dir), "the socket directory is removed on release")
     local after
     local p2 = uv.new_pipe(false)
-    p2:connect(sock, function(e) after = e or "connected" end)
-    H.ok(vim.wait(2000, function() return after ~= nil end), "connect to a closed proxy hung")
+    p2:connect(sock, function(e)
+      after = e or "connected"
+    end)
+    H.ok(
+      vim.wait(2000, function()
+        return after ~= nil
+      end),
+      "connect to a closed proxy hung"
+    )
     H.not_ok(after == "connected", "the proxy still accepts connections after release")
     p2:close()
   end)
@@ -156,12 +197,18 @@ describe("tests/run.lua", function()
       end)
     ]])
     f:close()
-    local r = vim.system({ vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/leaky_spec.lua" },
-      { text = true, env = { XYNO_TEST_WORKER = "0" } }):wait(60000)
+    local r = vim
+      .system(
+        { vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/leaky_spec.lua" },
+        { text = true, env = { XYNO_TEST_WORKER = "0" } }
+      )
+      :wait(60000)
     H.eq(1, r.code, r.stdout)
     H.match(r.stdout, "left a process behind", true)
     H.match(r.stdout, "failed=1", true)
-    local left = vim.tbl_filter(function(p) return p[2]:find("leak-marker", 1, true) end, H.procs("sleep 120"))
+    local left = vim.tbl_filter(function(p)
+      return p[2]:find("leak-marker", 1, true)
+    end, H.procs("sleep 120"))
     H.eq({}, left, "the survivor was killed")
   end)
 end)

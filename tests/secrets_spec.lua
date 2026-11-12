@@ -27,8 +27,12 @@ local function fakefs(entries, real)
       end
       return t
     end,
-    lstat_type = function(p) return entries[p] end,
-    exists = function(p) return entries[p] ~= nil end,
+    lstat_type = function(p)
+      return entries[p]
+    end,
+    exists = function(p)
+      return entries[p] ~= nil
+    end,
     list = function(dir)
       local out, prefix = {}, dir .. "/"
       for p, t in pairs(entries) do
@@ -36,25 +40,43 @@ local function fakefs(entries, real)
           out[#out + 1] = { p:sub(#prefix + 1), t }
         end
       end
-      table.sort(out, function(a, b) return a[1] < b[1] end)
+      table.sort(out, function(a, b)
+        return a[1] < b[1]
+      end)
       return out
     end,
-    glob = function() return {} end,
-    read_line = function() return nil end,
-    realpath = function(p) return (real or {})[p] or (entries[p] and p) or nil end,
+    glob = function()
+      return {}
+    end,
+    read_line = function()
+      return nil
+    end,
+    realpath = function(p)
+      return (real or {})[p] or (entries[p] and p) or nil
+    end,
   }
   return probes
 end
 
 local function build(extra_entries, over, real)
   local entries = vim.tbl_extend("force", {
-    [HOME] = "directory", [HOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory",
+    [HOME] = "directory",
+    [HOME .. "/.claude"] = "directory",
+    [PROJECT] = "directory",
+    [TMP] = "directory",
     [PROJECT .. "/.git"] = "directory",
   }, extra_entries or {})
   over = over or {}
   return plan.build(vim.tbl_extend("force", {
-    project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, probes = fakefs(entries, real),
-    env = { PATH = "/bin" }, cmd = { "agent" }, aux = { empty = "/aux/empty" },
+    project = PROJECT,
+    tmp_dir = TMP,
+    cwd = PROJECT,
+    home = HOME,
+    uid = 1000,
+    probes = fakefs(entries, real),
+    env = { PATH = "/bin" },
+    cmd = { "agent" },
+    aux = { empty = "/aux/empty" },
     config = { network = "open", home = "denylist" },
   }, over))
 end
@@ -70,9 +92,27 @@ end
 describe("project secrets in the plan", function()
   it("hides .env, .env.*, keys, certificates and token files anywhere in the project, as empty files", function()
     local files = {
-      ".env", ".env.local", ".env.production", "app/.env", "svc/config/.env.staging", "server.pem", "deploy.key",
-      ".npmrc", ".netrc", "credentials.json", "secrets.yaml", "secrets.toml", "id_ed25519", "gcp-service-account-prod.json",
-      "terraform.tfvars", ".pypirc", ".git-credentials", ".htpasswd", "kubeconfig", "ci/.ENV", "keys/SERVER.KEY",
+      ".env",
+      ".env.local",
+      ".env.production",
+      "app/.env",
+      "svc/config/.env.staging",
+      "server.pem",
+      "deploy.key",
+      ".npmrc",
+      ".netrc",
+      "credentials.json",
+      "secrets.yaml",
+      "secrets.toml",
+      "id_ed25519",
+      "gcp-service-account-prod.json",
+      "terraform.tfvars",
+      ".pypirc",
+      ".git-credentials",
+      ".htpasswd",
+      "kubeconfig",
+      "ci/.ENV",
+      "keys/SERVER.KEY",
     }
     local e = {}
     for _, f in ipairs(files) do
@@ -94,8 +134,18 @@ describe("project secrets in the plan", function()
 
   it("leaves templates and ordinary files alone", function()
     local files = {
-      ".env.example", ".env.sample", ".env.template", ".env.dist", "README.md", "Cargo.toml", "src/main.rs",
-      "environment.rs", "keyboard.rs", "monkey.txt", "id_rsa.pub", "secrets_test.go.txt.bak.md",
+      ".env.example",
+      ".env.sample",
+      ".env.template",
+      ".env.dist",
+      "README.md",
+      "Cargo.toml",
+      "src/main.rs",
+      "environment.rs",
+      "keyboard.rs",
+      "monkey.txt",
+      "id_rsa.pub",
+      "secrets_test.go.txt.bak.md",
     }
     local e = { [PROJECT .. "/src"] = "directory" }
     for _, f in ipairs(files) do
@@ -109,7 +159,9 @@ describe("project secrets in the plan", function()
 
   it("hides credential directories and sockets of the project", function()
     local h = hidden_by_path(build({
-      [PROJECT .. "/.aws"] = "directory", [PROJECT .. "/ops/.ssh"] = "directory", [PROJECT .. "/ops"] = "directory",
+      [PROJECT .. "/.aws"] = "directory",
+      [PROJECT .. "/ops/.ssh"] = "directory",
+      [PROJECT .. "/ops"] = "directory",
       [PROJECT .. "/dev.sock"] = "socket",
     }))
     H.eq("dir", h[PROJECT .. "/.aws"].kind)
@@ -120,15 +172,26 @@ describe("project secrets in the plan", function()
 
   it("is configurable: off, more globs, never-hide names and paths", function()
     local e = {
-      [PROJECT .. "/.env"] = "file", [PROJECT .. "/.env.test"] = "file", [PROJECT .. "/x.token"] = "file",
-      [PROJECT .. "/cfg"] = "directory", [PROJECT .. "/cfg/.env"] = "file",
+      [PROJECT .. "/.env"] = "file",
+      [PROJECT .. "/.env.test"] = "file",
+      [PROJECT .. "/x.token"] = "file",
+      [PROJECT .. "/cfg"] = "directory",
+      [PROJECT .. "/cfg/.env"] = "file",
     }
-    local off = hidden_by_path(build(e, { config = { network = "open", home = "denylist", policy = { project_secrets = false } } }))
+    local off = hidden_by_path(
+      build(e, { config = { network = "open", home = "denylist", policy = { project_secrets = false } } })
+    )
     H.eq(nil, off[PROJECT .. "/.env"])
-    local more = hidden_by_path(build(e, { config = { network = "open", home = "denylist", policy = { secret_files = { "*.token" } } } }))
+    local more = hidden_by_path(
+      build(e, { config = { network = "open", home = "denylist", policy = { secret_files = { "*.token" } } } })
+    )
     H.ok(more[PROJECT .. "/x.token"])
-    local allow = hidden_by_path(build(e, { config = { network = "open", home = "denylist",
-      policy = { secret_allow = { ".env.test", "cfg/.env" } } } }))
+    local allow = hidden_by_path(
+      build(
+        e,
+        { config = { network = "open", home = "denylist", policy = { secret_allow = { ".env.test", "cfg/.env" } } } }
+      )
+    )
     H.eq(nil, allow[PROJECT .. "/.env.test"])
     H.eq(nil, allow[PROJECT .. "/cfg/.env"])
     H.ok(allow[PROJECT .. "/.env"], "only the named ones are let through")
@@ -149,8 +212,12 @@ describe("project secrets in the plan", function()
     local a = plan.argv(p)
     local w, hid
     for i = 1, #a - 2 do
-      if a[i] == "--bind" and a[i + 2] == PROJECT then w = i end
-      if a[i] == "--ro-bind" and a[i + 2] == PROJECT .. "/.env" then hid = i end
+      if a[i] == "--bind" and a[i + 2] == PROJECT then
+        w = i
+      end
+      if a[i] == "--ro-bind" and a[i + 2] == PROJECT .. "/.env" then
+        hid = i
+      end
     end
     H.ok(w and hid and hid > w, "ro-bind of .env must come after --bind of the project")
   end)
@@ -189,11 +256,19 @@ describe("project secrets inside a real sandbox", function()
   it("reads of .env, *.pem, .npmrc, credentials.json give nothing; templates and notes are readable", function()
     local project = H.tmpdir()
     populate(project)
-    local out = inside(project, table.concat({
-      'echo "env=[$(cat .env)]"', 'echo "pem=[$(cat server.pem)]"', 'echo "npmrc=[$(cat .npmrc)]"',
-      'echo "cred=[$(cat sub/credentials.json)]"', 'echo "example=[$(cat .env.example)]"', 'echo "notes=[$(cat notes.txt)]"',
-      'grep -r hunter2 . 2>/dev/null && echo FOUND-HUNTER2', "echo done",
-    }, "\n"))
+    local out = inside(
+      project,
+      table.concat({
+        'echo "env=[$(cat .env)]"',
+        'echo "pem=[$(cat server.pem)]"',
+        'echo "npmrc=[$(cat .npmrc)]"',
+        'echo "cred=[$(cat sub/credentials.json)]"',
+        'echo "example=[$(cat .env.example)]"',
+        'echo "notes=[$(cat notes.txt)]"',
+        "grep -r hunter2 . 2>/dev/null && echo FOUND-HUNTER2",
+        "echo done",
+      }, "\n")
+    )
     H.match(out, "env=[]", true, out)
     H.match(out, "pem=[]", true)
     H.match(out, "npmrc=[]", true)
@@ -207,12 +282,16 @@ describe("project secrets inside a real sandbox", function()
   it("the agent can neither write to, replace, move nor delete a hidden secret", function()
     local project = H.tmpdir()
     populate(project)
-    local out = inside(project, table.concat({
-      'echo planted >> .env 2>/dev/null && echo WROTE',
-      'mv .env .env.moved 2>/dev/null && echo MOVED',
-      'rm -f .env 2>/dev/null; [ -e .env ] && echo STILL-THERE',
-      'echo "len=$(wc -c < .env)"', "echo done",
-    }, "\n"))
+    local out = inside(
+      project,
+      table.concat({
+        "echo planted >> .env 2>/dev/null && echo WROTE",
+        "mv .env .env.moved 2>/dev/null && echo MOVED",
+        "rm -f .env 2>/dev/null; [ -e .env ] && echo STILL-THERE",
+        'echo "len=$(wc -c < .env)"',
+        "echo done",
+      }, "\n")
+    )
     H.no_match(out, "WROTE", true, out)
     H.no_match(out, "MOVED", true, out)
     H.match(out, "STILL-THERE", true, out)
@@ -261,11 +340,17 @@ describe("symlinks that leave the project", function()
 
   it("lists each link whose target is outside the project, with whether the target is readable inside", function()
     local p = links({
-      [PROJECT .. "/etc-link"] = "link", [PROJECT .. "/src/home-link"] = "link", [PROJECT .. "/inside"] = "link",
-      [PROJECT .. "/src/real.rs"] = "file", [PROJECT .. "/tmp-link"] = "link", [HOME .. "/notes"] = "file",
+      [PROJECT .. "/etc-link"] = "link",
+      [PROJECT .. "/src/home-link"] = "link",
+      [PROJECT .. "/inside"] = "link",
+      [PROJECT .. "/src/real.rs"] = "file",
+      [PROJECT .. "/tmp-link"] = "link",
+      [HOME .. "/notes"] = "file",
     }, {
-      [PROJECT .. "/etc-link"] = "/etc/hostname", [PROJECT .. "/src/home-link"] = HOME .. "/notes",
-      [PROJECT .. "/inside"] = PROJECT .. "/src/real.rs", [PROJECT .. "/tmp-link"] = "/tmp/elsewhere",
+      [PROJECT .. "/etc-link"] = "/etc/hostname",
+      [PROJECT .. "/src/home-link"] = HOME .. "/notes",
+      [PROJECT .. "/inside"] = PROJECT .. "/src/real.rs",
+      [PROJECT .. "/tmp-link"] = "/tmp/elsewhere",
     })
     local by = {}
     for _, l in ipairs(p.symlinks) do
@@ -279,8 +364,11 @@ describe("symlinks that leave the project", function()
   end)
 
   it("in the allowlist view a link into $HOME is listed as not visible", function()
-    local p = links({ [PROJECT .. "/notes"] = "link", [HOME .. "/notes.txt"] = "file" }, { [PROJECT .. "/notes"] = HOME .. "/notes.txt" },
-      { home = "allowlist" })
+    local p = links(
+      { [PROJECT .. "/notes"] = "link", [HOME .. "/notes.txt"] = "file" },
+      { [PROJECT .. "/notes"] = HOME .. "/notes.txt" },
+      { home = "allowlist" }
+    )
     H.eq(false, p.symlinks[1].readable)
   end)
 
@@ -302,7 +390,11 @@ describe("symlinks that leave the project", function()
     local text = table.concat(ui.lines(refuse, { home = HOME }), "\n")
     H.match(text, "BLOCKED", true)
     -- an unreadable target does not block
-    local ok = links({ [PROJECT .. "/t"] = "link" }, { [PROJECT .. "/t"] = "/tmp/x" }, { policy = { symlinks = "refuse" } })
+    local ok = links(
+      { [PROJECT .. "/t"] = "link" },
+      { [PROJECT .. "/t"] = "/tmp/x" },
+      { policy = { symlinks = "refuse" } }
+    )
     H.eq(nil, ok.blocked)
   end)
 
@@ -332,7 +424,11 @@ describe("symlinks that leave the project", function()
     vim.uv.fs_symlink("/etc/hostname", project .. "/to-etc")
     vim.fn.writefile({ "in" }, project .. "/plain.txt")
     vim.uv.fs_symlink("plain.txt", project .. "/to-plain")
-    local p = sb.plan({ "bash", "-c", 'echo "tmp=[$(cat to-tmp 2>&1)]"; echo "etc=[$(cat to-etc | wc -c)]"; echo "plain=[$(cat to-plain)]"' }, project, tmp)
+    local p = sb.plan({
+      "bash",
+      "-c",
+      'echo "tmp=[$(cat to-tmp 2>&1)]"; echo "etc=[$(cat to-etc | wc -c)]"; echo "plain=[$(cat to-plain)]"',
+    }, project, tmp)
     local by = {}
     for _, l in ipairs(p.symlinks) do
       by[vim.fs.basename(l.path)] = l

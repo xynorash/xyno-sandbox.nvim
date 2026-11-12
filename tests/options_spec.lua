@@ -24,18 +24,29 @@ describe("validate_opts", function()
     local errs = sb.validate_opts(opts)
     H.ok(#errs > 0, "expected an error for " .. vim.inspect(opts))
     H.match(table.concat(errs, "; "), pat, true)
-    H.throws(function() sb.setup(opts) end, vim.pesc(pat))
+    H.throws(function()
+      sb.setup(opts)
+    end, vim.pesc(pat))
   end
 
   it("accepts a full valid policy", function()
-    H.eq({}, sb.validate_opts({
-      preview = "always", strip_skip_permissions = true, agent_cmd = { "claude" },
-      policy = {
-        readonly = { "deploy.sh", "/etc/x", "~/.toolrc" }, writable = { "/data/out", "~/work/out" },
-        hidden = { "~/.secrets" }, guard_dirs = { ".idea" }, guard_files = { "run.sh" },
-        scrub = { contains = { "CORP" }, prefix = { "INT_" }, exact = { "ZED" } }, scan_depth = 10,
-      },
-    }))
+    H.eq(
+      {},
+      sb.validate_opts({
+        preview = "always",
+        strip_skip_permissions = true,
+        agent_cmd = { "claude" },
+        policy = {
+          readonly = { "deploy.sh", "/etc/x", "~/.toolrc" },
+          writable = { "/data/out", "~/work/out" },
+          hidden = { "~/.secrets" },
+          guard_dirs = { ".idea" },
+          guard_files = { "run.sh" },
+          scrub = { contains = { "CORP" }, prefix = { "INT_" }, exact = { "ZED" } },
+          scan_depth = 10,
+        },
+      })
+    )
   end)
 
   it("rejects unknown options and policy keys (typos)", function()
@@ -75,7 +86,9 @@ describe("validate_opts", function()
 
   it("an invalid setup() raises and changes nothing", function()
     local before = vim.deepcopy(sb.config)
-    H.throws(function() sb.setup({ preview = "always", policy = { writable = { "/" } } }) end)
+    H.throws(function()
+      sb.setup({ preview = "always", policy = { writable = { "/" } } })
+    end)
     H.eq(before, sb.config)
   end)
 end)
@@ -88,7 +101,14 @@ describe("policy reaches the plan", function()
     local project, tmp, extra, hid = H.tmpdir(), H.tmpdir(), H.tmpdir(), H.tmpdir()
     vim.fn.writefile({ "x" }, project .. "/deploy.sh")
     vim.uv.os_setenv("CORP_THING", "v")
-    sb.setup({ policy = { readonly = { "deploy.sh" }, writable = { extra }, hidden = { hid }, scrub = { contains = { "CORP_" } } } })
+    sb.setup({
+      policy = {
+        readonly = { "deploy.sh" },
+        writable = { extra },
+        hidden = { hid },
+        scrub = { contains = { "CORP_" } },
+      },
+    })
     local p = sb.plan({ "agent" }, project, tmp)
     local function has(list, path)
       for _, e in ipairs(list) do
@@ -118,7 +138,11 @@ end)
 describe("switches may be functions", function()
   it("sandbox / allow_unsandboxed given as functions are evaluated at every call", function()
     local v = true
-    sb.setup({ sandbox = function() return v end })
+    sb.setup({
+      sandbox = function()
+        return v
+      end,
+    })
     H.ok(sb.status().mode ~= "unsandboxed")
     v = false
     H.eq("sandbox=false", sb.status().via)
@@ -129,10 +153,28 @@ describe("documentation", function()
   it("README and help document every option, command and the permission line", function()
     local text = H.docs_text()
     for _, w in ipairs({
-      "preview", "strip_skip_permissions", "agent_cmd", "guard_files", "guard_dirs", "scan_depth",
-      ":XynoSandboxPolicy", ":XynoSandboxApprovals", "exceptions.log", "Agent permission prompts",
-      "statusline", "handle.release", "xfail", "unprivileged_userns_clone", "home_allow", "keep_run", "project_secrets",
-      "secret_files", "secret_allow", "expert_exceptions", "env -i", "symlinks",
+      "preview",
+      "strip_skip_permissions",
+      "agent_cmd",
+      "guard_files",
+      "guard_dirs",
+      "scan_depth",
+      ":XynoSandboxPolicy",
+      ":XynoSandboxApprovals",
+      "exceptions.log",
+      "Agent permission prompts",
+      "statusline",
+      "handle.release",
+      "xfail",
+      "unprivileged_userns_clone",
+      "home_allow",
+      "keep_run",
+      "project_secrets",
+      "secret_files",
+      "secret_allow",
+      "expert_exceptions",
+      "env -i",
+      "symlinks",
     }) do
       H.has(text, w)
     end

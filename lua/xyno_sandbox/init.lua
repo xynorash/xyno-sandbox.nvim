@@ -55,8 +55,18 @@ local uid = pwd and pwd.uid or -1
 
 -- ------------------------------------------------------------------ options
 
-local POLICY_LISTS = { "readonly", "writable", "hidden", "guard_dirs", "guard_files", "home_allow", "keep_run",
-  "secret_files", "secret_allow", "claude_share" }
+local POLICY_LISTS = {
+  "readonly",
+  "writable",
+  "hidden",
+  "guard_dirs",
+  "guard_files",
+  "home_allow",
+  "keep_run",
+  "secret_files",
+  "secret_allow",
+  "claude_share",
+}
 local PREVIEW = { always = true, once = true, never = true }
 
 local function str_list(name, v, errs, check)
@@ -117,9 +127,20 @@ end
 --- The lists only ADD to the built-in policy; nothing can be removed from it.
 function M.validate_opts(opts)
   local errs = {}
-  local known = { sandbox = true, allow_unsandboxed = true, keymaps = true, commands = true, preview = true,
-    strip_skip_permissions = true, policy = true, agent_cmd = true, network = true, allow_hosts = true,
-    home = true, expert_exceptions = true }
+  local known = {
+    sandbox = true,
+    allow_unsandboxed = true,
+    keymaps = true,
+    commands = true,
+    preview = true,
+    strip_skip_permissions = true,
+    policy = true,
+    agent_cmd = true,
+    network = true,
+    allow_hosts = true,
+    home = true,
+    expert_exceptions = true,
+  }
   for k in pairs(opts) do
     if not known[k] then
       errs[#errs + 1] = "unknown option " .. tostring(k)
@@ -160,7 +181,14 @@ function M.validate_opts(opts)
     if type(p) ~= "table" then
       errs[#errs + 1] = "policy must be a table"
     else
-      local pknown = { scrub = true, scan_depth = true, project_secrets = true, symlinks = true, content_scan = true, tree_secrets = true }
+      local pknown = {
+        scrub = true,
+        scan_depth = true,
+        project_secrets = true,
+        symlinks = true,
+        content_scan = true,
+        tree_secrets = true,
+      }
       for _, k in ipairs(POLICY_LISTS) do
         pknown[k] = true
       end
@@ -169,12 +197,24 @@ function M.validate_opts(opts)
           errs[#errs + 1] = "unknown policy key " .. tostring(k)
         end
       end
-      if p.readonly ~= nil then str_list("policy.readonly", p.readonly, errs, path_check(true, false)) end
-      if p.writable ~= nil then str_list("policy.writable", p.writable, errs, path_check(false, true)) end
-      if p.hidden ~= nil then str_list("policy.hidden", p.hidden, errs, path_check(false, true)) end
-      if p.guard_dirs ~= nil then str_list("policy.guard_dirs", p.guard_dirs, errs, path_check(true, true)) end
-      if p.guard_files ~= nil then str_list("policy.guard_files", p.guard_files, errs, path_check(true, true)) end
-      if p.home_allow ~= nil then str_list("policy.home_allow", p.home_allow, errs, path_check(false, true)) end
+      if p.readonly ~= nil then
+        str_list("policy.readonly", p.readonly, errs, path_check(true, false))
+      end
+      if p.writable ~= nil then
+        str_list("policy.writable", p.writable, errs, path_check(false, true))
+      end
+      if p.hidden ~= nil then
+        str_list("policy.hidden", p.hidden, errs, path_check(false, true))
+      end
+      if p.guard_dirs ~= nil then
+        str_list("policy.guard_dirs", p.guard_dirs, errs, path_check(true, true))
+      end
+      if p.guard_files ~= nil then
+        str_list("policy.guard_files", p.guard_files, errs, path_check(true, true))
+      end
+      if p.home_allow ~= nil then
+        str_list("policy.home_allow", p.home_allow, errs, path_check(false, true))
+      end
       if p.keep_run ~= nil then
         str_list("policy.keep_run", p.keep_run, errs, function(e)
           local why = path_check(false, true)(e)
@@ -200,7 +240,9 @@ function M.validate_opts(opts)
           end
         end)
       end
-      if p.secret_allow ~= nil then str_list("policy.secret_allow", p.secret_allow, errs) end
+      if p.secret_allow ~= nil then
+        str_list("policy.secret_allow", p.secret_allow, errs)
+      end
       if p.project_secrets ~= nil and type(p.project_secrets) ~= "boolean" then
         errs[#errs + 1] = "policy.project_secrets must be a boolean"
       end
@@ -213,8 +255,15 @@ function M.validate_opts(opts)
       if p.symlinks ~= nil and p.symlinks ~= "warn" and p.symlinks ~= "refuse" then
         errs[#errs + 1] = 'policy.symlinks must be "warn" or "refuse"'
       end
-      if p.scan_depth ~= nil and not (type(p.scan_depth) == "number" and p.scan_depth >= 1 and p.scan_depth <= 32
-        and p.scan_depth == math.floor(p.scan_depth)) then
+      if
+        p.scan_depth ~= nil
+        and not (
+          type(p.scan_depth) == "number"
+          and p.scan_depth >= 1
+          and p.scan_depth <= 32
+          and p.scan_depth == math.floor(p.scan_depth)
+        )
+      then
         errs[#errs + 1] = "policy.scan_depth must be an integer from 1 to 32"
       end
       if p.scrub ~= nil then
@@ -294,8 +343,14 @@ end
 --- @return string[] ro, string[] masks  masks: absent dirs to cover with an empty read-only tmpfs
 function M.readonly_paths(project)
   local p = plan_mod.build({
-    project = project, tmp_dir = "/nonexistent", cwd = vim.uv.cwd(), env = {}, home = home, uid = uid,
-    config = cfg_view(), assume_claude_dir = false,
+    project = project,
+    tmp_dir = "/nonexistent",
+    cwd = vim.uv.cwd(),
+    env = {},
+    home = home,
+    uid = uid,
+    config = cfg_view(),
+    assume_claude_dir = false,
   })
   local ro, masks = {}, {}
   for _, r in ipairs(p.readonly) do
@@ -367,8 +422,12 @@ end
 -- Every plan gets its own names: what a launch creates (the empty file that hidden files are bound
 -- to, the private copies, the socket directory) belongs to that launch and is removed with it.
 local function aux_paths()
-  return { empty = vim.fn.tempname() .. ".empty", claude_json = vim.fn.tempname() .. ".claude.json", net_dir = vim.fn.tempname() .. ".net",
-    git_dir = vim.fn.tempname() .. ".git" }
+  return {
+    empty = vim.fn.tempname() .. ".empty",
+    claude_json = vim.fn.tempname() .. ".claude.json",
+    net_dir = vim.fn.tempname() .. ".net",
+    git_dir = vim.fn.tempname() .. ".git",
+  }
 end
 
 --- The plan for running `cmd` here: the structured policy the launcher and the preview share.
@@ -386,10 +445,25 @@ function M.plan(cmd, project, tmp_dir, opts)
     return nil, st.reason
   elseif st.mode == "unsandboxed" then
     return {
-      version = 1, mode = "unsandboxed", via = st.via, reason = st.reason, project = project, tmp_dir = tmp_dir,
+      version = 1,
+      mode = "unsandboxed",
+      via = st.via,
+      reason = st.reason,
+      project = project,
+      tmp_dir = tmp_dir,
       agent = { cmd = cmd, skip_permissions = plan_mod.skip_flag(cmd) ~= nil, flag = plan_mod.skip_flag(cmd) },
-      exceptions = {}, rejected = {}, notes = {}, writable = {}, hidden = {}, readonly = {}, masks = {},
-      guard_files = {}, env_strip = {}, env_kept = {}, git_locked = {}, network = "open",
+      exceptions = {},
+      rejected = {},
+      notes = {},
+      writable = {},
+      hidden = {},
+      readonly = {},
+      masks = {},
+      guard_files = {},
+      env_strip = {},
+      env_kept = {},
+      git_locked = {},
+      network = "open",
     }
   end
   local excs = {}
@@ -404,9 +478,20 @@ function M.plan(cmd, project, tmp_dir, opts)
     env[k] = v or nil
   end
   return plan_mod.build({
-    cmd = cmd, project = project, tmp_dir = tmp_dir, cwd = opts.cwd or vim.uv.cwd(), env = env,
-    bwrap = probe.bwrap_path(), env_bin = (vim.fn.exepath("env") ~= "" and vim.fn.fnamemodify(vim.fn.exepath("env"), ":p") or nil),
-    home = home, passwd_home = pwd and pwd.homedir, uid = uid, config = cfg_view(), aux = opts.aux or aux_paths(), exceptions = excs, nvim = vim.v.progpath,
+    cmd = cmd,
+    project = project,
+    tmp_dir = tmp_dir,
+    cwd = opts.cwd or vim.uv.cwd(),
+    env = env,
+    bwrap = probe.bwrap_path(),
+    env_bin = (vim.fn.exepath("env") ~= "" and vim.fn.fnamemodify(vim.fn.exepath("env"), ":p") or nil),
+    home = home,
+    passwd_home = pwd and pwd.homedir,
+    uid = uid,
+    config = cfg_view(),
+    aux = opts.aux or aux_paths(),
+    exceptions = excs,
+    nvim = vim.v.progpath,
     state_dir = store.dir(),
   })
 end
@@ -420,8 +505,16 @@ end
 --- the path hidden at all, does a later read-only mount cover it).
 function M.baseline(project)
   return plan_mod.build({
-    project = project, tmp_dir = "/nonexistent-xyno-baseline", cwd = project, env = vim.fn.environ(), home = home,
-    uid = uid, passwd_home = pwd and pwd.homedir, config = cfg_view(), cmd = { "agent" }, assume_claude_dir = false,
+    project = project,
+    tmp_dir = "/nonexistent-xyno-baseline",
+    cwd = project,
+    env = vim.fn.environ(),
+    home = home,
+    uid = uid,
+    passwd_home = pwd and pwd.homedir,
+    config = cfg_view(),
+    cmd = { "agent" },
+    assume_claude_dir = false,
     state_dir = store.dir(),
   })
 end
@@ -429,9 +522,12 @@ end
 --- Validation context of exception decisions (see xyno_sandbox.exceptions).
 function M.exception_context(project, kind)
   return {
-    home = home, state_dir = store.dir(), probes = plan_mod.real_probes(),
+    home = home,
+    state_dir = store.dir(),
+    probes = plan_mod.real_probes(),
     baseline = (kind == "unhide" or kind == "writable") and M.baseline(project) or nil,
-    expert = cfg_view().expert_exceptions, scrub = (M.config.policy or {}).scrub,
+    expert = cfg_view().expert_exceptions,
+    scrub = (M.config.policy or {}).scrub,
     file_login = exists(home .. "/.claude/.credentials.json"),
   }
 end
@@ -492,7 +588,8 @@ local function sweep(h)
   end
   local ok, err = pcall(function()
     local res = guard.compare(h.snapshot, guard.snapshot(h.plan.project))
-    h.planted, h.modified, h.review, h.moved, h.incomplete = res.planted, res.modified, res.review, res.moved, res.incomplete
+    h.planted, h.modified, h.review, h.moved, h.incomplete =
+      res.planted, res.modified, res.review, res.moved, res.incomplete
     -- the empty placeholders bwrap mounted over an absent name stay behind when the directory holding them was RENAMED
     -- (mv sub sub_old): an empty read-only file or an empty directory, not something the agent created
     local planted = {}
@@ -519,25 +616,49 @@ local function sweep(h)
     end
     if #res.planted > 0 or #res.incomplete > 0 then
       guard.mark_dirty(h.plan.project, {
-        planted = res.planted, quarantine = q and q.dir, failed = failed, modified = res.modified, incomplete = res.incomplete,
+        planted = res.planted,
+        quarantine = q and q.dir,
+        failed = failed,
+        modified = res.modified,
+        incomplete = res.incomplete,
       })
     end
     if #res.planted > 0 then
       local shown = vim.list_slice(res.planted, 1, 5)
-      vim.notify(("xyno-sandbox: the agent created %d file%s that act%s outside the sandbox: %s%s. %s moved to %s and removed from the project;"
-        .. " the next launch for this project is refused until you review them (:XynoSandboxReview, then :XynoSandboxReview clear).%s"):format(
-        #res.planted, #res.planted == 1 and "" or "s", #res.planted == 1 and "s" or "", table.concat(shown, ", "), #res.planted > 5 and ", ..." or "",
-        #res.planted == 1 and "It was" or "They were", q.dir,
-        #failed > 0 and (" COULD NOT REMOVE: " .. table.concat(failed, ", ")) or ""), vim.log.levels.ERROR)
+      vim.notify(
+        (
+          "xyno-sandbox: the agent created %d file%s that act%s outside the sandbox: %s%s. %s moved to %s and removed from the project;"
+          .. " the next launch for this project is refused until you review them (:XynoSandboxReview, then :XynoSandboxReview clear).%s"
+        ):format(
+          #res.planted,
+          #res.planted == 1 and "" or "s",
+          #res.planted == 1 and "s" or "",
+          table.concat(shown, ", "),
+          #res.planted > 5 and ", ..." or "",
+          #res.planted == 1 and "It was" or "They were",
+          q.dir,
+          #failed > 0 and (" COULD NOT REMOVE: " .. table.concat(failed, ", ")) or ""
+        ),
+        vim.log.levels.ERROR
+      )
     end
     if #res.incomplete > 0 then
-      vim.notify(("xyno-sandbox: the end-of-run check of the project tree could NOT be completed (%s), so a file that acts outside the sandbox"
-        .. " (.envrc, .cargo/config.toml...) may have been created where it did not look. The next launch for this project is refused until you"
-        .. " looked (:XynoSandboxReview, then :XynoSandboxReview clear)."):format(table.concat(res.incomplete, "; ")), vim.log.levels.ERROR)
+      vim.notify(
+        (
+          "xyno-sandbox: the end-of-run check of the project tree could NOT be completed (%s), so a file that acts outside the sandbox"
+          .. " (.envrc, .cargo/config.toml...) may have been created where it did not look. The next launch for this project is refused until you"
+          .. " looked (:XynoSandboxReview, then :XynoSandboxReview clear)."
+        ):format(table.concat(res.incomplete, "; ")),
+        vim.log.levels.ERROR
+      )
     end
     if #res.partial > 0 then
-      vim.notify(("xyno-sandbox: the check of the project tree was already partial at launch (%s): names planted beyond that are not compared"):format(
-        table.concat(res.partial, "; ")), vim.log.levels.INFO)
+      vim.notify(
+        ("xyno-sandbox: the check of the project tree was already partial at launch (%s): names planted beyond that are not compared"):format(
+          table.concat(res.partial, "; ")
+        ),
+        vim.log.levels.INFO
+      )
     end
     for _, line in ipairs(guard.report(res)) do
       vim.notify("xyno-sandbox: " .. line, vim.log.levels.WARN)
@@ -615,7 +736,16 @@ function M.reap_orphans()
       -- only what wrap() itself creates: <nvim tmpdir>/<n>.claude.json | .net | .git, never a symlink
       local st = vim.uv.fs_lstat(it[1])
       local name = vim.fs.basename(it[1])
-      if st and st.type ~= "link" and (name:match("%.claude%.json$") or name:match("%.net$") or name:match("%.git$") or (name:match("%.empty$") and st.size == 0)) then
+      if
+        st
+        and st.type ~= "link"
+        and (
+          name:match("%.claude%.json$")
+          or name:match("%.net$")
+          or name:match("%.git$")
+          or (name:match("%.empty$") and st.size == 0)
+        )
+      then
         n = n + (vim.fn.delete(it[1], "rf") == 0 and 1 or 0)
       end
     elseif is_empty_leftover(it[1], it[2]) and not store.live_others(it[3], nil) then
@@ -717,7 +847,8 @@ local function prepare(plan)
         f:close()
       end
       -- an unreadable config becomes an empty one: never the original
-      local clean = text and require("xyno_sandbox.sanitize").git_config(text) or "# xyno-sandbox: this git config could not be read\n"
+      local clean = text and require("xyno_sandbox.sanitize").git_config(text)
+        or "# xyno-sandbox: this git config could not be read\n"
       local out = assert(io.open(g.copy, "wb"))
       out:write(clean)
       out:close()
@@ -736,8 +867,11 @@ local function start_net(plan, project)
   local n = plan.net
   local function fail(why)
     pcall(vim.fn.delete, n.dir, "rf")
-    return nil, "network egress cannot be enforced (" .. why .. "); the agent is not started. "
-      .. 'Set network = "open" in setup() to run it with an open network.'
+    return nil,
+      "network egress cannot be enforced ("
+        .. why
+        .. "); the agent is not started. "
+        .. 'Set network = "open" in setup() to run it with an open network.'
   end
   if vim.fn.executable(n.nvim) ~= 1 then
     return fail(n.nvim .. " is not executable, the in-sandbox relay needs it")
@@ -777,10 +911,22 @@ local function start_net(plan, project)
       end
       warned[d.host] = true
       vim.schedule(function()
-        pcall(store.log, { project = project, kind = "host", value = d.host .. ":" .. tostring(d.port), decision = "blocked",
-          scope = "launch", reason = d.reason })
-        vim.notify(("xyno-sandbox: blocked network access to %s:%s (%s). Allow it with e in :XynoSandboxPolicy."):format(
-          d.host, tostring(d.port), d.reason), vim.log.levels.WARN)
+        pcall(store.log, {
+          project = project,
+          kind = "host",
+          value = d.host .. ":" .. tostring(d.port),
+          decision = "blocked",
+          scope = "launch",
+          reason = d.reason,
+        })
+        vim.notify(
+          ("xyno-sandbox: blocked network access to %s:%s (%s). Allow it with e in :XynoSandboxPolicy."):format(
+            d.host,
+            tostring(d.port),
+            d.reason
+          ),
+          vim.log.levels.WARN
+        )
       end)
     end,
   })
@@ -820,9 +966,12 @@ function M.wrap(cmd, project, tmp_dir, opts)
   local excs = opts.exceptions
   if plan and (plan.mode ~= "bwrap" or plan.project ~= project or stale(plan)) then
     -- keep what the operator approved for this launch when the plan has to be rebuilt
-    excs = vim.list_extend(vim.deepcopy(excs or {}), vim.tbl_filter(function(e)
-      return e.scope == "once"
-    end, plan.exceptions or {}))
+    excs = vim.list_extend(
+      vim.deepcopy(excs or {}),
+      vim.tbl_filter(function(e)
+        return e.scope == "once"
+      end, plan.exceptions or {})
+    )
     plan = nil
   end
   plan = plan or M.plan(cmd, project, tmp_dir, { exceptions = excs, env = opts.env })

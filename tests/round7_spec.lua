@@ -224,7 +224,10 @@ describe("the walk bounds are reported, not silent", function()
     H.need_sandbox()
     local project = H.tmpdir()
     write(project .. "/src/x.rs")
-    inside(project, "mkdir -p target/debug/deps/q && printf 'x' > target/debug/deps/q/.envrc && mkdir -p node_modules/p/.cargo && : > node_modules/p/.cargo/config.toml; echo done")
+    inside(
+      project,
+      "mkdir -p target/debug/deps/q && printf 'x' > target/debug/deps/q/.envrc && mkdir -p node_modules/p/.cargo && : > node_modules/p/.cargo/config.toml; echo done"
+    )
     H.eq(nil, uv.fs_lstat(project .. "/target/debug/deps/q/.envrc"), "removed from the project")
     H.eq(nil, uv.fs_lstat(project .. "/node_modules/p/.cargo"))
     local rec = sb.dirty(project)
@@ -306,7 +309,8 @@ end)
 describe("package-manager and editor config names that run a program are covered", function()
   local NEW_LOCKED = { ".githooks", ".mvn", ".pnpmfile.cjs", ".dir-locals.el", ".lvimrc" }
   local NEW_GUARDED = { ".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs", ".dir-locals.el", ".lvimrc" }
-  local NEW_REVIEW = { "conftest.py", "bunfig.toml", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml" }
+  local NEW_REVIEW =
+    { "conftest.py", "bunfig.toml", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml" }
 
   local function has(list, n)
     return vim.tbl_contains(list, n)
@@ -339,7 +343,11 @@ describe("package-manager and editor config names that run a program are covered
     local project = H.tmpdir()
     local lines = {}
     for _, n in ipairs(vim.list_extend(vim.deepcopy(NEW_GUARDED), { ".githooks/pre-commit", ".mvn/extensions.xml" })) do
-      lines[#lines + 1] = ("mkdir -p \"$(dirname '%s')\" 2>/dev/null; ( : > '%s' ) 2>/dev/null && echo 'CREATED:%s'"):format(n, n, n)
+      lines[#lines + 1] = ("mkdir -p \"$(dirname '%s')\" 2>/dev/null; ( : > '%s' ) 2>/dev/null && echo 'CREATED:%s'"):format(
+        n,
+        n,
+        n
+      )
     end
     lines[#lines + 1] = "echo done"
     local out = inside(project, table.concat(lines, "\n"))
@@ -349,31 +357,37 @@ describe("package-manager and editor config names that run a program are covered
     H.eq({}, vim.fn.readdir(project), "the placeholders are gone again")
   end)
 
-  it("real run: a name created in a deep subdirectory is quarantined (npmrc, yarnrc.yml, .githooks, .dir-locals.el)", function()
-    H.need_sandbox()
-    local project = H.tmpdir()
-    write(project .. "/a/b/c/d/e/f/x.txt")
-    local old = plan.SUBDIR_MASK_MAX
-    plan.SUBDIR_MASK_MAX = 0 -- (no mount budget: only the sweep is left)
-    local out
-    local ok, err = pcall(function()
-      out = inside(project, "cd a/b/c/d/e/f && printf 'script-shell=./evil.sh\\n' > .npmrc && printf 'yarnPath: ./y.cjs\\n' > .yarnrc.yml"
-      .. " && mkdir .githooks && printf '#!/bin/sh\\n' > .githooks/pre-commit && printf '(eval)' > .dir-locals.el && echo done")
-    end)
-    plan.SUBDIR_MASK_MAX = old
-    assert(ok, err)
-    H.match(out, "done", true, out)
-    local rec = sb.dirty(project)
-    H.ok(rec, "marked")
-    local names = {}
-    for _, p in ipairs(rec.planted) do
-      names[#names + 1] = vim.fs.basename(p)
+  it(
+    "real run: a name created in a deep subdirectory is quarantined (npmrc, yarnrc.yml, .githooks, .dir-locals.el)",
+    function()
+      H.need_sandbox()
+      local project = H.tmpdir()
+      write(project .. "/a/b/c/d/e/f/x.txt")
+      local old = plan.SUBDIR_MASK_MAX
+      plan.SUBDIR_MASK_MAX = 0 -- (no mount budget: only the sweep is left)
+      local out
+      local ok, err = pcall(function()
+        out = inside(
+          project,
+          "cd a/b/c/d/e/f && printf 'script-shell=./evil.sh\\n' > .npmrc && printf 'yarnPath: ./y.cjs\\n' > .yarnrc.yml"
+            .. " && mkdir .githooks && printf '#!/bin/sh\\n' > .githooks/pre-commit && printf '(eval)' > .dir-locals.el && echo done"
+        )
+      end)
+      plan.SUBDIR_MASK_MAX = old
+      assert(ok, err)
+      H.match(out, "done", true, out)
+      local rec = sb.dirty(project)
+      H.ok(rec, "marked")
+      local names = {}
+      for _, p in ipairs(rec.planted) do
+        names[#names + 1] = vim.fs.basename(p)
+      end
+      table.sort(names)
+      H.eq({ ".dir-locals.el", ".githooks", ".npmrc", ".yarnrc.yml" }, names)
+      H.eq(nil, uv.fs_lstat(project .. "/a/b/c/d/e/f/.npmrc"))
+      sb.clear_dirty(project)
     end
-    table.sort(names)
-    H.eq({ ".dir-locals.el", ".githooks", ".npmrc", ".yarnrc.yml" }, names)
-    H.eq(nil, uv.fs_lstat(project .. "/a/b/c/d/e/f/.npmrc"))
-    sb.clear_dirty(project)
-  end)
+  )
 
   it("conftest.py and lefthook.yml changes are reported as editable files that run later", function()
     local project = H.tmpdir()
@@ -396,8 +410,15 @@ describe("survivor: a hidden directory inside a read-only directory is hidden on
   local PROJECT, TMP, FHOME = "/h/proj", "/h/scratch", "/h"
   local function fakefs(entries)
     return {
-      stat_type = function(x) return entries[x] end, lstat_type = function(x) return entries[x] end,
-      exists = function(x) return entries[x] ~= nil end,
+      stat_type = function(x)
+        return entries[x]
+      end,
+      lstat_type = function(x)
+        return entries[x]
+      end,
+      exists = function(x)
+        return entries[x] ~= nil
+      end,
       list = function(dir)
         local out, prefix = {}, dir == "/" and "/" or (dir .. "/")
         for x, t in pairs(entries) do
@@ -405,31 +426,61 @@ describe("survivor: a hidden directory inside a read-only directory is hidden on
             out[#out + 1] = { x:sub(#prefix + 1), t }
           end
         end
-        table.sort(out, function(a, b) return a[1] < b[1] end)
+        table.sort(out, function(a, b)
+          return a[1] < b[1]
+        end)
         return out
       end,
-      glob = function() return {} end, read_line = function() return nil end,
-      realpath = function(x) return entries[x] and x or nil end, stat_info = function() return nil end,
+      glob = function()
+        return {}
+      end,
+      read_line = function()
+        return nil
+      end,
+      realpath = function(x)
+        return entries[x] and x or nil
+      end,
+      stat_info = function()
+        return nil
+      end,
     }
   end
   local function build(entries, readonly)
     return plan.build({
-      project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = FHOME, uid = 1000,
-      probes = fakefs(vim.tbl_extend("force", { [FHOME] = "directory", [FHOME .. "/.claude"] = "directory", [PROJECT] = "directory",
-        [TMP] = "directory", [PROJECT .. "/.git"] = "directory" }, entries)),
-      env = { PATH = "/usr/bin" }, cmd = { "agent" }, aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
+      project = PROJECT,
+      tmp_dir = TMP,
+      cwd = PROJECT,
+      home = FHOME,
+      uid = 1000,
+      probes = fakefs(vim.tbl_extend("force", {
+        [FHOME] = "directory",
+        [FHOME .. "/.claude"] = "directory",
+        [PROJECT] = "directory",
+        [TMP] = "directory",
+        [PROJECT .. "/.git"] = "directory",
+      }, entries)),
+      env = { PATH = "/usr/bin" },
+      cmd = { "agent" },
+      aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
       config = { network = "open", home = "denylist", policy = { readonly = readonly or {} } },
     })
   end
 
   it("plan: the directory gets a tmpfs after the read-only bind, a file gets the empty file", function()
     local p = build({
-      [FHOME .. "/.config"] = "directory", [FHOME .. "/.config/gcloud"] = "directory", [FHOME .. "/.aws"] = "directory",
+      [FHOME .. "/.config"] = "directory",
+      [FHOME .. "/.config/gcloud"] = "directory",
+      [FHOME .. "/.aws"] = "directory",
     }, { "~/.config" })
     local ops = plan.ops(p)
     local tmpfs_on_dir, dir_hidden_twice = 0, 0
     for _, op in ipairs(ops) do
-      if op.section == "hidden" and op.args[1] == "--tmpfs" and op.args[2] == FHOME .. "/.config/gcloud" and op.why:find("inside the read-only", 1, true) then
+      if
+        op.section == "hidden"
+        and op.args[1] == "--tmpfs"
+        and op.args[2] == FHOME .. "/.config/gcloud"
+        and op.why:find("inside the read-only", 1, true)
+      then
         tmpfs_on_dir = tmpfs_on_dir + 1
       end
       if op.section == "hidden" and op.args[2] == FHOME .. "/.aws" then
@@ -438,7 +489,16 @@ describe("survivor: a hidden directory inside a read-only directory is hidden on
     end
     H.eq(1, tmpfs_on_dir, "a hidden DIRECTORY inside the read-only ~/.config")
     H.eq(1, dir_hidden_twice, "~/.aws is not inside a read-only path: hidden once, not again")
-    H.match(table.concat(vim.tbl_map(function(o) return o.why end, ops), "\n"), "(inside the read-only " .. FHOME .. "/.config)", true)
+    H.match(
+      table.concat(
+        vim.tbl_map(function(o)
+          return o.why
+        end, ops),
+        "\n"
+      ),
+      "(inside the read-only " .. FHOME .. "/.config)",
+      true
+    )
   end)
 
   it("plan: a hidden path that IS the read-only path is not hidden a second time", function()
@@ -614,7 +674,17 @@ describe("round 7: README, help and changelog say what the code does", function(
     H.match(help, "4000 directories, 0.7 s", true)
   end)
   it("every new name is in the README, and the gaps are stated", function()
-    for _, n in ipairs({ ".githooks", ".mvn", ".pnpmfile.cjs", ".dir-locals.el", ".lvimrc", ".npmrc", ".yarnrc.yml", "conftest.py", ".gradle" }) do
+    for _, n in ipairs({
+      ".githooks",
+      ".mvn",
+      ".pnpmfile.cjs",
+      ".dir-locals.el",
+      ".lvimrc",
+      ".npmrc",
+      ".yarnrc.yml",
+      "conftest.py",
+      ".gradle",
+    }) do
       H.match(readme, "`" .. n, true, n)
     end
     H.match(readme, "NOT found", true)

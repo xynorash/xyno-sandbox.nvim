@@ -54,9 +54,15 @@ local HOME, PROJECT, TMP = "/h", "/h/proj", "/h/scratch"
 --- entries: path -> type; info: path -> { nlink, dev, ino }; links: path -> real target
 local function fakefs(entries, info, real)
   local p = {
-    stat_type = function(x) return entries[x] end,
-    lstat_type = function(x) return entries[x] end,
-    exists = function(x) return entries[x] ~= nil end,
+    stat_type = function(x)
+      return entries[x]
+    end,
+    lstat_type = function(x)
+      return entries[x]
+    end,
+    exists = function(x)
+      return entries[x] ~= nil
+    end,
     list = function(dir)
       local out, prefix = {}, dir == "/" and "/" or (dir .. "/")
       for x, t in pairs(entries) do
@@ -64,7 +70,9 @@ local function fakefs(entries, info, real)
           out[#out + 1] = { x:sub(#prefix + 1), t }
         end
       end
-      table.sort(out, function(a, b) return a[1] < b[1] end)
+      table.sort(out, function(a, b)
+        return a[1] < b[1]
+      end)
       return out
     end,
     glob = function(pat)
@@ -78,25 +86,43 @@ local function fakefs(entries, info, real)
       table.sort(out)
       return out
     end,
-    read_line = function() return nil end,
-    realpath = function(x) return (real or {})[x] or (entries[x] and x) or nil end,
-    stat_info = function(x) return (info or {})[x] end,
+    read_line = function()
+      return nil
+    end,
+    realpath = function(x)
+      return (real or {})[x] or (entries[x] and x) or nil
+    end,
+    stat_info = function(x)
+      return (info or {})[x]
+    end,
   }
   return p
 end
 
 local function build(extra, over, info, scan_result)
   local entries = vim.tbl_extend("force", {
-    [HOME] = "directory", [HOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory",
+    [HOME] = "directory",
+    [HOME .. "/.claude"] = "directory",
+    [PROJECT] = "directory",
+    [TMP] = "directory",
     [PROJECT .. "/.git"] = "directory",
   }, extra or {})
   local probes = fakefs(entries, info)
   if scan_result then
-    probes.scan_project = function() return scan_result end
+    probes.scan_project = function()
+      return scan_result
+    end
   end
   return plan.build(vim.tbl_extend("force", {
-    project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, probes = probes,
-    env = { PATH = "/usr/bin" }, cmd = { "agent" }, aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
+    project = PROJECT,
+    tmp_dir = TMP,
+    cwd = PROJECT,
+    home = HOME,
+    uid = 1000,
+    probes = probes,
+    env = { PATH = "/usr/bin" },
+    cmd = { "agent" },
+    aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
     config = { network = "open" },
   }, over or {}))
 end
@@ -112,9 +138,11 @@ end
 -- ------------------------------------------------- 1. hard links to $HOME credentials
 
 describe("a project file that is a hard link of a credential in $HOME", function()
-  local extra = { [HOME .. "/.ssh"] = "directory", [HOME .. "/.ssh/id_rsa"] = "file", [PROJECT .. "/innocent.txt"] = "file" }
+  local extra =
+    { [HOME .. "/.ssh"] = "directory", [HOME .. "/.ssh/id_rsa"] = "file", [PROJECT .. "/innocent.txt"] = "file" }
   local info = { [HOME .. "/.ssh/id_rsa"] = { nlink = 2, dev = 7, ino = 4242 } }
-  local scanned = { hits = {}, files = 1, multi = { { path = PROJECT .. "/innocent.txt", dev = 7, ino = 4242, nlink = 2 } } }
+  local scanned =
+    { hits = {}, files = 1, multi = { { path = PROJECT .. "/innocent.txt", dev = 7, ino = 4242, nlink = 2 } } }
 
   for _, mode in ipairs({ "allowlist", "denylist" }) do
     it("is hidden in the " .. mode .. " view, and the preview says why", function()
@@ -128,7 +156,8 @@ describe("a project file that is a hard link of a credential in $HOME", function
   end
 
   it("is left alone when the inode differs (a different file with the same link count)", function()
-    local other = { hits = {}, files = 1, multi = { { path = PROJECT .. "/innocent.txt", dev = 7, ino = 1, nlink = 2 } } }
+    local other =
+      { hits = {}, files = 1, multi = { { path = PROJECT .. "/innocent.txt", dev = 7, ino = 1, nlink = 2 } } }
     local p = build(extra, nil, info, other)
     H.eq(nil, hidden(p)[PROJECT .. "/innocent.txt"])
   end)
@@ -159,7 +188,14 @@ end)
 describe("secrets inside the toolchain trees shown from $HOME", function()
   local function tree_entries()
     local e = {}
-    for _, d in ipairs({ "dotfiles/bin", "dotfiles/.ssh", ".npm-global/bin", "go/bin", ".config/tool/bin", ".config/tool/secrets" }) do
+    for _, d in ipairs({
+      "dotfiles/bin",
+      "dotfiles/.ssh",
+      ".npm-global/bin",
+      "go/bin",
+      ".config/tool/bin",
+      ".config/tool/secrets",
+    }) do
       local acc = HOME
       for seg in d:gmatch("[^/]+") do
         acc = acc .. "/" .. seg
@@ -174,7 +210,10 @@ describe("secrets inside the toolchain trees shown from $HOME", function()
     e[HOME .. "/.config/tool/bin/tool2"] = "file"
     return e
   end
-  local PATHS = table.concat({ HOME .. "/dotfiles/bin", HOME .. "/.npm-global/bin", HOME .. "/go/bin", HOME .. "/.config/tool/bin", "/usr/bin" }, ":")
+  local PATHS = table.concat(
+    { HOME .. "/dotfiles/bin", HOME .. "/.npm-global/bin", HOME .. "/go/bin", HOME .. "/.config/tool/bin", "/usr/bin" },
+    ":"
+  )
 
   it("are hidden by name: .ssh directories, .npmrc, credentials, secrets/ directories", function()
     local p = build(tree_entries(), { env = { PATH = PATHS }, config = { network = "open", home = "allowlist" } })
@@ -188,7 +227,10 @@ describe("secrets inside the toolchain trees shown from $HOME", function()
   end)
 
   it("can be switched off with policy.tree_secrets = false", function()
-    local p = build(tree_entries(), { env = { PATH = PATHS }, config = { network = "open", home = "allowlist", policy = { tree_secrets = false } } })
+    local p = build(
+      tree_entries(),
+      { env = { PATH = PATHS }, config = { network = "open", home = "allowlist", policy = { tree_secrets = false } } }
+    )
     H.eq(nil, hidden(p)[HOME .. "/go/credentials"])
   end)
 
@@ -213,9 +255,19 @@ describe("secrets inside the toolchain trees shown from $HOME", function()
     write(base .. "/npm/bin/x", "#!/bin/sh\n", tonumber("755", 8))
     write(base .. "/tool/secrets/key", "CANARY_KEY\n")
     write(base .. "/tool/bin/x", "#!/bin/sh\n", tonumber("755", 8))
-    setenv("PATH", table.concat({ base .. "/dotfiles/bin", base .. "/npm/bin", base .. "/tool/bin" }, ":") .. ":" .. uv.os_getenv("PATH"))
+    setenv(
+      "PATH",
+      table.concat({ base .. "/dotfiles/bin", base .. "/npm/bin", base .. "/tool/bin" }, ":")
+        .. ":"
+        .. uv.os_getenv("PATH")
+    )
     local project = H.tmpdir()
-    local script = ("hello; cat %s/dotfiles/.ssh/id_rsa %s/npm/.npmrc %s/tool/secrets/key 2>&1; ls %s/dotfiles/.ssh | wc -l"):format(base, base, base, base)
+    local script = ("hello; cat %s/dotfiles/.ssh/id_rsa %s/npm/.npmrc %s/tool/secrets/key 2>&1; ls %s/dotfiles/.ssh | wc -l"):format(
+      base,
+      base,
+      base,
+      base
+    )
     local cmd, err, h = sb.wrap({ "sh", "-c", script }, project, H.tmpdir())
     H.ok(cmd, err)
     local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
@@ -248,13 +300,29 @@ describe("the environment scrub looks at values and at more name shapes", functi
   end)
 
   it("strips credentials in a URL under any name, empty user included (redis://:pw@host)", function()
-    local s = stripped({ CACHE = "redis://:hunter2hunter2@cache.internal:6379/0", DB = "postgres://app:Qp8vN2mXz4Lw@db/x" })
+    local s =
+      stripped({ CACHE = "redis://:hunter2hunter2@cache.internal:6379/0", DB = "postgres://app:Qp8vN2mXz4Lw@db/x" })
     H.ok(s.CACHE and s.DB)
   end)
 
   it("strips the name shapes that were missed: *_KEY, *_DSN, *_SESSION, JWT, COOKIE, BEARER, AUTH", function()
-    local names = { "OPENROUTER_KEY", "GROQ_KEY", "NUGET_KEY", "SENTRY_DSN", "BW_SESSION", "CI_JOB_JWT", "JWT", "COOKIE", "BEARER",
-      "AUTH", "SESSION", "RAILS_MASTER_KEY", "SERPAPI", "SOME_COOKIE_JAR", "X_BEARER_TOKEN_2" }
+    local names = {
+      "OPENROUTER_KEY",
+      "GROQ_KEY",
+      "NUGET_KEY",
+      "SENTRY_DSN",
+      "BW_SESSION",
+      "CI_JOB_JWT",
+      "JWT",
+      "COOKIE",
+      "BEARER",
+      "AUTH",
+      "SESSION",
+      "RAILS_MASTER_KEY",
+      "SERPAPI",
+      "SOME_COOKIE_JAR",
+      "X_BEARER_TOKEN_2",
+    }
     local env = {}
     for _, n in ipairs(names) do
       env[n] = "plain-value"
@@ -266,8 +334,17 @@ describe("the environment scrub looks at values and at more name shapes", functi
   end)
 
   it("keeps ordinary variables, including session-looking ones that are not secrets", function()
-    local env = { LANG = "C.UTF-8", TERM = "xterm", XDG_SESSION_TYPE = "wayland", XDG_SESSION_ID = "3", EDITOR = "nvim", SHELL = "/bin/bash",
-      COLORTERM = "truecolor", PATH = "/usr/bin:/bin", DESKTOP_SESSION = "plasma" }
+    local env = {
+      LANG = "C.UTF-8",
+      TERM = "xterm",
+      XDG_SESSION_TYPE = "wayland",
+      XDG_SESSION_ID = "3",
+      EDITOR = "nvim",
+      SHELL = "/bin/bash",
+      COLORTERM = "truecolor",
+      PATH = "/usr/bin:/bin",
+      DESKTOP_SESSION = "plasma",
+    }
     H.eq({}, vim.tbl_keys(stripped(env)))
   end)
 
@@ -301,10 +378,16 @@ describe("project sockets in directories the walk skips, and deep down", functio
     deep = deep .. "/d" .. i
   end
   local extra = {
-    [PROJECT .. "/target"] = "directory", [PROJECT .. "/target/debug"] = "directory", [PROJECT .. "/target/debug/a.sock"] = "socket",
-    [PROJECT .. "/node_modules"] = "directory", [PROJECT .. "/node_modules/p"] = "directory", [PROJECT .. "/node_modules/p/b.sock"] = "socket",
-    [PROJECT .. "/.cache"] = "directory", [PROJECT .. "/.cache/c.sock"] = "socket",
-    [PROJECT .. "/top.sock"] = "socket", [PROJECT .. "/.git/fsmonitor--daemon.ipc"] = "socket",
+    [PROJECT .. "/target"] = "directory",
+    [PROJECT .. "/target/debug"] = "directory",
+    [PROJECT .. "/target/debug/a.sock"] = "socket",
+    [PROJECT .. "/node_modules"] = "directory",
+    [PROJECT .. "/node_modules/p"] = "directory",
+    [PROJECT .. "/node_modules/p/b.sock"] = "socket",
+    [PROJECT .. "/.cache"] = "directory",
+    [PROJECT .. "/.cache/c.sock"] = "socket",
+    [PROJECT .. "/top.sock"] = "socket",
+    [PROJECT .. "/.git/fsmonitor--daemon.ipc"] = "socket",
   }
   do
     local acc = PROJECT
@@ -318,7 +401,13 @@ describe("project sockets in directories the walk skips, and deep down", functio
   it("are all hidden (target/, node_modules/, .cache/, .git/, below depth 8)", function()
     local p = build(extra)
     local h = hidden(p)
-    for _, s in ipairs({ "/target/debug/a.sock", "/node_modules/p/b.sock", "/.cache/c.sock", "/top.sock", "/.git/fsmonitor--daemon.ipc" }) do
+    for _, s in ipairs({
+      "/target/debug/a.sock",
+      "/node_modules/p/b.sock",
+      "/.cache/c.sock",
+      "/top.sock",
+      "/.git/fsmonitor--daemon.ipc",
+    }) do
       H.ok(h[PROJECT .. s], s .. " is connectable in the sandbox")
       H.eq("project socket", h[PROJECT .. s].why)
     end
@@ -344,8 +433,12 @@ describe("project sockets in directories the walk skips, and deep down", functio
     end
     sb.config.network = "open"
     local project = H.tmpdir()
-    local paths = { project .. "/target/debug/a.sock", project .. "/node_modules/p/b.sock", project .. "/.cache/c.sock",
-      project .. "/d1/d2/d3/d4/d5/d6/d7/d8/d9/d10/deep.sock" }
+    local paths = {
+      project .. "/target/debug/a.sock",
+      project .. "/node_modules/p/b.sock",
+      project .. "/.cache/c.sock",
+      project .. "/d1/d2/d3/d4/d5/d6/d7/d8/d9/d10/deep.sock",
+    }
     local pipes = {}
     for _, p in ipairs(paths) do
       vim.fn.mkdir(vim.fs.dirname(p), "p")
@@ -355,7 +448,8 @@ describe("project sockets in directories the walk skips, and deep down", functio
       pipe:listen(4, function() end)
       pipes[#pipes + 1] = pipe
     end
-    local py = "import socket,sys\nfor p in sys.argv[1:]:\n s=socket.socket(socket.AF_UNIX)\n s.settimeout(1)\n try:\n  s.connect(p); print('CONNECTED',p)\n except OSError as e:\n  print('refused',p)\n"
+    local py =
+      "import socket,sys\nfor p in sys.argv[1:]:\n s=socket.socket(socket.AF_UNIX)\n s.settimeout(1)\n try:\n  s.connect(p); print('CONNECTED',p)\n except OSError as e:\n  print('refused',p)\n"
     local cmd, err, h = sb.wrap(vim.list_extend({ "python3", "-I", "-c", py }, paths), project, H.tmpdir())
     H.ok(cmd, err)
     local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
@@ -372,10 +466,34 @@ end)
 -- ------------------------------------------------------------ 5. more secret names
 
 describe("project secret names that were missed", function()
-  local names = { ".vault-token", ".env~", "auth.json", "rclone.conf", ".terraformrc", ".secret", ".npmrc.bak", "id_rsa.bak",
-    "id_ed25519_sk", "wallet.dat", "creds.json", "oauth_token", "sa.json", "serviceaccount.json", "id_rsa", "id_dsa", "id_ecdsa",
-    "id_ed25519", ".npmrc", "token.txt", "api_keys.txt", ".dev.vars", "serviceAccountKey.json", "google-services.json", "wp-config.php",
-    "application-prod.properties" }
+  local names = {
+    ".vault-token",
+    ".env~",
+    "auth.json",
+    "rclone.conf",
+    ".terraformrc",
+    ".secret",
+    ".npmrc.bak",
+    "id_rsa.bak",
+    "id_ed25519_sk",
+    "wallet.dat",
+    "creds.json",
+    "oauth_token",
+    "sa.json",
+    "serviceaccount.json",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    ".npmrc",
+    "token.txt",
+    "api_keys.txt",
+    ".dev.vars",
+    "serviceAccountKey.json",
+    "google-services.json",
+    "wp-config.php",
+    "application-prod.properties",
+  }
   it("are secret by base name", function()
     local globs = plan.PROJECT_SECRET_GLOBS
     for _, n in ipairs(names) do
@@ -385,44 +503,80 @@ describe("project secret names that were missed", function()
 
   it("public keys, templates and source files that merely mention keys stay readable", function()
     local globs = plan.PROJECT_SECRET_GLOBS
-    for _, n in ipairs({ "id_rsa.pub", "id_ed25519.pub", ".env.example", "tokenizer.rs", "api_key.rs", "README.md", "secretary.md" }) do
+    for _, n in ipairs({
+      "id_rsa.pub",
+      "id_ed25519.pub",
+      ".env.example",
+      "tokenizer.rs",
+      "api_key.rs",
+      "README.md",
+      "secretary.md",
+    }) do
       H.not_ok(plan.is_secret_name(n, globs, plan.PROJECT_SECRET_EXCEPT), n .. " is hidden")
     end
   end)
 
-  it("are hidden by path where the base name says nothing (.docker/config.json ...) and as directories (.envs/)", function()
-    local e = {}
-    for _, f in ipairs({ ".docker/config.json", ".config/gh/hosts.yml", ".composer/auth.json", ".m2/settings.xml", ".gradle/gradle.properties", ".envs/prod" }) do
-      local acc = PROJECT
-      local dir = vim.fs.dirname(f)
-      for seg in dir:gmatch("[^/]+") do
-        acc = acc .. "/" .. seg
-        e[acc] = "directory"
+  it(
+    "are hidden by path where the base name says nothing (.docker/config.json ...) and as directories (.envs/)",
+    function()
+      local e = {}
+      for _, f in ipairs({
+        ".docker/config.json",
+        ".config/gh/hosts.yml",
+        ".composer/auth.json",
+        ".m2/settings.xml",
+        ".gradle/gradle.properties",
+        ".envs/prod",
+      }) do
+        local acc = PROJECT
+        local dir = vim.fs.dirname(f)
+        for seg in dir:gmatch("[^/]+") do
+          acc = acc .. "/" .. seg
+          e[acc] = "directory"
+        end
+        e[PROJECT .. "/" .. f] = "file"
       end
-      e[PROJECT .. "/" .. f] = "file"
+      e[PROJECT .. "/src"] = "directory"
+      e[PROJECT .. "/src/config.json"] = "file"
+      local p = build(e)
+      local h = hidden(p)
+      for _, f in ipairs({
+        ".docker/config.json",
+        ".config/gh/hosts.yml",
+        ".composer/auth.json",
+        ".m2/settings.xml",
+        ".gradle/gradle.properties",
+      }) do
+        H.ok(h[PROJECT .. "/" .. f], f .. " is readable")
+      end
+      H.ok(h[PROJECT .. "/.envs"], "the .envs directory")
+      H.eq(nil, h[PROJECT .. "/src/config.json"], "a config.json elsewhere is not a secret")
     end
-    e[PROJECT .. "/src"] = "directory"
-    e[PROJECT .. "/src/config.json"] = "file"
-    local p = build(e)
-    local h = hidden(p)
-    for _, f in ipairs({ ".docker/config.json", ".config/gh/hosts.yml", ".composer/auth.json", ".m2/settings.xml", ".gradle/gradle.properties" }) do
-      H.ok(h[PROJECT .. "/" .. f], f .. " is readable")
-    end
-    H.ok(h[PROJECT .. "/.envs"], "the .envs directory")
-    H.eq(nil, h[PROJECT .. "/src/config.json"], "a config.json elsewhere is not a secret")
-  end)
+  )
 
   it("really are unreadable in a sandbox", function()
     H.need_sandbox()
     sb.config.network = "open"
     local project = H.tmpdir()
-    local files = { ".vault-token", ".docker/config.json", ".env~", ".envs/prod", "id_rsa.bak", "wallet.dat", "sa.json", "auth.json" }
+    local files = {
+      ".vault-token",
+      ".docker/config.json",
+      ".env~",
+      ".envs/prod",
+      "id_rsa.bak",
+      "wallet.dat",
+      "sa.json",
+      "auth.json",
+    }
     for _, f in ipairs(files) do
       write(project .. "/" .. f, "CANARY_NAME\n")
     end
     write(project .. "/id_rsa.pub", "PUBLIC-OK\n")
-    local cmd, err, h = sb.wrap({ "sh", "-c", "cat id_rsa.pub; cat .vault-token .docker/config.json .env~ .envs/prod id_rsa.bak wallet.dat sa.json auth.json 2>&1" },
-      project, H.tmpdir())
+    local cmd, err, h = sb.wrap({
+      "sh",
+      "-c",
+      "cat id_rsa.pub; cat .vault-token .docker/config.json .env~ .envs/prod id_rsa.bak wallet.dat sa.json auth.json 2>&1",
+    }, project, H.tmpdir())
     H.ok(cmd, err)
     local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
     h.release()
@@ -479,10 +633,29 @@ describe("the content scan judges the match, not the line", function()
     H.eq(1, res.unread.binary)
     H.eq(0, #res.hits)
     local p = plan.build({
-      project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, env = { PATH = "/bin" }, cmd = { "agent" },
-      probes = vim.tbl_extend("force", fakefs({ [HOME] = "directory", [HOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory" }),
-        { scan_project = function() return res end }),
-      aux = { empty = "/e" }, config = { network = "open" },
+      project = PROJECT,
+      tmp_dir = TMP,
+      cwd = PROJECT,
+      home = HOME,
+      uid = 1000,
+      env = { PATH = "/bin" },
+      cmd = { "agent" },
+      probes = vim.tbl_extend(
+        "force",
+        fakefs({
+          [HOME] = "directory",
+          [HOME .. "/.claude"] = "directory",
+          [PROJECT] = "directory",
+          [TMP] = "directory",
+        }),
+        {
+          scan_project = function()
+            return res
+          end,
+        }
+      ),
+      aux = { empty = "/e" },
+      config = { network = "open" },
     })
     local text = table.concat(ui.lines(p, { home = HOME }), "\n")
     H.match(text, "Not read at all: 1 over 256 KB, 1 binary", true)
@@ -496,16 +669,27 @@ describe("the ~/.claude.json copy keeps the login state and drops the rest", fun
     return sanitize.claude_json(vim.deepcopy(data), { project })
   end
   local DATA = {
-    numStartups = 3, theme = "dark",
+    numStartups = 3,
+    theme = "dark",
     mcpServers = {
-      gh = { command = "npx", args = { "-y", "srv", "--token", GH }, env = { GITHUB_TOKEN = GH }, headers = { Authorization = "Bearer " .. GH } },
+      gh = {
+        command = "npx",
+        args = { "-y", "srv", "--token", GH },
+        env = { GITHUB_TOKEN = GH },
+        headers = { Authorization = "Bearer " .. GH },
+      },
       api = { type = "http", url = "https://user:Tr0ub4dor9xQ@api.internal/mcp", headers = { ["X-Key"] = "k" } },
       plain = { command = "node", args = { "server.js" } },
     },
-    primaryApiKey = "sk-ant-" .. string.rep("a", 50), customApiKeyResponses = { approved = { "abc" } },
+    primaryApiKey = "sk-ant-" .. string.rep("a", 50),
+    customApiKeyResponses = { approved = { "abc" } },
     oauthAccount = { accountUuid = "u-1", emailAddress = "me@corp.example", displayName = "Me" },
-    userID = "anon-123", history = { "an old prompt" },
-    projects = { ["/p"] = { hasTrustDialogAccepted = true, mcpServers = { x = { command = "c", env = { K = "v" } } } }, ["/other"] = { history = { "other" } } },
+    userID = "anon-123",
+    history = { "an old prompt" },
+    projects = {
+      ["/p"] = { hasTrustDialogAccepted = true, mcpServers = { x = { command = "c", env = { K = "v" } } } },
+      ["/other"] = { history = { "other" } },
+    },
   }
 
   it("removes MCP credentials (env, headers, token arguments, URL passwords) and keeps the servers", function()
@@ -591,7 +775,12 @@ local function nested(body, env)
   local dir = H.tmpdir()
   write(dir .. "/inner_spec.lua", body)
   local e = vim.tbl_extend("force", { XYNO_TEST_WORKER = "0" }, env or {})
-  local r = vim.system({ vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/inner_spec.lua" }, { text = true, env = e }):wait(180000)
+  local r = vim
+    .system(
+      { vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/inner_spec.lua" },
+      { text = true, env = e }
+    )
+    :wait(180000)
   return r.stdout or "", r.code
 end
 
@@ -600,9 +789,12 @@ describe("the runner", function()
     local report = H.tmpdir() .. "/report"
     local deep = H.tmpdir() .. "/" .. string.rep("very-deep-directory-name/", 4)
     vim.fn.mkdir(deep, "p")
-    local out, code = nested([[
+    local out, code = nested(
+      [[
       it("reports", function() vim.fn.writefile({ vim.env.XYNO_TEST_SCRATCH, vim.env.XYNO_TEST_ROOT }, vim.env.XYNO_TEST_REPORT) end)
-    ]], { TMPDIR = deep, XYNO_TEST_REPORT = report })
+    ]],
+      { TMPDIR = deep, XYNO_TEST_REPORT = report }
+    )
     H.eq(0, code, out)
     local got = vim.fn.readfile(report)
     H.eq("/tmp/xyno-run-", got[1]:sub(1, 14), "the scratch directory follows TMPDIR: " .. got[1])
@@ -615,20 +807,33 @@ describe("the runner", function()
     end
     local bin = H.tmpdir()
     local state = H.tmpdir() .. "/state"
-    write(bin .. "/bwrap", ("#!/bin/sh\nif [ -e %s ]; then echo 'bwrap: fake failure' >&2; exit 1; fi\ntouch %s\nexit 0\n"):format(state, state), tonumber("755", 8))
-    local out, code = nested([[
+    write(
+      bin .. "/bwrap",
+      ("#!/bin/sh\nif [ -e %s ]; then echo 'bwrap: fake failure' >&2; exit 1; fi\ntouch %s\nexit 0\n"):format(
+        state,
+        state
+      ),
+      tonumber("755", 8)
+    )
+    local out, code = nested(
+      [[
       local H = require("xynotest.helpers")
       it("needs a sandbox", function() H.need_sandbox() end)
-    ]], { PATH = bin .. ":" .. vim.env.PATH })
+    ]],
+      { PATH = bin .. ":" .. vim.env.PATH }
+    )
     H.eq(1, code, out)
     H.match(out, "bubblewrap works on this machine", true, out)
     H.match(out, "failed=1", true)
   end)
 
   it("kills a spec file that hangs and fails the run with a clear line", function()
-    local out, code = nested([[
+    local out, code = nested(
+      [[
       it("hangs", function() vim.wait(120000) end)
-    ]], { XYNO_TEST_FILE_TIMEOUT_MS = "2500" })
+    ]],
+      { XYNO_TEST_FILE_TIMEOUT_MS = "2500" }
+    )
     H.eq(1, code, out)
     H.match(out, "timed out", true, out)
   end)

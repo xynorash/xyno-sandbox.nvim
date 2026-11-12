@@ -61,17 +61,27 @@ local SCAN = table.concat({
 
 describe("the environment of the sandbox", function()
   for _, net in ipairs({ "open", "filtered" }) do
-    it(("network = %s: no scrubbed value in the environ or cmdline of ANY process (/proc/*/environ, /proc/1/environ)"):format(net), function()
-      with_secrets()
-      sb.config.network = net
-      local out = inside(SCAN)
-      H.match(out, "== /proc/1/environ", true, "pid 1 (bwrap) must be visible to this check")
-      for name, value in pairs(SECRETS) do
-        if not (name == "ANTHROPIC_API_KEY" and vim.uv.fs_stat(vim.uv.os_homedir() .. "/.claude/.credentials.json") == nil) then
-          H.no_match(out, value, true, name .. " leaked into the sandbox")
+    it(
+      ("network = %s: no scrubbed value in the environ or cmdline of ANY process (/proc/*/environ, /proc/1/environ)"):format(
+        net
+      ),
+      function()
+        with_secrets()
+        sb.config.network = net
+        local out = inside(SCAN)
+        H.match(out, "== /proc/1/environ", true, "pid 1 (bwrap) must be visible to this check")
+        for name, value in pairs(SECRETS) do
+          if
+            not (
+              name == "ANTHROPIC_API_KEY"
+              and vim.uv.fs_stat(vim.uv.os_homedir() .. "/.claude/.credentials.json") == nil
+            )
+          then
+            H.no_match(out, value, true, name .. " leaked into the sandbox")
+          end
         end
       end
-    end)
+    )
   end
 
   it("the control: an allowed variable IS in /proc/1/environ, so the scan really reads bwrap's environment", function()
@@ -110,19 +120,22 @@ describe("the environment of the sandbox", function()
     H.no_match(r.stdout, "canary-other-" .. rnd, true)
   end)
 
-  it("the command line starts with `env -i` and carries no stripped value (also what the preview is built from)", function()
-    with_secrets()
-    local p = sb.plan({ "agent" }, H.tmpdir(), H.tmpdir())
-    local a = plan.argv(p)
-    H.eq({ "env", "-i" }, { vim.fs.basename(a[1]), a[2] })
-    local joined = table.concat(a, "\0")
-    for _, value in pairs(SECRETS) do
-      H.no_match(joined, value, true)
+  it(
+    "the command line starts with `env -i` and carries no stripped value (also what the preview is built from)",
+    function()
+      with_secrets()
+      local p = sb.plan({ "agent" }, H.tmpdir(), H.tmpdir())
+      local a = plan.argv(p)
+      H.eq({ "env", "-i" }, { vim.fs.basename(a[1]), a[2] })
+      local joined = table.concat(a, "\0")
+      for _, value in pairs(SECRETS) do
+        H.no_match(joined, value, true)
+      end
+      for _, n in ipairs(p.env_pass) do
+        H.not_ok(vim.tbl_contains(p.env_strip, n[1]), n[1] .. " is both passed and stripped")
+      end
     end
-    for _, n in ipairs(p.env_pass) do
-      H.not_ok(vim.tbl_contains(p.env_strip, n[1]), n[1] .. " is both passed and stripped")
-    end
-  end)
+  )
 
   it("the editor's RPC address ($NVIM) is stripped: it is full control of the editor", function()
     setenv("NVIM", "/run/user/1000/nvim.canary." .. rnd)

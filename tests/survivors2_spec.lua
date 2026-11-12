@@ -36,9 +36,15 @@ local function fakefs(entries, links, info)
     return x
   end
   return {
-    stat_type = function(x) return entries[follow(x)] end,
-    lstat_type = function(x) return links[x] and "link" or entries[x] end,
-    exists = function(x) return links[x] ~= nil or entries[x] ~= nil end,
+    stat_type = function(x)
+      return entries[follow(x)]
+    end,
+    lstat_type = function(x)
+      return links[x] and "link" or entries[x]
+    end,
+    exists = function(x)
+      return links[x] ~= nil or entries[x] ~= nil
+    end,
     list = function(dir)
       local out, prefix = {}, dir == "/" and "/" or (dir .. "/")
       for x, t in pairs(entries) do
@@ -46,7 +52,9 @@ local function fakefs(entries, links, info)
           out[#out + 1] = { x:sub(#prefix + 1), t }
         end
       end
-      table.sort(out, function(a, b) return a[1] < b[1] end)
+      table.sort(out, function(a, b)
+        return a[1] < b[1]
+      end)
       return out
     end,
     glob = function(pat)
@@ -60,23 +68,37 @@ local function fakefs(entries, links, info)
       table.sort(out)
       return out
     end,
-    read_line = function() return nil end,
+    read_line = function()
+      return nil
+    end,
     realpath = function(x)
       local r = follow(x)
       return (entries[r] ~= nil) and r or nil
     end,
-    stat_info = function(x) return (info or {})[x] end,
+    stat_info = function(x)
+      return (info or {})[x]
+    end,
   }
 end
 
 local function build(extra, over, links)
   local entries = vim.tbl_extend("force", {
-    [HOME] = "directory", [HOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory",
+    [HOME] = "directory",
+    [HOME .. "/.claude"] = "directory",
+    [PROJECT] = "directory",
+    [TMP] = "directory",
     [PROJECT .. "/.git"] = "directory",
   }, extra or {})
   return plan.build(vim.tbl_extend("force", {
-    project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, probes = fakefs(entries, links),
-    env = { PATH = "/usr/bin" }, cmd = { "agent" }, aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git", net_dir = "/aux/net" },
+    project = PROJECT,
+    tmp_dir = TMP,
+    cwd = PROJECT,
+    home = HOME,
+    uid = 1000,
+    probes = fakefs(entries, links),
+    env = { PATH = "/usr/bin" },
+    cmd = { "agent" },
+    aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git", net_dir = "/aux/net" },
     config = { network = "open", home = "denylist" },
   }, over or {}))
 end
@@ -99,8 +121,12 @@ end
 
 describe("entries of /run that are kept", function()
   local entries = {
-    ["/run"] = "directory", ["/run/current-system"] = "directory", ["/run/booted-system"] = "directory",
-    ["/run/opengl-driver"] = "directory", ["/run/user"] = "directory", ["/run/user/1000"] = "directory",
+    ["/run"] = "directory",
+    ["/run/current-system"] = "directory",
+    ["/run/booted-system"] = "directory",
+    ["/run/opengl-driver"] = "directory",
+    ["/run/user"] = "directory",
+    ["/run/user/1000"] = "directory",
   }
   it("are mounted read-only in the argv, after /run was replaced, and never writable", function()
     local p = build(entries)
@@ -119,8 +145,14 @@ describe("entries of /run that are kept", function()
   end)
 
   it("policy.keep_run adds one, read-only, only below a masked directory", function()
-    local p = build(vim.tbl_extend("force", entries, { ["/run/extra"] = "directory", ["/srv"] = "directory", ["/srv/x"] = "directory" }),
-      { config = { network = "open", home = "denylist", policy = { keep_run = { "/run/extra", "/srv/x" } } } })
+    local p = build(
+      vim.tbl_extend(
+        "force",
+        entries,
+        { ["/run/extra"] = "directory", ["/srv"] = "directory", ["/srv/x"] = "directory" }
+      ),
+      { config = { network = "open", home = "denylist", policy = { keep_run = { "/run/extra", "/srv/x" } } } }
+    )
     local argv = plan.argv(p)
     H.ok(has_seq(argv, "--ro-bind", "/run/extra", "/run/extra"))
     H.eq(nil, has_seq(argv, "--ro-bind", "/srv/x", "/srv/x"), "not below a masked directory: nothing to bring back")
@@ -144,8 +176,10 @@ describe("/var/run", function()
     H.eq(nil, has_seq(plan.argv(r), "--tmpfs", "/var/run"), "absent")
   end)
   it("a writable approval of /var/run (or below) is refused", function()
-    local ok = plan.validate_exception({ kind = "writable", value = "/var/run/x" },
-      { home = HOME, probes = fakefs({ ["/var/run/x"] = "directory" }) })
+    local ok = plan.validate_exception(
+      { kind = "writable", value = "/var/run/x" },
+      { home = HOME, probes = fakefs({ ["/var/run/x"] = "directory" }) }
+    )
     H.eq(false, ok)
   end)
 end)
@@ -168,7 +202,10 @@ describe("sockets named by the environment", function()
 
   it("one outside the masked directories is bound over with an empty file, for both nvim variables", function()
     for _, var in ipairs({ "NVIM", "NVIM_LISTEN_ADDRESS" }) do
-      local p = build({ ["/srv-x"] = "directory", ["/srv-x/nvim.sock"] = "socket" }, { env = { PATH = "/usr/bin", [var] = "/srv-x/nvim.sock" } })
+      local p = build(
+        { ["/srv-x"] = "directory", ["/srv-x/nvim.sock"] = "socket" },
+        { env = { PATH = "/usr/bin", [var] = "/srv-x/nvim.sock" } }
+      )
       H.ok(has_seq(plan.argv(p), "--ro-bind", "/aux/empty", "/srv-x/nvim.sock"), var)
     end
   end)
@@ -178,13 +215,22 @@ end)
 
 describe("policy.home_allow", function()
   local entries = {
-    ["/opt"] = "directory", ["/opt/tool"] = "directory", ["/opt/other"] = "directory",
-    [HOME .. "/data"] = "directory", [HOME .. "/data/sub"] = "directory", [HOME .. "/realdir"] = "directory",
+    ["/opt"] = "directory",
+    ["/opt/tool"] = "directory",
+    ["/opt/other"] = "directory",
+    [HOME .. "/data"] = "directory",
+    [HOME .. "/data/sub"] = "directory",
+    [HOME .. "/realdir"] = "directory",
     [HOME .. "/file.txt"] = "file",
   }
-  local links = { [HOME .. "/linkdir"] = HOME .. "/realdir", [HOME .. "/escape"] = "/opt/other", [HOME .. "/dangling"] = HOME .. "/nowhere" }
+  local links = {
+    [HOME .. "/linkdir"] = HOME .. "/realdir",
+    [HOME .. "/escape"] = "/opt/other",
+    [HOME .. "/dangling"] = HOME .. "/nowhere",
+  }
   local function allowed(list)
-    local p = build(entries, { config = { network = "open", home = "allowlist", policy = { home_allow = list } } }, links)
+    local p =
+      build(entries, { config = { network = "open", home = "allowlist", policy = { home_allow = list } } }, links)
     local out = {}
     for _, a in ipairs(p.home_allow) do
       out[a.path] = a.why
@@ -206,11 +252,14 @@ describe("policy.home_allow", function()
     H.eq(nil, out[HOME .. "/data/sub"])
   end)
 
-  it("a symlink is replaced by what it points to (bwrap cannot mount on a link); the link itself is not shown", function()
-    local out = allowed({ HOME .. "/linkdir" })
-    H.eq(nil, out[HOME .. "/linkdir"], "the link itself")
-    H.eq("policy.home_allow", out[HOME .. "/realdir"], "its target")
-  end)
+  it(
+    "a symlink is replaced by what it points to (bwrap cannot mount on a link); the link itself is not shown",
+    function()
+      local out = allowed({ HOME .. "/linkdir" })
+      H.eq(nil, out[HOME .. "/linkdir"], "the link itself")
+      H.eq("policy.home_allow", out[HOME .. "/realdir"], "its target")
+    end
+  )
 
   it("a symlink to somewhere outside $HOME, and a dangling one, show nothing", function()
     local out, p = allowed({ HOME .. "/escape", HOME .. "/dangling" })
@@ -223,7 +272,11 @@ describe("policy.home_allow", function()
   end)
 
   it("none of it applies in the denylist view", function()
-    local p = build(entries, { config = { network = "open", home = "denylist", policy = { home_allow = { HOME .. "/data" } } } }, links)
+    local p = build(
+      entries,
+      { config = { network = "open", home = "denylist", policy = { home_allow = { HOME .. "/data" } } } },
+      links
+    )
     H.eq({}, p.home_allow)
   end)
 end)
@@ -251,8 +304,12 @@ describe("proxy variables of a filtered sandbox", function()
     H.need_sandbox()
     sb.config.network = "filtered"
     local project = H.tmpdir()
-    local cmd, err, h = sb.wrap({ "sh", "-c", 'echo "[$NO_PROXY][$no_proxy][$HTTPS_PROXY]"' }, project, H.tmpdir(),
-      { env = { NO_PROXY = "*", no_proxy = "*" } })
+    local cmd, err, h = sb.wrap(
+      { "sh", "-c", 'echo "[$NO_PROXY][$no_proxy][$HTTPS_PROXY]"' },
+      project,
+      H.tmpdir(),
+      { env = { NO_PROXY = "*", no_proxy = "*" } }
+    )
     H.ok(cmd, err)
     local r = vim.system(cmd, { text = true, cwd = project }):wait(60000)
     h.release()
@@ -275,7 +332,10 @@ describe("approvals and '..'", function()
   end)
 
   it("a writable or unhide approval with '..' is refused whatever it would resolve to", function()
-    local ctx = { home = HOME, probes = fakefs({ [PROJECT .. "/etc"] = "directory", ["/etc"] = "directory", [HOME .. "/.ssh"] = "directory" }) }
+    local ctx = {
+      home = HOME,
+      probes = fakefs({ [PROJECT .. "/etc"] = "directory", ["/etc"] = "directory", [HOME .. "/.ssh"] = "directory" }),
+    }
     for _, kind in ipairs({ "writable", "unhide" }) do
       for _, v in ipairs({ PROJECT .. "/../../etc", PROJECT .. "/../.ssh", "/etc/..", PROJECT .. "/.." }) do
         local ok, why = plan.validate_exception({ kind = kind, value = v }, ctx)
@@ -298,8 +358,17 @@ end)
 describe("the front door of approvals", function()
   local ctx = { home = HOME, probes = fakefs({}) }
   it("an unknown kind is refused for every shape of the argument", function()
-    for _, exc in ipairs({ { kind = "bogus", value = "x" }, { kind = nil, value = "x" }, { value = "x" }, { kind = "", value = "x" },
-      { kind = "Env", value = "MY_TOKEN" }, { kind = 7, value = "x" }, "env", 12, false }) do
+    for _, exc in ipairs({
+      { kind = "bogus", value = "x" },
+      { kind = nil, value = "x" },
+      { value = "x" },
+      { kind = "", value = "x" },
+      { kind = "Env", value = "MY_TOKEN" },
+      { kind = 7, value = "x" },
+      "env",
+      12,
+      false,
+    }) do
       local ok, why = plan.validate_exception(exc, ctx)
       H.eq(false, ok, vim.inspect(exc))
       H.match(why, "unknown exception kind", true, vim.inspect(exc))
@@ -322,7 +391,20 @@ describe("the front door of approvals", function()
   end)
 
   it("an env value must be a variable name", function()
-    for _, v in ipairs({ "NOT A NAME", "1ABC", "A-B", "A=B", "$(x)", "A B", "a.b", " MY_TOKEN", "MY_TOKEN ", "MY_TOKEN\n", "MY_TOKEN=1", "é" }) do
+    for _, v in ipairs({
+      "NOT A NAME",
+      "1ABC",
+      "A-B",
+      "A=B",
+      "$(x)",
+      "A B",
+      "a.b",
+      " MY_TOKEN",
+      "MY_TOKEN ",
+      "MY_TOKEN\n",
+      "MY_TOKEN=1",
+      "é",
+    }) do
       local ok, why = plan.validate_exception({ kind = "env", value = v }, ctx)
       H.eq(false, ok, vim.inspect(v))
       H.match(why, "not an environment variable name", true, vim.inspect(v))
@@ -352,7 +434,13 @@ describe("git configs of submodules and the sanitizer", function()
     sb.config.network = "open"
     local project = H.tmpdir()
     local function cfg(url)
-      return '[remote "origin"]\n\turl = https://u:' .. TOKEN .. "@github.com/" .. url .. "\n\ttoken = " .. TOKEN .. "\n"
+      return '[remote "origin"]\n\turl = https://u:'
+        .. TOKEN
+        .. "@github.com/"
+        .. url
+        .. "\n\ttoken = "
+        .. TOKEN
+        .. "\n"
     end
     local function w(path, text)
       vim.fn.mkdir(vim.fs.dirname(path), "p")
@@ -381,8 +469,16 @@ describe("git configs of submodules and the sanitizer", function()
   end
 
   it("drops token and password in any case, with or without spaces, and a bare key", function()
-    for _, line in ipairs({ "token = S3CR3T", "Token = S3CR3T", "TOKEN=S3CR3T", "password=S3CR3T", "PassWord = S3CR3T", "  password   =   S3CR3T",
-      "askpass = S3CR3T", "extraHeader = Authorization: S3CR3T" }) do
+    for _, line in ipairs({
+      "token = S3CR3T",
+      "Token = S3CR3T",
+      "TOKEN=S3CR3T",
+      "password=S3CR3T",
+      "PassWord = S3CR3T",
+      "  password   =   S3CR3T",
+      "askpass = S3CR3T",
+      "extraHeader = Authorization: S3CR3T",
+    }) do
       local out = clean('[remote "o"]\n\t' .. line .. "\n\turl = https://h/x\n")
       H.no_match(out, "S3CR3T", true, line)
       H.match(out, "url = https://h/x", true, line)
@@ -391,11 +487,11 @@ describe("git configs of submodules and the sanitizer", function()
 
   it("a key with no value (a bare key means true) is dropped by name as well, and its neighbours stay", function()
     for _, k in ipairs({ "token", "Password", "askpass", "extraheader" }) do
-      local out = clean('[remote "o"]\n\t' .. k .. '\n\turl = https://h/x\n')
+      local out = clean('[remote "o"]\n\t' .. k .. "\n\turl = https://h/x\n")
       H.eq(nil, out:lower():find(k:lower(), 1, true), k .. " kept: " .. out)
       H.match(out, "url = https://h/x", true, k)
     end
-    H.match(clean('[core]\n\tbare\n'), "bare", true)
+    H.match(clean("[core]\n\tbare\n"), "bare", true)
   end)
 
   it("drops the credential helper only in a credential section, in any case", function()
@@ -411,12 +507,13 @@ describe("git configs of submodules and the sanitizer", function()
     local out = clean('[URL "https://u:S3CR3T@h/"]\n\tinsteadOf = x\n')
     H.no_match(out, "S3CR3T", true)
     H.match(out, "insteadOf = x", true)
-    H.no_match(clean('[HTTP]\n\tEXTRAHEADER = a: S3CR3T\n'), "S3CR3T", true)
+    H.no_match(clean("[HTTP]\n\tEXTRAHEADER = a: S3CR3T\n"), "S3CR3T", true)
     H.no_match(clean('[Http "https://h/"]\n\textraheader = a: S3CR3T\n'), "S3CR3T", true)
   end)
 
   it("a continued value is dropped to its end and no further", function()
-    local out = clean('[http]\n\textraHeader = a \\\n\t  b-S3CR3T \\\n\t  c-S3CR3T\n\tproxy = http://p\n[core]\n\teditor = vi\n')
+    local out =
+      clean("[http]\n\textraHeader = a \\\n\t  b-S3CR3T \\\n\t  c-S3CR3T\n\tproxy = http://p\n[core]\n\teditor = vi\n")
     H.no_match(out, "S3CR3T", true)
     H.match(out, "proxy = http://p", true)
     H.match(out, "editor = vi", true)
@@ -425,7 +522,7 @@ describe("git configs of submodules and the sanitizer", function()
     H.match(out2, "url = https://h/x", true)
     H.match(out2, "fetch = +refs/*:refs/*", true)
     -- a kept value with a trailing backslash keeps its continuation line
-    local out3 = clean('[alias]\n\tx = log \\\n\t  --oneline\n')
+    local out3 = clean("[alias]\n\tx = log \\\n\t  --oneline\n")
     H.match(out3, "--oneline", true)
   end)
 
@@ -443,8 +540,13 @@ describe("credentials in a URL", function()
     return vim.tbl_contains(scan.text(url), "credentials in a URL")
   end
   it("a real-looking password is found, in many shapes", function()
-    for _, u in ipairs({ "https://bob:Zq7xK9mPqL2@h.example.org/x", "postgres://app:Zq7xK9mPqL2@db:5432/x", "KEY='ftp://u:Zq7xK9mPqL2@h'",
-      "git+ssh://git:Zq7xK9mPqL2@h/x.git", "amqp://u:abcdEFGH1234@broker" }) do
+    for _, u in ipairs({
+      "https://bob:Zq7xK9mPqL2@h.example.org/x",
+      "postgres://app:Zq7xK9mPqL2@db:5432/x",
+      "KEY='ftp://u:Zq7xK9mPqL2@h'",
+      "git+ssh://git:Zq7xK9mPqL2@h/x.git",
+      "amqp://u:abcdEFGH1234@broker",
+    }) do
       H.ok(found(u), u)
     end
   end)
@@ -495,21 +597,46 @@ end)
 describe("hard links of a hidden file inside the project", function()
   it("every other name is hidden, each with the reason, and the plan counts them", function()
     local entries = {
-      [PROJECT .. "/.env"] = "file", [PROJECT .. "/a.txt"] = "file", [PROJECT .. "/sub"] = "directory", [PROJECT .. "/sub/b.txt"] = "file",
+      [PROJECT .. "/.env"] = "file",
+      [PROJECT .. "/a.txt"] = "file",
+      [PROJECT .. "/sub"] = "directory",
+      [PROJECT .. "/sub/b.txt"] = "file",
       [PROJECT .. "/other.txt"] = "file",
     }
     local info = { [PROJECT .. "/.env"] = { nlink = 4, dev = 7, ino = 11 } }
-    local probes = fakefs(vim.tbl_extend("force", {
-      [HOME] = "directory", [HOME .. "/.claude"] = "directory", [PROJECT] = "directory", [TMP] = "directory", [PROJECT .. "/.git"] = "directory",
-    }, entries), nil, info)
+    local probes = fakefs(
+      vim.tbl_extend("force", {
+        [HOME] = "directory",
+        [HOME .. "/.claude"] = "directory",
+        [PROJECT] = "directory",
+        [TMP] = "directory",
+        [PROJECT .. "/.git"] = "directory",
+      }, entries),
+      nil,
+      info
+    )
     probes.scan_project = function()
-      return { hits = {}, files = 4, multi = {
-        { path = PROJECT .. "/.env", dev = 7, ino = 11, nlink = 4 }, { path = PROJECT .. "/a.txt", dev = 7, ino = 11, nlink = 4 },
-        { path = PROJECT .. "/sub/b.txt", dev = 7, ino = 11, nlink = 4 }, { path = PROJECT .. "/other.txt", dev = 7, ino = 12, nlink = 2 } } }
+      return {
+        hits = {},
+        files = 4,
+        multi = {
+          { path = PROJECT .. "/.env", dev = 7, ino = 11, nlink = 4 },
+          { path = PROJECT .. "/a.txt", dev = 7, ino = 11, nlink = 4 },
+          { path = PROJECT .. "/sub/b.txt", dev = 7, ino = 11, nlink = 4 },
+          { path = PROJECT .. "/other.txt", dev = 7, ino = 12, nlink = 2 },
+        },
+      }
     end
     local p = plan.build({
-      project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, probes = probes, env = { PATH = "/usr/bin" },
-      cmd = { "agent" }, aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
+      project = PROJECT,
+      tmp_dir = TMP,
+      cwd = PROJECT,
+      home = HOME,
+      uid = 1000,
+      probes = probes,
+      env = { PATH = "/usr/bin" },
+      cmd = { "agent" },
+      aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
       config = { network = "open", home = "denylist" },
     })
     local why = {}
@@ -541,13 +668,25 @@ describe("the relay's lifetime and address", function()
     local port = 20000 + (uv.hrtime() % 20000)
     local ready = dir .. "/ready"
     local script = ('"%s" -u NONE -i NONE --headless -l "%s" "%s" %d "%s" </dev/null >/dev/null 2>&1 & wait'):format(
-      vim.v.progpath, RELAY, dir .. "/net/proxy.sock", port, ready)
+      vim.v.progpath,
+      RELAY,
+      dir .. "/net/proxy.sock",
+      port,
+      ready
+    )
     local sh = vim.system({ "sh", "-c", script, "xyno-r4-parent" })
-    H.ok(vim.wait(10000, function() return uv.fs_stat(ready) ~= nil end, 50), "the relay did not come up")
+    H.ok(
+      vim.wait(10000, function()
+        return uv.fs_stat(ready) ~= nil
+      end, 50),
+      "the relay did not come up"
+    )
     return { sh = sh, marker = dir .. "/net/proxy.sock", port = port }
   end
   local function relay_pid(r)
-    local ps = vim.tbl_filter(function(p) return not p[2]:match("^sh ") end, H.procs(r.marker))
+    local ps = vim.tbl_filter(function(p)
+      return not p[2]:match("^sh ")
+    end, H.procs(r.marker))
     H.eq(1, #ps)
     return ps[1][1]
   end
@@ -585,23 +724,28 @@ describe("the relay's lifetime and address", function()
     H.eq({ "0100007F" }, seen)
   end)
 
-  it("a connection from another address is not possible: the relay refuses the non-loopback address of this host", function()
-    -- (the machine's other addresses cannot be assumed; 127.0.0.2 is also loopback but not the bound address)
-    local r = start()
-    local connected
-    local c = uv.new_tcp()
-    c:connect("127.0.0.2", r.port, function(err)
-      connected = err == nil
-      c:close()
-    end)
-    vim.wait(2000, function() return connected ~= nil end, 20)
-    H.wait_gone(r.marker, 100)
-    r.sh:kill(9)
-    for _, ps in ipairs(H.procs(r.marker)) do
-      uv.kill(ps[1], 9)
+  it(
+    "a connection from another address is not possible: the relay refuses the non-loopback address of this host",
+    function()
+      -- (the machine's other addresses cannot be assumed; 127.0.0.2 is also loopback but not the bound address)
+      local r = start()
+      local connected
+      local c = uv.new_tcp()
+      c:connect("127.0.0.2", r.port, function(err)
+        connected = err == nil
+        c:close()
+      end)
+      vim.wait(2000, function()
+        return connected ~= nil
+      end, 20)
+      H.wait_gone(r.marker, 100)
+      r.sh:kill(9)
+      for _, ps in ipairs(H.procs(r.marker)) do
+        uv.kill(ps[1], 9)
+      end
+      H.eq(false, connected, "bound to 0.0.0.0 it would accept 127.0.0.2")
     end
-    H.eq(false, connected, "bound to 0.0.0.0 it would accept 127.0.0.2")
-  end)
+  )
 end)
 
 -- ----------------------------------------------------------------- release

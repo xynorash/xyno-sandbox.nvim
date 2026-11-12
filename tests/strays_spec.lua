@@ -24,7 +24,8 @@ after_each(function()
   sb.config = vim.deepcopy(saved)
 end)
 
-local STRAYS = { ".git", ".envrc", ".exrc", ".mcp.json", ".mise.toml", ".nvim.lua", ".nvimrc", ".cargo", ".claude", ".vscode" }
+local STRAYS =
+  { ".git", ".envrc", ".exrc", ".mcp.json", ".mise.toml", ".nvim.lua", ".nvimrc", ".cargo", ".claude", ".vscode" }
 
 local function snapshot(dir)
   local out = {}
@@ -61,8 +62,12 @@ describe("a shared directory as the project", function()
       H.eq({}, p.guard_files, shared)
       for _, m in ipairs(p.masks) do
         H.not_ok(m.cleanup, shared .. " got a project placeholder: " .. m.path)
-        H.not_ok(m.path:sub(1, #shared + 1) == shared .. "/" and shared ~= "/" and m.path:match("^" .. vim.pesc(shared) .. "/%.[%w]+$"),
-          shared .. " got a mask directly inside: " .. m.path)
+        H.not_ok(
+          m.path:sub(1, #shared + 1) == shared .. "/"
+            and shared ~= "/"
+            and m.path:match("^" .. vim.pesc(shared) .. "/%.[%w]+$"),
+          shared .. " got a mask directly inside: " .. m.path
+        )
       end
       for _, w in ipairs(p.writable) do
         H.not_ok(w.why == "project", shared .. " mounted writable")
@@ -117,8 +122,11 @@ describe("placeholders of a Neovim that died", function()
     vim.fn.mkdir(store.dir() .. "/live", "p")
     local pid = dead_pid()
     local items = {
-      { project .. "/.envrc", "file" }, { project .. "/.mcp.json", "file" }, { project .. "/.vscode", "dir" },
-      { project .. "/.cargo", "dir" }, { project .. "/.exrc", "file" },
+      { project .. "/.envrc", "file" },
+      { project .. "/.mcp.json", "file" },
+      { project .. "/.vscode", "dir" },
+      { project .. "/.cargo", "dir" },
+      { project .. "/.exrc", "file" },
     }
     local lines = { project }
     for _, it in ipairs(items) do
@@ -153,7 +161,13 @@ describe("placeholders of a Neovim that died", function()
     local _, _, h2 = sb.wrap({ "true" }, H.tmpdir(), tmp)
     h2.release()
     h.release() -- (this process's handle; its registration is gone, the files are already swept)
-    H.eq(snapshot(project), vim.tbl_map(function() return false end, made), "all placeholders swept")
+    H.eq(
+      snapshot(project),
+      vim.tbl_map(function()
+        return false
+      end, made),
+      "all placeholders swept"
+    )
   end)
 
   it("a live sandbox of the same project keeps the placeholders it still mounts", function()

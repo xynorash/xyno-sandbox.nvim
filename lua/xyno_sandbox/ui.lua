@@ -96,12 +96,14 @@ function M.lines(plan, ctx)
   if plan.network == "open" then
     add("network   OPEN (not restricted: the agent reaches the internet and local services)")
   else
-    add("network   FILTERED: no direct network; HTTPS only through a local proxy, by host name (no DNS from the sandbox)")
+    add(
+      "network   FILTERED: no direct network; HTTPS only through a local proxy, by host name (no DNS from the sandbox)"
+    )
   end
   if plan.home_mode == "allowlist" then
     add("home      EMPTY: $HOME shows only the paths listed under Home view, the project and the writable paths")
   else
-    add("home      READABLE except the hidden credential paths below (home = \"denylist\")")
+    add('home      READABLE except the hidden credential paths below (home = "denylist")')
   end
   if plan.blocked then
     add("")
@@ -142,10 +144,13 @@ function M.lines(plan, ctx)
     return ("%s  [%s]"):format(short(r.path, home), r.why)
   end)
   if #(plan.runs_later or {}) > 0 then
-    section("Agent-editable, runs later on your machine (not locked: the agent has to edit these; changes are summarised when the run ends)",
-      plan.runs_later, function(p)
+    section(
+      "Agent-editable, runs later on your machine (not locked: the agent has to edit these; changes are summarised when the run ends)",
+      plan.runs_later,
+      function(p)
         return short(p, home)
-      end)
+      end
+    )
   end
   local guards = {}
   for _, m in ipairs(plan.masks) do
@@ -169,19 +174,36 @@ function M.lines(plan, ctx)
   op_section("Git configs shown without credentials (URL tokens, credential helpers, auth headers removed)", "git")
   if #(plan.hardlinks or {}) > 0 then
     section("Hidden files that have other hard links", plan.hardlinks, function(l)
-      return ("%s  [%d links: %d other name%s hidden%s]"):format(short(l.path, home), l.links, l.masked, l.masked == 1 and "" or "s",
-        l.unaccounted > 0 and (", " .. l.unaccounted .. " elsewhere NOT hidden") or "")
+      return ("%s  [%d links: %d other name%s hidden%s]"):format(
+        short(l.path, home),
+        l.links,
+        l.masked,
+        l.masked == 1 and "" or "s",
+        l.unaccounted > 0 and (", " .. l.unaccounted .. " elsewhere NOT hidden") or ""
+      )
     end)
   end
   if plan.scan and plan.scan.enabled then
     add("")
-    add(("Content scan: %d file%s checked for known token formats%s; %d hidden. It does not find passwords, generic keys or"
-      .. " anything in a format it does not know (see the README)."):format(plan.scan.files, plan.scan.files == 1 and "" or "s",
-      plan.scan.truncated and (" (STOPPED: " .. tostring(plan.scan.why) .. ")") or "", plan.scan.hits or 0))
+    add(
+      (
+        "Content scan: %d file%s checked for known token formats%s; %d hidden. It does not find passwords, generic keys or"
+        .. " anything in a format it does not know (see the README)."
+      ):format(
+        plan.scan.files,
+        plan.scan.files == 1 and "" or "s",
+        plan.scan.truncated and (" (STOPPED: " .. tostring(plan.scan.why) .. ")") or "",
+        plan.scan.hits or 0
+      )
+    )
     local u = plan.scan.unread
     if u and (u.large > 0 or u.binary > 0) then
-      add(("  Not read at all: %d over 256 KB, %d binary (NUL byte). No file is skipped for its name or extension."):format(
-        u.large, u.binary))
+      add(
+        ("  Not read at all: %d over 256 KB, %d binary (NUL byte). No file is skipped for its name or extension."):format(
+          u.large,
+          u.binary
+        )
+      )
     end
   end
   op_section("Other mounts", "ephemeral")
@@ -193,7 +215,11 @@ function M.lines(plan, ctx)
     return n
   end)
   add("")
-  add(("Environment: bwrap starts with `env -i` and %d variables; stripped values never exist in the sandbox"):format(#(plan.env_pass or {})))
+  add(
+    ("Environment: bwrap starts with `env -i` and %d variables; stripped values never exist in the sandbox"):format(
+      #(plan.env_pass or {})
+    )
+  )
   if ctx.full then
     local names = {}
     for _, kv in ipairs(plan.env_pass or {}) do
@@ -209,8 +235,11 @@ function M.lines(plan, ctx)
   add("Isolation  " .. table.concat(iso.args, " "))
   if #(plan.symlinks or {}) > 0 then
     section("Project symlinks that leave the project", plan.symlinks, function(l)
-      return ("%s -> %s  [%s]"):format(short(l.path, home), short(l.target, home),
-        l.readable and "target READABLE in the sandbox" or "target not visible in the sandbox")
+      return ("%s -> %s  [%s]"):format(
+        short(l.path, home),
+        short(l.target, home),
+        l.readable and "target READABLE in the sandbox" or "target not visible in the sandbox"
+      )
     end)
   end
 
@@ -268,9 +297,16 @@ local function float(lines, title, footer)
     footer = footer .. "   j/k scroll"
   end
   local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor", style = "minimal", border = "rounded", width = width, height = height,
-    row = math.max(math.floor((vim.o.lines - height) / 2) - 1, 0), col = math.max(math.floor((vim.o.columns - width) / 2), 0),
-    title = " " .. title .. " ", footer = " " .. footer .. " ", footer_pos = "center",
+    relative = "editor",
+    style = "minimal",
+    border = "rounded",
+    width = width,
+    height = height,
+    row = math.max(math.floor((vim.o.lines - height) / 2) - 1, 0),
+    col = math.max(math.floor((vim.o.columns - width) / 2), 0),
+    title = " " .. title .. " ",
+    footer = " " .. footer .. " ",
+    footer_pos = "center",
   })
   vim.wo[win].wrap = true
   return buf, win
@@ -304,7 +340,12 @@ function M.pick_exception(plan, project, done)
   if plan.net then
     cands[#cands + 1] = { label = "allow another network host (name, *.suffix, host:port)...", kind = "host" }
   end
-  select(cands, { prompt = "Exception to consider", format_item = function(c) return c.label end }, function(c)
+  select(cands, {
+    prompt = "Exception to consider",
+    format_item = function(c)
+      return c.label
+    end,
+  }, function(c)
     if not c then
       return done(nil)
     end
@@ -312,19 +353,27 @@ function M.pick_exception(plan, project, done)
       if not value or value == "" then
         return done(nil)
       end
-      local what = ("%s %s"):format(c.kind, (c.kind == "writable" or c.kind == "unhide") and short(value, home) or value)
+      local what = ("%s %s"):format(
+        c.kind,
+        (c.kind == "writable" or c.kind == "unhide") and short(value, home) or value
+      )
       local choices = { "Approve for this launch only", "Approve for this project (remembered, revocable)", "Refuse" }
-      select(choices, { prompt = "Exception: " .. what .. " (project " .. short(project, home) .. ")" }, function(_, idx)
-        if idx == 1 or idx == 2 then
-          local e, why = ex.decide(project, "approved", { kind = c.kind, value = value }, idx == 2 and "project" or "once")
-          if not e and why then
-            vim.notify("xyno-sandbox: refused: " .. why, vim.log.levels.WARN)
+      select(
+        choices,
+        { prompt = "Exception: " .. what .. " (project " .. short(project, home) .. ")" },
+        function(_, idx)
+          if idx == 1 or idx == 2 then
+            local e, why =
+              ex.decide(project, "approved", { kind = c.kind, value = value }, idx == 2 and "project" or "once")
+            if not e and why then
+              vim.notify("xyno-sandbox: refused: " .. why, vim.log.levels.WARN)
+            end
+            return done(e and idx == 1 and e or nil)
           end
-          return done(e and idx == 1 and e or nil)
+          ex.decide(project, "refused", { kind = c.kind, value = value })
+          return done(nil)
         end
-        ex.decide(project, "refused", { kind = c.kind, value = value })
-        return done(nil)
-      end)
+      )
     end
     if c.kind == "host" then
       vim.ui.input({ prompt = "Host name to allow (e.g. github.com): " }, decide)
@@ -349,8 +398,11 @@ function M.show(opts)
     return
   end
   local footer = opts.confirm and "<CR>/y launch   q/n cancel   e exception" or "q close   e exception"
-  local buf, win = float(M.lines(plan, { full = opts.full, status = opts.status and opts.status() }),
-    opts.confirm and "Launch inside the sandbox?" or "Sandbox policy", footer)
+  local buf, win = float(
+    M.lines(plan, { full = opts.full, status = opts.status and opts.status() }),
+    opts.confirm and "Launch inside the sandbox?" or "Sandbox policy",
+    footer
+  )
   local finished = false
   local function finish(go)
     if finished then
@@ -370,10 +422,16 @@ function M.show(opts)
     end
   end
   if opts.confirm then
-    map({ "<CR>", "y" }, function() finish(true) end)
-    map({ "q", "n", "<Esc>" }, function() finish(false) end)
+    map({ "<CR>", "y" }, function()
+      finish(true)
+    end)
+    map({ "q", "n", "<Esc>" }, function()
+      finish(false)
+    end)
   else
-    map({ "q", "<Esc>", "<CR>" }, function() finish(false) end)
+    map({ "q", "<Esc>", "<CR>" }, function()
+      finish(false)
+    end)
   end
   map({ "e" }, function()
     if plan.mode ~= "bwrap" then
@@ -392,7 +450,13 @@ function M.show(opts)
       end
     end)
   end)
-  vim.api.nvim_create_autocmd("BufWipeout", { buffer = buf, once = true, callback = function() finish(false) end })
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = buf,
+    once = true,
+    callback = function()
+      finish(false)
+    end,
+  })
   return buf, win
 end
 
@@ -406,7 +470,12 @@ function M.approval_lines(all, home)
   for _, p in ipairs(projects) do
     out[#out + 1] = short(p, home)
     for _, a in ipairs(all[p]) do
-      out[#out + 1] = ("  [%d] %s %s   (%s)"):format(a.id, a.kind, a.kind == "env" and a.value or short(a.value, home), a.ts)
+      out[#out + 1] = ("  [%d] %s %s   (%s)"):format(
+        a.id,
+        a.kind,
+        a.kind == "env" and a.value or short(a.value, home),
+        a.ts
+      )
       index[#out] = { project = p, id = a.id }
     end
   end
