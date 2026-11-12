@@ -50,6 +50,10 @@ describe("tests/run.lua when the runner itself is killed (kill -9)", function()
       nvim_left[#nvim_left + 1] = p
       uv.kill(p[1], 9)
     end
+    -- the killed runner cannot remove its own scratch directory and root: they carry its pid, so remove them here
+    -- (otherwise every complete suite run leaves one /tmp/xyno-run-* directory until the NEXT run reaps it)
+    local reaper = dofile(H.repo .. "/tests/reaper.lua")
+    H.ok(reaper.remove_owned_by(obj.pid, reaper.bases(H.repo)) >= 1, "its scratch directory was found and removed")
     H.ok(started, "the spec started")
     H.ok(gone, "left behind: " .. vim.inspect(left))
     H.eq({}, nvim_left, "the spec's nvim is gone")

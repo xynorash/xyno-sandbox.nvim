@@ -186,16 +186,18 @@ describe("release", function()
 end)
 
 describe("tests/run.lua", function()
-  it("fails the run, and kills the process, when a spec leaves a sandbox process behind", function()
+  it("fails the run, and kills the process AND what it started, when a spec leaves a sandbox process behind", function()
     local dir = H.tmpdir()
+    -- a duration of its own (this nvim's pid): a concurrent suite run or an older leftover never matches
+    local n = 100000 + vim.uv.os_getpid()
     local f = assert(io.open(dir .. "/leaky_spec.lua", "w"))
-    f:write([[
+    f:write(([[
       it("starts something that stays", function()
         local scratch = assert(os.getenv("XYNO_TEST_SCRATCH"))
-        vim.system({ "sh", "-c", "sleep 120; :", "relay.lua", scratch .. "/leak-marker" }, { detach = true })
+        vim.system({ "sh", "-c", "sleep %d; :", "relay.lua", scratch .. "/leak-marker" }, { detach = true })
         vim.wait(300)
       end)
-    ]])
+    ]]):format(n))
     f:close()
     local r = vim
       .system(
@@ -203,12 +205,10 @@ describe("tests/run.lua", function()
         { text = true, env = { XYNO_TEST_WORKER = "0" } }
       )
       :wait(60000)
+    local left = H.wait_gone("sleep " .. n, 3000) -- (the child of the killed sh: its command line has no marker)
     H.eq(1, r.code, r.stdout)
     H.match(r.stdout, "left a process behind", true)
     H.match(r.stdout, "failed=1", true)
-    local left = vim.tbl_filter(function(p)
-      return p[2]:find("leak-marker", 1, true)
-    end, H.procs("sleep 120"))
-    H.eq({}, left, "the survivor was killed")
+    H.eq({}, left, "the survivor and its sleep were killed")
   end)
 end)

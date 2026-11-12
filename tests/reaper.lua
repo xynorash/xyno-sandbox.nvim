@@ -52,6 +52,50 @@ function M.owner_alive(tag)
   return M.proc_start(pid) == start
 end
 
+--- Remove a tree that may hold read-only directories (the specs make 0555 and 0000 ones on purpose): every directory
+--- is opened for its owner before it is listed, nothing is followed through a symlink. Returns true when it is gone.
+function M.remove_tree(path)
+  local uv = vim.uv
+  local st = uv.fs_lstat(path)
+  if not st then
+    return true
+  end
+  if st.type == "directory" then
+    uv.fs_chmod(path, tonumber("700", 8))
+    local h = uv.fs_scandir(path)
+    while h do
+      local name = uv.fs_scandir_next(h)
+      if not name then
+        break
+      end
+      M.remove_tree(path .. "/" .. name)
+    end
+    return uv.fs_rmdir(path) and true or false
+  end
+  return uv.fs_unlink(path) and true or false
+end
+
+--- Remove the roots and scratch directories whose owner file names `pid` (a runner that was killed on purpose by a
+--- spec). Returns how many.
+function M.remove_owned_by(pid, bases)
+  local n = 0
+  for _, base in ipairs(bases) do
+    for name, ty in vim.fs.dir(base) do
+      if ty == "directory" and (name:match("^xyno%-sandbox%-test%-") or name:match("^xyno%-run%-")) then
+        local f = io.open(base .. "/" .. name .. "/.owner", "rb")
+        local tag = f and f:read("a") or ""
+        if f then
+          f:close()
+        end
+        if vim.trim(tag):match("^(%d+):") == tostring(pid) and M.remove_tree(base .. "/" .. name) then
+          n = n + 1
+        end
+      end
+    end
+  end
+  return n
+end
+
 --- Remove the roots and scratch directories of runners that no longer exist. Returns how many.
 function M.reap_stale(bases)
   local uid = vim.uv.getuid and vim.uv.getuid() or nil
@@ -73,7 +117,7 @@ function M.reap_stale(bases)
           stale = os.time() - st.mtime.sec > (is_probe and 600 or 86400)
         end
         if stale then
-          n = n + (vim.fn.delete(path, "rf") == 0 and 1 or 0)
+          n = n + (M.remove_tree(path) and 1 or 0)
         end
       end
     end

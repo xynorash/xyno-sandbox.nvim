@@ -112,3 +112,97 @@ describe("the content scan: the length of each token format", function()
     H.eq(0, #hits(41))
   end)
 end)
+
+-- --------------------------------------------------------------------- the runner's own hygiene
+describe("the runner removes trees that hold read-only directories", function()
+  local uv = vim.uv
+  local reaper = dofile(H.repo .. "/tests/reaper.lua")
+  local function write(path, text)
+    vim.fn.mkdir(vim.fs.dirname(path), "p")
+    local f = assert(io.open(path, "wb"))
+    f:write(text or "x")
+    f:close()
+  end
+  -- a tree like the one the sandbox specs leave: 0555 and 0000 directories, 0444 files, a symlink out
+  local function read_only_tree(root, outside)
+    write(root .. "/.owner", "999999:1")
+    write(root .. "/a/ro/file", "x")
+    write(root .. "/a/ro/deeper/file", "x")
+    write(root .. "/b/none/file", "x")
+    write(root .. "/c/.envrc", "x")
+    uv.fs_symlink(outside, root .. "/c/link")
+    uv.fs_chmod(root .. "/c/.envrc", tonumber("444", 8))
+    uv.fs_chmod(root .. "/a/ro/deeper", tonumber("555", 8))
+    uv.fs_chmod(root .. "/a/ro", tonumber("555", 8))
+    uv.fs_chmod(root .. "/b/none", tonumber("000", 8))
+    uv.fs_chmod(root .. "/b", tonumber("555", 8))
+  end
+  local function open_up(p)
+    vim.system({ "chmod", "-R", "u+rwX", p }):wait()
+  end
+
+  it("reap_stale removes a dead runner's directory with 0555 / 0000 directories and does not follow a symlink", function()
+    local base = H.tmpdir()
+    local outside = H.tmpdir() .. "/precious"
+    write(outside .. "/file", "x")
+    uv.fs_chmod(outside, tonumber("500", 8))
+    local dead = base .. "/xyno-run-DEADRO"
+    read_only_tree(dead, outside)
+    local n = reaper.reap_stale({ base })
+    if uv.fs_lstat(dead) then
+      open_up(dead)
+    end
+    H.eq(1, n, "counted")
+    H.eq(nil, uv.fs_lstat(dead), "the whole tree is gone")
+    H.ok(uv.fs_stat(outside .. "/file"), "what the symlink pointed at is untouched")
+    H.eq(tonumber("500", 8), uv.fs_stat(outside).mode % 512, "and its mode is unchanged")
+    uv.fs_chmod(outside, tonumber("700", 8))
+  end)
+
+  it("a second pass has nothing left to do (no ownerless remainder waiting for a day)", function()
+    local base = H.tmpdir()
+    local dead = base .. "/xyno-sandbox-test-DEADRO"
+    read_only_tree(dead, H.tmpdir())
+    H.eq(1, reaper.reap_stale({ base }))
+    if uv.fs_lstat(dead) then
+      open_up(dead)
+    end
+    H.eq(0, reaper.reap_stale({ base }))
+    H.eq(nil, uv.fs_lstat(dead))
+  end)
+
+  it("the end of a complete run removes its scratch directory even when a spec left read-only directories in it", function()
+    local dir = H.tmpdir()
+    local f = assert(io.open(dir .. "/ro_spec.lua", "w"))
+    f:write(([[
+      it("leaves a read-only tree", function()
+        local s = assert(os.getenv("XYNO_TEST_SCRATCH"))
+        vim.fn.mkdir(s .. "/ro/inner", "p")
+        local w = assert(io.open(s .. "/ro/inner/f", "w")) w:write("x") w:close()
+        vim.uv.fs_chmod(s .. "/ro/inner", tonumber("555", 8))
+        vim.uv.fs_chmod(s .. "/ro", tonumber("555", 8))
+        local o = assert(io.open(%q, "w")) o:write(s) o:close()
+      end)
+    ]]):format(dir .. "/scratch"))
+    f:close()
+    local r = vim
+      .system(
+        { vim.v.progpath, "--headless", "-l", H.repo .. "/tests/run.lua", dir .. "/ro_spec.lua" },
+        { text = true, env = { XYNO_TEST_WORKER = "0" } }
+      )
+      :wait(120000)
+    local sf = io.open(dir .. "/scratch")
+    local scratch = sf and sf:read("a")
+    if sf then
+      sf:close()
+    end
+    H.ok(scratch and scratch ~= "", "the spec ran: " .. (r.stdout or ""))
+    local left = uv.fs_lstat(scratch) ~= nil
+    if left then
+      open_up(scratch)
+      vim.fn.delete(scratch, "rf")
+    end
+    H.eq(0, r.code, r.stdout)
+    H.not_ok(left, "the scratch directory of the finished run was left behind")
+  end)
+end)

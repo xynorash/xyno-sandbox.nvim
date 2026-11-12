@@ -182,6 +182,43 @@ local function survivors(root, tmp)
   return out
 end
 
+--- Every process below the pids of `list` ({ { pid, cmdline } }), from /proc/<pid>/stat.
+local function descendants(list)
+  local parent = {}
+  for name in vim.fs.dir("/proc") do
+    local pid = tonumber(name)
+    if pid then
+      local f = io.open("/proc/" .. name .. "/stat", "rb")
+      local line = f and f:read("a") or ""
+      if f then
+        f:close()
+      end
+      local ppid = line:match("%)%s+%S+%s+(%d+)")
+      if ppid then
+        parent[pid] = tonumber(ppid)
+      end
+    end
+  end
+  local roots, out, seen = {}, {}, {}
+  for _, s in ipairs(list) do
+    roots[s[1]] = true
+  end
+  for pid in pairs(parent) do
+    local p, hops = parent[pid], 0
+    while p and p > 1 and hops < 64 do
+      if roots[p] then
+        if not seen[pid] then
+          seen[pid] = true
+          out[#out + 1] = pid
+        end
+        break
+      end
+      p, hops = parent[p], hops + 1
+    end
+  end
+  return out
+end
+
 --- Wait briefly for the survivors to go (their sandbox may still be tearing down), then kill -9.
 local function reap(root, tmp)
   local list
@@ -192,8 +229,14 @@ local function reap(root, tmp)
     end
     vim.wait(100)
   end
+  -- what the survivors started (the `sleep` of `sh -c 'sleep 120; :'`: its command line names nothing of the run) is
+  -- found BEFORE the parents die, while it still has them as its parent
+  local kids = descendants(list)
   for _, s in ipairs(list) do
     vim.uv.kill(s[1], 9)
+  end
+  for _, pid in ipairs(kids) do
+    vim.uv.kill(pid, 9)
   end
   -- wait until they are really gone (a loaded machine can take longer than a fixed pause)
   vim.wait(5000, function()
@@ -311,8 +354,8 @@ local function run_all(files)
       )
     end
   end
-  vim.fn.delete(root, "rf")
-  vim.fn.delete(env.XYNO_TEST_SCRATCH, "rf")
+  reaper.remove_tree(root)
+  reaper.remove_tree(env.XYNO_TEST_SCRATCH)
   for _, d in ipairs(made_dirs) do
     vim.uv.fs_rmdir(d) -- only when empty
   end
