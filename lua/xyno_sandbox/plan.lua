@@ -152,6 +152,12 @@ M.PROJECT_SECRET_DIRS = { ".aws", ".ssh", ".gnupg", ".kube", ".azure" }
 
 -- Exceptions that are refused outright (a decision, not a policy knob).
 M.WRITABLE_FORBIDDEN = { "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/boot", "/proc", "/sys", "/dev", "/run", "/var/run", "/root" }
+-- Shared system directories that are refused as a whole (a project directory BELOW them is fine): a
+-- writable bind of one would expose every other user's and every other program's files in it.
+M.WRITABLE_FORBIDDEN_EXACT = {
+  "/tmp", "/var", "/var/tmp", "/var/lib", "/var/cache", "/var/log", "/var/spool", "/mnt", "/media", "/srv", "/opt",
+  "/home", "/dev/shm", "/nix", "/lost+found",
+}
 -- Under $HOME: files and directories that run, or steer tools, outside the sandbox later.
 M.WRITABLE_FORBIDDEN_HOME = {
   "/.bashrc", "/.bash_profile", "/.bash_login", "/.bash_logout", "/.profile", "/.zshrc", "/.zshenv", "/.zprofile",
@@ -507,7 +513,10 @@ end
 
 --- Why `p` must never be made writable (a string), or nil. Both directions count: the path
 --- itself, or a parent that contains one of the protected places.
-function M.writable_forbidden(p, home)
+function M.writable_forbidden(p, home, masked)
+  if p == "/" then
+    return "it is the whole filesystem"
+  end
   for _, d in ipairs(M.WRITABLE_FORBIDDEN) do
     if inside(p, d) then
       return d .. " is a system path"
@@ -515,6 +524,22 @@ function M.writable_forbidden(p, home)
   end
   if inside(home, p) then
     return "it contains $HOME"
+  end
+  for _, d in ipairs(M.WRITABLE_FORBIDDEN_EXACT) do
+    if p == d then
+      return d .. " is a shared system directory (approve a project directory below it)"
+    end
+  end
+  -- a parent of a directory that the sandbox replaces with an empty tmpfs: the writable bind is
+  -- applied AFTER the masks, so it would bring the host's content back
+  local covered = { "/tmp", "/home" }
+  vim.list_extend(covered, M.MASKED_SYSTEM)
+  vim.list_extend(covered, M.MASKED_IF_DIR)
+  vim.list_extend(covered, masked or {})
+  for _, m in ipairs(covered) do
+    if inside(m, p) then
+      return "it contains " .. m .. ", which the sandbox hides (a writable bind would show it again)"
+    end
   end
   for _, rel in ipairs(M.WRITABLE_FORBIDDEN_HOME) do
     local f = home .. rel
@@ -611,7 +636,11 @@ function M.validate_exception(exc, ctx)
     return false, "the approvals and the log live there: " .. p
   end
   for _, q in ipairs(candidates) do
-    local why = M.writable_forbidden(q, ctx.home)
+    local masked = {}
+    for _, m in ipairs(ctx.baseline and ctx.baseline.masked or {}) do
+      masked[#masked + 1] = m.path
+    end
+    local why = M.writable_forbidden(q, ctx.home, masked)
     if why then
       return false, "refused" .. (q ~= p and (" (" .. p .. " resolves to " .. q .. ")") or "") .. ": " .. why
     end
@@ -853,7 +882,10 @@ function M.build(input)
   end
   for _, p in ipairs(policy.writable or {}) do
     local rp = resolve_user_path(p, home, project)
-    if rp then
+    local why = rp and M.writable_forbidden(rp, home)
+    if why then
+      plan.notes[#plan.notes + 1] = ("policy.writable %s is ignored: %s"):format(rp, why)
+    elseif rp then
       writable(rp, "policy.writable")
     end
   end
