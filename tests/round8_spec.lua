@@ -578,3 +578,424 @@ describe("the README and the help name what round 8 added", function()
     end
   end)
 end)
+
+-- ------------------------------------------------------------------ (8) the content record, its limits and its words
+describe("the content record: lines, names and what is unknown", function()
+  local function cmp(setup, change)
+    local project = H.tmpdir()
+    setup(project)
+    local before = guard.snapshot(project)
+    change(project)
+    return guard.compare(before, guard.snapshot(project)), project
+  end
+
+  it("a file without a trailing newline counts its last line, an empty file counts none", function()
+    local res, project = cmp(function(p)
+      write(p .. "/s/.cargo/a.toml", "x\n")
+    end, function(p)
+      os.rename(p .. "/s", p .. "/t")
+      write(p .. "/t/.cargo/b.toml", "one\ntwo") -- 2 lines
+      write(p .. "/t/.cargo/c.toml", "") -- 0 lines
+      write(p .. "/t/.cargo/d.toml", "\n") -- 1 line
+    end)
+    H.eq(1, #res.tampered)
+    H.eq(3, res.tampered[1].plus)
+    H.eq(0, res.tampered[1].minus)
+    H.eq({ "b.toml", "c.toml", "d.toml" }, res.tampered[1].names)
+    H.eq(project .. "/t/.cargo", res.tampered[1].to)
+  end)
+
+  it("a deleted file inside counts its lines as removed", function()
+    local res = cmp(function(p)
+      write(p .. "/s/.cargo/a.toml", "1\n2\n3\n")
+      write(p .. "/s/.cargo/b.toml", "x\n")
+    end, function(p)
+      os.rename(p .. "/s", p .. "/t")
+      os.remove(p .. "/t/.cargo/a.toml")
+    end)
+    H.eq(0, res.tampered[1].plus)
+    H.eq(3, res.tampered[1].minus)
+    H.eq({ "a.toml" }, res.tampered[1].names)
+  end)
+
+  it("a protected FILE is named '(itself)'; a directory names the files that differ, sorted", function()
+    local res = cmp(function(p)
+      write(p .. "/a/.envrc", "x\n")
+      write(p .. "/a/.cargo/z", "1\n")
+      write(p .. "/a/.cargo/y", "1\n")
+    end, function(p)
+      write(p .. "/a/.envrc", "y\n")
+      write(p .. "/a/.cargo/z", "2\n")
+      write(p .. "/a/.cargo/y", "2\n")
+    end)
+    H.eq(2, #res.modified)
+    local by = {}
+    for path, d in pairs(res.details) do
+      by[vim.fs.basename(path)] = d
+    end
+    H.eq({ "(itself)" }, by[".envrc"].names)
+    H.eq({ "y", "z" }, by[".cargo"].names)
+    H.eq(2, by[".cargo"].plus)
+    H.eq(2, by[".cargo"].minus)
+  end)
+
+  it("a file whose text was not kept (over the size limit) makes the counts unknown, not zero", function()
+    local old = guard.REVIEW_MAX_BYTES
+    guard.REVIEW_MAX_BYTES = 16
+    local ok, err = pcall(function()
+      local res = cmp(function(p)
+        write(p .. "/s/.cargo/a.toml", "x\n")
+      end, function(p)
+        os.rename(p .. "/s", p .. "/t")
+        write(p .. "/t/.cargo/big.toml", ("y"):rep(64) .. "\n")
+      end)
+      H.eq(1, #res.tampered)
+      H.eq(nil, res.tampered[1].plus)
+      H.eq(nil, res.tampered[1].minus)
+      H.eq({ "big.toml" }, res.tampered[1].names)
+      local lines = guard.report(res)
+      H.no_match(lines[1], "+", true, lines[1])
+      H.match(lines[1], "big.toml", true)
+    end)
+    guard.REVIEW_MAX_BYTES = old
+    assert(ok, err)
+  end)
+
+  it("a directory or a link added inside counts no lines", function()
+    local res = cmp(function(p)
+      write(p .. "/s/.cargo/a.toml", "x\n")
+    end, function(p)
+      os.rename(p .. "/s", p .. "/t")
+      vim.fn.mkdir(p .. "/t/.cargo/sub", "p")
+      uv.fs_symlink("a.toml", p .. "/t/.cargo/ln")
+    end)
+    H.eq(0, res.tampered[1].plus)
+    H.eq(0, res.tampered[1].minus)
+    H.eq({ "ln", "sub" }, res.tampered[1].names)
+  end)
+
+  it("a link whose target changed is a change", function()
+    local res = cmp(function(p)
+      uv.fs_symlink("one", p .. "/.envrc")
+    end, function(p)
+      os.remove(p .. "/.envrc")
+      uv.fs_symlink("two", p .. "/.envrc")
+    end)
+    H.eq(1, #res.modified)
+    H.match(res.modified[1], "/.envrc", true)
+  end)
+
+  it("a file only touched (same content, new mtime) is reported as changed with no lines", function()
+    local project = H.tmpdir()
+    write(project .. "/d/.envrc", "same\n")
+    set_time(project .. "/d/.envrc", 1700000000)
+    local before = guard.snapshot(project)
+    set_time(project .. "/d/.envrc", 1700000500)
+    local res = guard.compare(before, guard.snapshot(project))
+    H.eq({ project .. "/d/.envrc" }, res.modified)
+    H.eq(0, res.details[project .. "/d/.envrc"].plus)
+    H.eq(0, res.details[project .. "/d/.envrc"].minus)
+    H.eq({}, res.details[project .. "/d/.envrc"].names)
+  end)
+
+  it("an old-format snapshot (no inode table, no content) compares without error", function()
+    local project = H.tmpdir()
+    write(project .. "/d/.envrc", "a\n")
+    local now = guard.snapshot(project)
+    local old = { protected = vim.deepcopy(now.protected), review = {}, truncated = false }
+    local res = guard.compare(old, now)
+    H.eq({}, res.planted)
+    H.eq({}, res.modified)
+    local res2 = guard.compare({ protected = {}, review = {} }, now)
+    H.eq({ project .. "/d/.envrc" }, res2.planted)
+  end)
+end)
+
+describe("the content record: its limits are exact", function()
+  local function id_of(project, rel)
+    local snap = guard.snapshot(project)
+    local c = snap.content[project .. "/" .. rel]
+    return c and c.files[""] and c.files[""].id, c and c.files[""] and c.files[""].text, snap
+  end
+  local function with(field, value, fn)
+    local old = guard[field]
+    guard[field] = value
+    local ok, err = pcall(fn)
+    guard[field] = old
+    assert(ok, err)
+  end
+
+  it("a file of exactly REVIEW_MAX_BYTES is hashed, one byte more is only a signature", function()
+    local project = H.tmpdir()
+    with("REVIEW_MAX_BYTES", 100, function()
+      write(project .. "/.envrc", ("a"):rep(100))
+      local id = id_of(project, ".envrc")
+      H.eq("sha:", id:sub(1, 4))
+      write(project .. "/.envrc", ("a"):rep(101))
+      id = id_of(project, ".envrc")
+      H.eq("sig:", id:sub(1, 4))
+    end)
+  end)
+
+  it("the bytes read per snapshot are bounded: the file that would pass the bound is only a signature", function()
+    local project = H.tmpdir()
+    write(project .. "/a/.envrc", ("a"):rep(60))
+    write(project .. "/b/.envrc", ("b"):rep(60))
+    with("CONTENT_MAX_BYTES", 120, function()
+      local sa = id_of(project, "a/.envrc")
+      local sb_ = id_of(project, "b/.envrc")
+      H.eq("sha:", sa:sub(1, 4))
+      H.eq("sha:", sb_:sub(1, 4), "120 bytes in total is exactly the bound")
+    end)
+    with("CONTENT_MAX_BYTES", 119, function()
+      local snap = guard.snapshot(project)
+      local n = 0
+      for _, c in pairs(snap.content) do
+        if c.files[""].id:sub(1, 4) == "sig:" then
+          n = n + 1
+        end
+      end
+      H.eq(1, n, "one more byte than the bound: the second file is a signature")
+    end)
+  end)
+
+  it("the text kept for the diff is bounded by REVIEW_KEEP_BYTES, exactly", function()
+    local project = H.tmpdir()
+    write(project .. "/a/.envrc", ("a"):rep(50))
+    write(project .. "/b/.envrc", ("b"):rep(50))
+    with("REVIEW_KEEP_BYTES", 100, function()
+      local snap = guard.snapshot(project)
+      H.ok(snap.content[project .. "/a/.envrc"].files[""].text)
+      H.ok(snap.content[project .. "/b/.envrc"].files[""].text, "100 bytes kept is exactly the bound")
+    end)
+    with("REVIEW_KEEP_BYTES", 99, function()
+      local snap = guard.snapshot(project)
+      local kept = 0
+      for _, c in pairs(snap.content) do
+        if c.files[""].text then
+          kept = kept + 1
+        end
+      end
+      H.eq(1, kept)
+    end)
+  end)
+
+  it("the hash of a protected name does not depend on the order of the listing and changes with any entry", function()
+    local project = H.tmpdir()
+    write(project .. "/.cargo/a", "1")
+    write(project .. "/.cargo/b", "2")
+    local h1 = guard.snapshot(project).content[project .. "/.cargo"].hash
+    local h2 = guard.snapshot(project).content[project .. "/.cargo"].hash
+    H.eq(h1, h2)
+    write(project .. "/.cargo/b", "3")
+    H.ok(h1 ~= guard.snapshot(project).content[project .. "/.cargo"].hash)
+  end)
+end)
+
+describe("the words of the report and of the review mark", function()
+  it("one tampered name: the refusal text names it; two say 'and 1 more'", function()
+    local one = guard.dirty_reason({ planted = {}, tampered = { { from = "/p/a/.cargo", to = "/p/b/.cargo" } } })
+    H.match(one, "A protected name was moved and its content changed (/p/a/.cargo -> /p/b/.cargo).", true)
+    H.no_match(one, "more", true, one)
+    H.no_match(one, "created", true, one)
+    local two = guard.dirty_reason({
+      planted = {},
+      tampered = { { from = "/p/a", to = "/p/b" }, { from = "/p/c", to = "/p/d" } },
+    })
+    H.match(two, "(/p/a -> /p/b, and 1 more)", true)
+    local three = guard.dirty_reason({
+      planted = {},
+      tampered = { { from = "/a", to = "/b" }, { from = "/c", to = "/d" }, { from = "/e", to = "/f" } },
+    })
+    H.match(three, "and 2 more", true)
+  end)
+
+  it("planted and tampered together: both sentences, one space between", function()
+    local text = guard.dirty_reason({
+      planted = { "/p/.envrc" },
+      quarantine = "/q",
+      tampered = { { from = "/a", to = "/b" } },
+    })
+    H.match(text, "created 1 file that run outside the sandbox (/p/.envrc) and they were removed from the project; a copy is in /q. A protected name was moved", true)
+  end)
+
+  it("a record with nothing in it still refuses, with the generic text", function()
+    H.match(guard.dirty_reason({ planted = {}, tampered = {} }), "left this project marked for review", true)
+    H.match(guard.dirty_reason({}), "left this project marked for review", true)
+  end)
+
+  it("the review line: the first 8 are listed, more are counted", function()
+    local review = {}
+    for i = 1, 9 do
+      review[i] = { path = "/p/f" .. i, change = "changed", plus = i, minus = 0 }
+    end
+    local lines = guard.report({ review = vim.list_slice(review, 1, 8), modified = {}, tampered = {} })
+    H.match(lines[1], "changed /p/f8 +8 -0", true)
+    H.no_match(lines[1], "in all", true)
+    lines = guard.report({ review = review, modified = {}, tampered = {} })
+    H.match(lines[1], "changed /p/f8 +8 -0; ... 9 in all", true)
+    H.no_match(lines[1], "/p/f9", true)
+    lines = guard.report({ review = { { path = "/p/x", change = "created" } }, modified = {}, tampered = {} })
+    H.match(lines[1], "created /p/x", true)
+    H.no_match(lines[1], "+", true, lines[1])
+  end)
+
+  it("modified: with and without counts, 8 listed then the total", function()
+    local mod, det = {}, {}
+    for i = 1, 9 do
+      mod[i] = "/p/m" .. i
+      det[mod[i]] = { plus = i, minus = 1, names = {} }
+    end
+    local lines, loud = guard.report({ review = {}, modified = vim.list_slice(mod, 1, 8), details = det, tampered = {} })
+    H.match(lines[1], "/p/m8 +8 -1", true)
+    H.no_match(lines[1], "in all", true)
+    H.eq(true, loud[1])
+    lines = guard.report({ review = {}, modified = mod, details = det, tampered = {} })
+    H.match(lines[1], ", ... 9 in all", true)
+    H.no_match(lines[1], "/p/m9", true)
+    lines = guard.report({ review = {}, modified = { "/p/n" }, details = { ["/p/n"] = { names = {} } }, tampered = {} })
+    H.match(lines[1], "/p/n", true)
+    H.no_match(lines[1], "+", true, lines[1])
+    lines = guard.report({ review = {}, modified = { "/p/n" }, tampered = {} })
+    H.match(lines[1], "/p/n", true)
+  end)
+
+  it("tampered: the arrow, the counts when known, four names, 8 listed then the total; the second result marks them loud", function()
+    local t = {}
+    for i = 1, 9 do
+      t[i] = { from = "/p/a" .. i, to = "/p/b" .. i, plus = i, minus = 2, names = { "a", "b", "c", "d", "e" } }
+    end
+    local lines, loud = guard.report({ review = {}, modified = {}, tampered = vim.list_slice(t, 1, 1) })
+    H.match(lines[1], "/p/a1 -> /p/b1 +1 -2 (a, b, c, d)", true)
+    H.no_match(lines[1], "e)", true, lines[1])
+    H.eq(true, loud[1])
+    lines = guard.report({ review = {}, modified = {}, tampered = t })
+    H.match(lines[1], "; ... 9 in all", true)
+    H.no_match(lines[1], "/p/b9", true)
+    lines = guard.report({ review = {}, modified = {}, tampered = { { from = "/a", to = "/b", names = { "x" } } } })
+    H.match(lines[1], "/a -> /b (x)", true)
+    H.no_match(lines[1], "+", true, lines[1])
+  end)
+
+  it("the review line is not loud, the order of the lines is review, modified, tampered", function()
+    local lines, loud = guard.report({
+      review = { { path = "/r", change = "created" } },
+      modified = { "/m" },
+      tampered = { { from = "/f", to = "/t", names = {} } },
+    })
+    H.eq(3, #lines)
+    H.eq(nil, loud[1])
+    H.eq(true, loud[2])
+    H.eq(true, loud[3])
+    H.match(lines[1], "/r", true)
+    H.match(lines[2], "/m", true)
+    H.match(lines[3], "/f -> /t", true)
+    H.eq({}, (guard.report({ review = {}, modified = {}, tampered = {} })))
+  end)
+end)
+
+describe("the quarantine, step by step", function()
+  local function modes(p)
+    return bit.band(uv.fs_lstat(p).mode, tonumber("777", 8))
+  end
+
+  it("a removal that works is tried once; one that needs the parent opened is tried twice", function()
+    local project = H.tmpdir()
+    write(project .. "/a/.envrc", "x\n")
+    write(project .. "/b/.envrc", "x\n")
+    uv.fs_chmod(project .. "/b", tonumber("555", 8))
+    local calls = {}
+    local old = guard._delete
+    guard._delete = function(p)
+      calls[#calls + 1] = p
+      return old(p)
+    end
+    local q = guard.quarantine(project, { project .. "/a/.envrc", project .. "/b/.envrc" })
+    guard._delete = old
+    H.eq({ project .. "/a/.envrc", project .. "/b/.envrc", project .. "/b/.envrc" }, calls)
+    H.eq(true, q.moved[1].ok)
+    H.eq(true, q.moved[2].ok)
+    H.eq(tonumber("555", 8), modes(project .. "/b"))
+    H.eq(tonumber("755", 8), modes(project .. "/a"))
+    uv.fs_chmod(project .. "/b", tonumber("755", 8))
+  end)
+
+  it("every parent up to the project root is opened and put back, the root's own mode too", function()
+    local project = H.tmpdir()
+    write(project .. "/a/b/.envrc", "x\n")
+    write(project .. "/.envrc", "x\n")
+    uv.fs_chmod(project .. "/a/b", tonumber("555", 8))
+    uv.fs_chmod(project, tonumber("555", 8))
+    local q = guard.quarantine(project, { project .. "/a/b/.envrc", project .. "/.envrc" })
+    H.eq(true, q.moved[1].ok)
+    H.eq(true, q.moved[2].ok, "a name directly in a 555 project root")
+    H.eq(tonumber("555", 8), modes(project))
+    H.eq(tonumber("555", 8), modes(project .. "/a/b"))
+    H.eq(nil, uv.fs_lstat(project .. "/.envrc"))
+    uv.fs_chmod(project, tonumber("755", 8))
+    uv.fs_chmod(project .. "/a/b", tonumber("755", 8))
+  end)
+
+  it("a planted directory with a 000 sub-directory deeper than the copy goes is still removed", function()
+    local project = H.tmpdir()
+    vim.fn.mkdir(project .. "/p", "p")
+    local deep = project .. "/p/.cargo/1/2/3/4/5/6/7/8/9"
+    write(deep .. "/file", "x\n")
+    uv.fs_chmod(project .. "/p/.cargo/1/2", tonumber("555", 8))
+    uv.fs_chmod(deep, tonumber("000", 8))
+    local q = guard.quarantine(project, { project .. "/p/.cargo" })
+    H.eq(true, q.moved[1].ok)
+    H.eq(nil, uv.fs_lstat(project .. "/p/.cargo"))
+  end)
+
+  it("the copy lists directories down to the 8th level: a file in the 7th is copied, one in the 8th is not", function()
+    local project = H.tmpdir()
+    write(project .. "/.cargo/1/2/3/4/5/6/7/f7", "x\n")
+    write(project .. "/.cargo/1/2/3/4/5/6/7/8/f8", "x\n")
+    local q = guard.quarantine(project, { project .. "/.cargo" })
+    H.ok(uv.fs_stat(q.dir .. "/.cargo/1/2/3/4/5/6/7/f7"), "level 7 is copied")
+    H.ok(uv.fs_stat(q.dir .. "/.cargo/1/2/3/4/5/6/7/8"), "the 8th directory itself is made")
+    H.eq(nil, uv.fs_stat(q.dir .. "/.cargo/1/2/3/4/5/6/7/8/f8"), "its content is not")
+  end)
+
+  it("the copy of a path outside the project is filed under its base name", function()
+    local project = H.tmpdir()
+    local other = H.tmpdir()
+    write(other .. "/.envrc", "x\n")
+    local q = guard.quarantine(project, { other .. "/.envrc" })
+    H.ok(uv.fs_stat(q.dir .. "/.envrc"))
+    uv.fs_unlink(other .. "/.envrc")
+  end)
+
+  it("the copy is private: 0700 directory, 0600 files", function()
+    local project = H.tmpdir()
+    write(project .. "/.cargo/config.toml", "x\n")
+    local q = guard.quarantine(project, { project .. "/.cargo" })
+    H.eq(tonumber("700", 8), modes(q.dir))
+    H.eq(tonumber("600", 8), modes(q.dir .. "/.cargo/config.toml"))
+  end)
+end)
+
+describe("the quarantine removes without following links", function()
+  it("a symlink inside a planted directory is removed, its target is not touched", function()
+    local project = H.tmpdir()
+    local keep = H.tmpdir() .. "/keep"
+    write(keep, "precious\n")
+    vim.fn.mkdir(project .. "/p/.cargo", "p")
+    uv.fs_symlink(keep, project .. "/p/.cargo/link")
+    uv.fs_symlink(vim.fs.dirname(keep), project .. "/p/.cargo/dirlink")
+    local q = guard.quarantine(project, { project .. "/p/.cargo" })
+    H.eq(true, q.moved[1].ok)
+    H.eq(nil, uv.fs_lstat(project .. "/p/.cargo"))
+    H.eq("precious\n", io.open(keep):read("a"))
+    H.eq(keep, uv.fs_readlink(q.dir .. "/p/.cargo/link"))
+  end)
+
+  it("an empty planted file is copied (empty) and removed", function()
+    local project = H.tmpdir()
+    write(project .. "/p/.envrc", "")
+    local q = guard.quarantine(project, { project .. "/p/.envrc" })
+    H.eq(true, q.moved[1].ok)
+    H.eq(0, uv.fs_stat(q.dir .. "/p/.envrc").size)
+  end)
+end)

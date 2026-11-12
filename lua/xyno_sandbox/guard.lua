@@ -99,9 +99,9 @@ local function read_small(path, max)
   if not f then
     return nil
   end
-  local data = f:read(max + 1)
+  local data = f:read(max + 1) or "" -- (nil at the end of an empty file)
   f:close()
-  if data and #data > max then
+  if #data > max then
     return nil
   end
   return data
@@ -324,8 +324,10 @@ local function content_delta(b, a)
   local function lines_of(f)
     if f.text then
       return nlines(f.text)
+    elseif f.id:sub(1, 4) == "sha:" or f.id:sub(1, 4) == "sig:" then
+      return nil -- a file whose text was not kept: the count is unknown
     end
-    return f.id:sub(1, 4) == "sha:" and nil or 0 -- (a directory, a link: no lines)
+    return 0 -- a directory or a link has no lines
   end
   for rel, af in pairs(a.files) do
     local bf = b.files[rel]
@@ -523,12 +525,29 @@ local function dirty_path(project)
   return store.dir() .. "/dirty/" .. safe_key(project) .. ".json"
 end
 
-M._delete = function(p)
-  return vim.fn.delete(p, "rf") -- (never follows a symlink)
+--- Remove a file, a link or a directory tree. A symlink is unlinked, never followed. 0 = removed, -1 = something is left.
+--- (Not vim.fn.delete: it prints E484 for every directory it cannot open.)
+local function rmtree(p)
+  local st = vim.uv.fs_lstat(p)
+  if not st then
+    return 0
+  end
+  local ok = true
+  if st.type == "directory" then
+    for _, e in ipairs(list(p)) do
+      if rmtree(p .. "/" .. e[1]) ~= 0 then
+        ok = false
+      end
+    end
+    return (ok and vim.uv.fs_rmdir(p)) and 0 or -1
+  end
+  return vim.uv.fs_unlink(p) and 0 or -1
 end
 
---- Give the owner every permission on `p` and what is below it (a directory the agent made 555 or 000 cannot be
---- emptied otherwise). Symlinks are left alone. Bounded.
+M._delete = rmtree -- (replaceable in specs)
+
+--- Give the owner every permission on the directories at and below `p` (a directory the agent made 555 or 000 cannot be
+--- emptied otherwise; the mode of a file does not matter for removing it). Symlinks are left alone. Bounded.
 local function unlock_tree(p, budget)
   local st = vim.uv.fs_lstat(p)
   budget.n = budget.n - 1
@@ -540,8 +559,6 @@ local function unlock_tree(p, budget)
     for _, e in ipairs(list(p)) do
       unlock_tree(p .. "/" .. e[1], budget)
     end
-  elseif st.type == "file" then
-    vim.uv.fs_chmod(p, bit.bor(st.mode, tonumber("600", 8)))
   end
 end
 
@@ -575,8 +592,8 @@ local function force_delete(root, p)
 end
 
 --- Copy `paths` (planted names) into the quarantine and remove them from the project. Returns
---- { dir, moved = { { path, ok } }, cut }. A parent directory the agent made read-only (555, or 000) is opened up for
---- the copy and the removal and put back afterwards; a name that still cannot be removed is reported (`ok = false`).
+--- { dir, moved = { { path, ok } }, cut }. A parent directory the agent made read-only (555) is opened up for the removal and put back
+--- afterwards (a directory the sweep cannot list or enter never shows a planted name in the first place); a name that still cannot be removed is reported (`ok = false`).
 function M.quarantine(project, paths)
   local stamp = os.date("!%Y%m%dT%H%M%SZ")
   local dir = ("%s/quarantine/%s/%s"):format(store.dir(), safe_key(project), stamp)
@@ -586,23 +603,9 @@ function M.quarantine(project, paths)
   for _, p in ipairs(paths) do
     local rel = p:sub(1, #project + 1) == project .. "/" and p:sub(#project + 2) or vim.fs.basename(p)
     local budget = { n = M.QUARANTINE_ENTRIES_MAX }
-    -- (a parent without x or r cannot even be looked into)
-    local opened = {}
-    local par = vim.fs.dirname(p)
-    while par and #par > #project do
-      local st = vim.uv.fs_lstat(par)
-      if st and st.type == "directory" and bit.band(st.mode, tonumber("500", 8)) ~= tonumber("500", 8) then
-        opened[#opened + 1] = { par, bit.band(st.mode, tonumber("7777", 8)) }
-        vim.uv.fs_chmod(par, bit.bor(st.mode, tonumber("700", 8)))
-      end
-      par = vim.fs.dirname(par)
-    end
     copy_tree(p, dir .. "/" .. rel, budget, 0)
     cut = cut or budget.cut or false
     local rc = force_delete(project, p)
-    for _, o in ipairs(opened) do
-      vim.uv.fs_chmod(o[1], o[2])
-    end
     moved[#moved + 1] = { path = p, ok = rc == 0 }
   end
   return { dir = dir, moved = moved, cut = cut }
