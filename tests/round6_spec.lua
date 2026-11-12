@@ -489,3 +489,37 @@ describe("F3: the content scan reads small files whatever they are called", func
     H.ok(found, "key.lock is hidden")
   end)
 end)
+
+-- ------------------------------------------------ a secret inside a locked directory
+describe("a credential inside a read-only (locked) directory stays hidden", function()
+  it("project/.cargo/credentials.toml and sub/.cargo/credentials are unreadable, the ro-bind of .cargo does not show them", function()
+    H.need_sandbox()
+    sb.config.home = "denylist"
+    local home = uv.os_homedir()
+    local project = home .. "/t-r6-locked-secret"
+    write(project .. "/.cargo/credentials.toml", "CANARY-ROOT\n")
+    write(project .. "/.cargo/config.toml", "[build]\n")
+    write(project .. "/sub/.cargo/credentials", "CANARY-SUB\n")
+    write(project .. "/sub/.cargo/credentials.toml", "CANARY-SUB2\n")
+    local out = inside(project, "cat .cargo/credentials.toml sub/.cargo/credentials sub/.cargo/credentials.toml 2>&1; cat .cargo/config.toml; echo done")
+    vim.fn.delete(project, "rf")
+    H.match(out, "done", true, out)
+    H.match(out, "[build]", true, out)
+    H.no_match(out, "CANARY", true, out)
+  end)
+
+  it("the hide comes after the read-only bind in the command line", function()
+    local p = build({ [PROJECT .. "/.cargo"] = "directory", [PROJECT .. "/.cargo/credentials.toml"] = "file" })
+    local ops = plan.ops(p)
+    local ro_at, hide_at
+    for i, op in ipairs(ops) do
+      if op.section == "readonly" and op.args[2] == PROJECT .. "/.cargo" then
+        ro_at = i
+      end
+      if op.section == "hidden" and op.args[#op.args] == PROJECT .. "/.cargo/credentials.toml" then
+        hide_at = i
+      end
+    end
+    H.ok(ro_at and hide_at and hide_at > ro_at, "hide (" .. tostring(hide_at) .. ") must follow the read-only bind (" .. tostring(ro_at) .. ")")
+  end)
+end)

@@ -2349,6 +2349,20 @@ function M.ops(plan)
   for _, r in ipairs(plan.readonly or {}) do
     add("readonly", r.why, "--ro-bind", r.path, r.path)
   end
+  -- A hidden path INSIDE a read-only one (.cargo/credentials.toml in a locked .cargo) is hidden again on top of
+  -- the read-only bind: the bind of the parent would otherwise show the original underneath.
+  for _, h in ipairs(plan.hidden or {}) do
+    for _, r in ipairs(plan.readonly or {}) do
+      if h.path ~= r.path and inside(h.path, r.path) then
+        if h.kind == "dir" then
+          add("hidden", h.why .. " (inside the read-only " .. r.path .. ")", "--tmpfs", h.path)
+        else
+          add("hidden", h.why .. " (inside the read-only " .. r.path .. ")", "--ro-bind", plan.empty_file, h.path)
+        end
+        break
+      end
+    end
+  end
   for _, g in ipairs(plan.git_configs or {}) do
     add("git", "credentials removed from the copy", "--ro-bind", g.copy, g.src)
   end
