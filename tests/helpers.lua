@@ -186,6 +186,40 @@ function H.docs_text()
   return table.concat(parts, "\n")
 end
 
+--- Live processes whose command line contains `marker` (plain): { { pid, cmdline }, ... }. Linux only.
+function H.procs(marker)
+  local out = {}
+  for name in vim.fs.dir("/proc") do
+    local pid = tonumber(name)
+    if pid and pid ~= vim.uv.os_getpid() then
+      local f = io.open("/proc/" .. name .. "/cmdline", "rb")
+      if f then
+        local c = (f:read("a") or ""):gsub("%z", " ")
+        f:close()
+        if c:find(marker, 1, true) then
+          out[#out + 1] = { pid, c }
+        end
+      end
+    end
+  end
+  return out
+end
+
+--- Wait up to `ms` for no process to mention `marker`; returns the survivors (empty = all gone).
+--- Survivors are killed (-9) so a failing spec does not leave them behind.
+function H.wait_gone(marker, ms)
+  local left
+  vim.wait(ms or 5000, function()
+    left = H.procs(marker)
+    return #left == 0
+  end, 50)
+  left = H.procs(marker)
+  for _, p in ipairs(left) do
+    vim.uv.kill(p[1], 9)
+  end
+  return left
+end
+
 --- Delete temp dirs.
 function H.cleanup()
   pcall(vim.cmd, "silent! %bwipeout!")

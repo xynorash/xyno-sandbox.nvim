@@ -2,6 +2,12 @@
 -- sandbox's private loopback and pipes every connection into the unix socket SOCK of the
 -- filtering proxy outside. It decides nothing. It is copied next to the socket at launch, so it
 -- must not require any plugin module. READY is created once the listener is up.
+--
+-- It must never outlive its sandbox: it exits on SIGTERM / SIGINT / SIGHUP (an nvim running a -l
+-- script ignores them otherwise: its own signal handling needs the main loop, which is not
+-- running), when its parent process is gone (the agent it was started next to exited, or the
+-- sandbox died: the parent changes), and when the proxy's socket no longer exists (the launcher
+-- removes the socket directory on release).
 local uv = vim.uv
 -- nvim starts an RPC server of its own (a unix socket $XDG_RUNTIME_DIR/nvim.<pid>.0): the relay needs
 -- none, and nothing inside the sandbox should be able to connect to it
@@ -81,6 +87,23 @@ if not lok then
   io.stderr:write("relay: cannot listen: " .. tostring(lerr) .. "\n")
   os.exit(1)
 end
+-- lifetime
+local signals = {}
+for _, name in ipairs({ "sigterm", "sigint", "sighup" }) do
+  local sig = uv.new_signal()
+  sig:start(name, function()
+    os.exit(0)
+  end)
+  signals[#signals + 1] = sig
+end
+local parent = uv.os_getppid()
+local watch = uv.new_timer()
+watch:start(500, 500, function()
+  if uv.os_getppid() ~= parent or not uv.fs_stat(sock) then
+    os.exit(0)
+  end
+end)
+
 local f = io.open(ready, "w")
 if not f then
   io.stderr:write("relay: cannot write " .. ready .. "\n")

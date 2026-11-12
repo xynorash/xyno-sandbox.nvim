@@ -22,17 +22,141 @@ local function strays()
   return out
 end
 
-local function run_all()
+-- ----------------------------------------------------------- hermetic environment
+-- The parent process builds ONE private root (outside /tmp: the sandbox replaces /tmp with an empty
+-- tmpfs, so a $HOME there would not exist inside it) holding a fake $HOME with fake agent
+-- credentials, and runs every spec file in a child whose HOME / TMPDIR / XDG_* point into it. The
+-- suite therefore passes with any real $HOME (no ~/.claude/.credentials.json needed, nothing of
+-- the user's is read or written) and the root is deleted at the end. Every process whose command
+-- line names the root (bwrap, the in-sandbox relay) is a process the specs created: any that is
+-- still alive after a spec file finished is killed and FAILS the run.
+local function writable_dir(d)
+  vim.fn.mkdir(d, "p")
+  local probe = vim.uv.fs_mkdtemp(d .. "/.probe-XXXXXX")
+  if probe then
+    vim.uv.fs_rmdir(probe)
+    return true
+  end
+  return false
+end
+
+local function bad_base(d)
+  for _, r in ipairs({ "/tmp", "/var/tmp", "/dev/shm", "/run" }) do
+    if d == r or d:sub(1, #r + 1) == r .. "/" then
+      return true
+    end
+  end
+  return false
+end
+
+local function make_root()
+  local real_home = vim.uv.os_homedir() or ""
+  local cands = {}
+  for _, c in ipairs({ vim.env.XYNO_TEST_BASE or "", real_home ~= "" and (real_home .. "/.cache") or "", repo .. "/.test-root" }) do
+    if c ~= "" then
+      cands[#cands + 1] = c
+    end
+  end
+  for _, base in ipairs(cands) do
+    if base and base ~= "" and not bad_base(vim.uv.fs_realpath(base) or base) and writable_dir(base) then
+      local root = vim.uv.fs_mkdtemp(base .. "/xyno-sandbox-test-XXXXXX")
+      if root then
+        root = vim.uv.fs_realpath(root)
+        if not bad_base(root) then
+          return root, real_home
+        end
+        vim.fn.delete(root, "rf")
+      end
+    end
+  end
+  error("tests/run.lua: no writable directory outside /tmp for the test root (set XYNO_TEST_BASE)")
+end
+
+local function write_file(path, text)
+  vim.fn.mkdir(vim.fs.dirname(path), "p")
+  local f = assert(io.open(path, "wb"))
+  f:write(text)
+  f:close()
+end
+
+--- Child environment: a fake home with fake credentials. Toolchains stay where they are (the
+--- specs that build a crate need rustup) through CARGO_HOME / RUSTUP_HOME.
+local function child_env(root, real_home)
+  local home = root .. "/home"
+  write_file(home .. "/.claude/.credentials.json", '{"claudeAiOauth":{"accessToken":"FAKE-xyno-sandbox-test-token"}}\n')
+  write_file(home .. "/.claude.json", '{"numStartups":1}\n')
+  -- scratch space stays under /tmp (several specs rely on /tmp being the host's tmpfs-hidden place),
+  -- in a directory of this run so that its processes can be told apart
+  local tmp = assert(vim.uv.fs_mkdtemp((vim.uv.os_getenv("TMPDIR") or "/tmp") .. "/xyno-run-XXXXXX"))
+  local env = {
+    HOME = home, TMPDIR = tmp, XYNO_TEST_ROOT = root, XYNO_TEST_SCRATCH = tmp,
+    XYNO_TEST_WORKER = "1", XDG_CONFIG_HOME = home .. "/.config", XDG_CACHE_HOME = home .. "/.cache",
+    XDG_DATA_HOME = home .. "/.local/share", XDG_STATE_HOME = home .. "/.local/state",
+  }
+  for var, rel in pairs({ CARGO_HOME = "/.cargo", RUSTUP_HOME = "/.rustup" }) do
+    if not vim.env[var] and real_home ~= "" and vim.uv.fs_stat(real_home .. rel) then
+      env[var] = real_home .. rel
+    end
+  end
+  return env
+end
+
+--- Command lines (pid, text) of the live processes that mention `root` and are a sandbox or its relay.
+local function survivors(root, tmp)
+  local out = {}
+  for name in vim.fs.dir("/proc") do
+    local pid = tonumber(name)
+    if pid and pid ~= vim.uv.os_getpid() then
+      local f = io.open("/proc/" .. name .. "/cmdline", "rb")
+      if f then
+        local c = (f:read("a") or ""):gsub("%z", " ")
+        f:close()
+        if (c:find(root, 1, true) or c:find(tmp, 1, true)) and (c:find("relay.lua", 1, true) or c:find("bwrap", 1, true)) then
+          out[#out + 1] = { pid, c }
+        end
+      end
+    end
+  end
+  return out
+end
+
+--- Wait briefly for the survivors to go (their sandbox may still be tearing down), then kill -9.
+local function reap(root, tmp)
+  local list
+  for _ = 1, 20 do
+    list = survivors(root, tmp)
+    if #list == 0 then
+      return {}
+    end
+    vim.wait(100)
+  end
+  for _, s in ipairs(list) do
+    vim.uv.kill(s[1], 9)
+  end
+  vim.wait(300)
+  return list
+end
+
+local function run_all(files)
+  local root, real_home = make_root()
+  local env = child_env(root, real_home)
   local before = strays()
   local total = { passed = 0, failed = 0, skipped = 0, xfailed = 0 }
-  local files = vim.fn.glob(repo .. "/tests/*_spec.lua", true, true)
-  table.sort(files)
+  if not files then
+    files = vim.fn.glob(repo .. "/tests/*_spec.lua", true, true)
+    table.sort(files)
+  end
   for _, f in ipairs(files) do
-    local r = vim.system({ vim.v.progpath, "--headless", "-l", repo .. "/tests/run.lua", f }, { text = true }):wait(600000)
+    local r = vim.system({ vim.v.progpath, "--headless", "-l", repo .. "/tests/run.lua", f }, { text = true, env = env }):wait(600000)
     io.stdout:write(r.stdout or "")
     io.stderr:write(r.stderr or "")
+    -- the LAST RESULT line is the file's own (a failure message may quote a nested run's)
+    local last
+    for line in (r.stdout or ""):gmatch("RESULT [^\n]*") do
+      last = line
+    end
     for k in pairs(total) do
-      total[k] = total[k] + tonumber((r.stdout or ""):match("RESULT .-" .. k .. "=(%d+)") or 0)
+      total[k] = total[k] + tonumber((last or ""):match(k .. "=(%d+)") or 0)
     end
     if r.code ~= 0 and not (r.stdout or ""):find("RESULT", 1, true) then
       total.failed = total.failed + 1
@@ -44,14 +168,20 @@ local function run_all()
         io.stdout:write(("FAIL %s left /tmp/%s behind (a sandbox placeholder leaked into a shared directory)\n"):format(vim.fs.basename(f), n))
       end
     end
+    for _, s in ipairs(reap(root, env.XYNO_TEST_SCRATCH)) do
+      total.failed = total.failed + 1
+      io.stdout:write(("FAIL %s left a process behind (killed): pid %d %s\n"):format(vim.fs.basename(f), s[1], s[2]:sub(1, 160)))
+    end
   end
+  vim.fn.delete(root, "rf")
+  vim.fn.delete(env.XYNO_TEST_SCRATCH, "rf")
   io.stdout:write(("RESULT passed=%d failed=%d skipped=%d xfailed=%d\n"):format(total.passed, total.failed, total.skipped, total.xfailed))
   os.exit(total.failed > 0 and 1 or 0)
 end
 
 local spec = _G.arg and _G.arg[1]
-if not spec then
-  return run_all()
+if vim.env.XYNO_TEST_WORKER ~= "1" then
+  return run_all(spec and { vim.fn.fnamemodify(spec, ":p") } or nil)
 end
 spec = vim.fn.fnamemodify(spec, ":p")
 

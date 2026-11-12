@@ -75,18 +75,25 @@ describe("a shared directory as the project", function()
     end
   end)
 
-  it("a real run with /tmp as the project leaves /tmp exactly as it was", function()
+  it("a real run with /tmp as the project creates nothing in the host's /tmp", function()
+    -- deterministic: it does not compare a snapshot of the shared /tmp (other processes create and
+    -- remove entries there at any time). The plan names no path directly below /tmp, and the host
+    -- /tmp entry that only this run could create is a unique name.
     H.need_sandbox()
     sb.config.network = "open"
-    local before = snapshot("/tmp")
     local tmp = H.tmpdir()
-    local cmd, err, h = sb.wrap({ "bash", "-c", "echo x > /tmp/created-inside 2>/dev/null; echo done" }, "/tmp", tmp)
+    local unique = "xyno-created-inside-" .. tostring(vim.uv.hrtime())
+    local cmd, err, h = sb.wrap({ "bash", "-c", "echo x > /tmp/" .. unique .. " 2>/dev/null; echo done" }, "/tmp", tmp)
     H.ok(cmd, err)
+    for _, a in ipairs(cmd) do
+      for _, n in ipairs(STRAYS) do
+        H.not_ok(a == "/tmp/" .. n, "the plan mounts a placeholder at /tmp/" .. n)
+      end
+    end
     local r = vim.system(cmd, { text = true, cwd = "/tmp" }):wait(60000)
     h.release()
     H.match(r.stdout or "", "done", true, (r.stdout or "") .. (r.stderr or ""))
-    H.eq(before, snapshot("/tmp"), "nothing was created in /tmp")
-    H.eq(nil, vim.uv.fs_stat("/tmp/created-inside"), "and the agent could not write to the host's /tmp")
+    H.eq(nil, vim.uv.fs_stat("/tmp/" .. unique), "the agent could not write to the host's /tmp")
   end)
 
   it("a project below a shared directory still gets its placeholders (they are removed on release)", function()
