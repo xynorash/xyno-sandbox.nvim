@@ -417,3 +417,157 @@ describe("round 8 names: covered or reviewed", function()
     )
   end)
 end)
+
+-- ------------------------------------------------------------------ (8) the subdirectory mount budget
+local PROJECT, TMP, FHOME = "/h/proj", "/h/scratch", "/h"
+local function fakefs(entries)
+  return {
+    stat_type = function(x)
+      return entries[x]
+    end,
+    lstat_type = function(x)
+      return entries[x]
+    end,
+    exists = function(x)
+      return entries[x] ~= nil
+    end,
+    list = function(dir)
+      local out, prefix = {}, dir == "/" and "/" or (dir .. "/")
+      for x, t in pairs(entries) do
+        if x:sub(1, #prefix) == prefix and not x:sub(#prefix + 1):find("/", 1, true) then
+          out[#out + 1] = { x:sub(#prefix + 1), t }
+        end
+      end
+      table.sort(out, function(a, b)
+        return a[1] < b[1]
+      end)
+      return out
+    end,
+    glob = function()
+      return {}
+    end,
+    read_line = function()
+      return nil
+    end,
+    realpath = function(x)
+      return entries[x] and x or nil
+    end,
+    stat_info = function()
+      return nil
+    end,
+  }
+end
+local function build(extra)
+  local entries = vim.tbl_extend("force", {
+    [FHOME] = "directory",
+    [FHOME .. "/.claude"] = "directory",
+    [PROJECT] = "directory",
+    [TMP] = "directory",
+    [PROJECT .. "/.git"] = "directory",
+  }, extra or {})
+  return plan.build({
+    project = PROJECT,
+    tmp_dir = TMP,
+    cwd = PROJECT,
+    home = FHOME,
+    uid = 1000,
+    probes = fakefs(entries),
+    env = { PATH = "/usr/bin" },
+    cmd = { "agent" },
+    aux = { empty = "/aux/empty", claude_json = "/aux/cj", git_dir = "/aux/git" },
+    config = { network = "open" },
+  })
+end
+
+describe("the subdirectory mount budget is exact and ordered", function()
+  local DIRS = { "/.cargo", "/.claude", "/.vscode", "/.git" }
+  local FILES_ = { "/.envrc", "/.mcp.json", "/.nvim.lua", "/.mise.toml", "/.exrc", "/.npmrc", "/.yarnrc.yml", "/.dir-locals.el", "/.lvimrc" }
+  local PER_DIR = #DIRS + #FILES_
+  local function with_max(n, extra)
+    local old = plan.SUBDIR_MASK_MAX
+    plan.SUBDIR_MASK_MAX = n
+    local ok, p = pcall(build, extra)
+    plan.SUBDIR_MASK_MAX = old
+    assert(ok, p)
+    local covered_ = {}
+    for _, m in ipairs(p.masks) do
+      covered_[m.path] = true
+    end
+    for _, g in ipairs(p.guard_files) do
+      covered_[g.path] = true
+    end
+    return p, covered_
+  end
+  local TREE = {
+    [PROJECT .. "/d1"] = "directory",
+    [PROJECT .. "/d2"] = "directory",
+    [PROJECT .. "/d1/deep"] = "directory",
+  }
+
+  it("the names are what this spec counts with", function()
+    H.eq(DIRS, vim.tbl_map(function(n)
+      return "/" .. n
+    end, plan.SUBDIR_MASK_DIRS))
+    H.eq(PER_DIR, 13)
+  end)
+
+  it("a budget of N gives exactly N mounts (not N+1, not N-1)", function()
+    for _, n in ipairs({ 1, 5, 13 }) do
+      local p = with_max(n, TREE)
+      H.eq(n, p.subdir_masks, "budget " .. n)
+    end
+  end)
+
+  it("a budget of 0 gives none", function()
+    local p, c = with_max(0, TREE)
+    H.eq(0, p.subdir_masks)
+    H.not_ok(c[PROJECT .. "/d1/.claude"])
+  end)
+
+  it("a budget that fits two directories covers both, the third (deeper) gets nothing", function()
+    local p, c = with_max(2 * PER_DIR, TREE)
+    H.eq(2 * PER_DIR, p.subdir_masks)
+    for _, n in ipairs({ "d1", "d2" }) do
+      for _, rel in ipairs(DIRS) do
+        H.ok(c[PROJECT .. "/" .. n .. rel], n .. rel)
+      end
+      for _, rel in ipairs(FILES_) do
+        H.ok(c[PROJECT .. "/" .. n .. rel], n .. rel)
+      end
+    end
+    H.not_ok(c[PROJECT .. "/d1/deep/.cargo"], "the deeper directory is last")
+  end)
+
+  it("one more mount goes to the deeper directory, starting with .cargo", function()
+    local p, c = with_max(2 * PER_DIR + 1, TREE)
+    H.eq(2 * PER_DIR + 1, p.subdir_masks)
+    H.ok(c[PROJECT .. "/d1/deep/.cargo"])
+    H.not_ok(c[PROJECT .. "/d1/deep/.claude"])
+  end)
+
+  it("with equal depth the listing order decides: d1 is covered before d2", function()
+    local p, c = with_max(PER_DIR, TREE)
+    H.ok(c[PROJECT .. "/d1/.cargo"] and c[PROJECT .. "/d1/.lvimrc"])
+    H.not_ok(c[PROJECT .. "/d2/.cargo"])
+  end)
+
+  it("an existing name takes no mount from the budget", function()
+    local extra = vim.tbl_extend("force", TREE, { [PROJECT .. "/d1/.claude"] = "directory", [PROJECT .. "/d1/.envrc"] = "file" })
+    local p = with_max(PER_DIR, extra)
+    H.eq(PER_DIR, p.subdir_masks)
+    H.ok(select(2, with_max(PER_DIR, extra))[PROJECT .. "/d2/.cargo"], "the two that exist leave room for d2's first")
+  end)
+end)
+
+describe("the README and the help name what round 8 added", function()
+  local text = H.docs_text()
+  it("every locked and reviewed name is in the docs", function()
+    for _, n in ipairs({
+      ".devcontainer.json", ".bazelrc", ".bazelversion", ".bazeliskrc", ".lefthook", ".cargo-husky", ".sbtopts",
+      ".jvmopts", ".bundle", "gradle.properties", "pom.xml", "Gemfile", "Procfile", ".nvmrc", ".python-version",
+      ".gitattributes", "tampered",
+    }) do
+      H.match(text, n, true, n)
+    end
+  end)
+end)

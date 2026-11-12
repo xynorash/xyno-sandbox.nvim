@@ -256,14 +256,15 @@ function M.is_public_ip(ip)
     end
     return true
   end
-  if zero_to(5) and (g[6] == 0xffff or g[6] == 0) then -- ::, ::1, ::ffff:a.b.c.d, ::a.b.c.d
-    if g[6] == 0 and g[7] == 0 and g[8] <= 1 then
-      return false
-    end
+  -- ::, ::1, ::ffff:a.b.c.d, ::a.b.c.d (public_v4 refuses 0.x.x.x, so :: and ::1 fall out here)
+  if zero_to(5) and (g[6] == 0xffff or g[6] == 0) then
     return public_v4({ math.floor(g[7] / 256), g[7] % 256, math.floor(g[8] / 256), g[8] % 256 })
   end
   if g[1] == 0x64 and g[2] == 0xff9b and g[3] == 0 and g[4] == 0 and g[5] == 0 and g[6] == 0 then -- NAT64
     return public_v4({ math.floor(g[7] / 256), g[7] % 256, math.floor(g[8] / 256), g[8] % 256 })
+  end
+  if g[1] < 0x100 then
+    return false -- the rest of ::/8 (reserved, local-use NAT64 64:ff9b:1::/48): nothing the proxy should reach
   end
   if g[1] >= 0xfe80 and g[1] <= 0xfebf then
     return false

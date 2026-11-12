@@ -2769,7 +2769,6 @@ function M.build(input)
         end
       end
     end
-    plan.subdir_mask_cut = budget <= 0
   end
   if not claude_minimal then
     for _, rel in ipairs(M.HOME_READONLY) do
