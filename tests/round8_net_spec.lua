@@ -601,6 +601,8 @@ describe("the CONNECT target is validated", function()
       local buf, decisions = refused(t)
       H.match(buf, "HTTP/1.1 403", true, t .. ": " .. buf)
       H.eq(false, decisions[1].allowed, t)
+      H.eq("not a DNS host name", decisions[1].reason, t)
+      H.match(buf, "is not an allowed DNS host name", true, t)
     end
   end)
 
@@ -642,6 +644,7 @@ describe("the CONNECT target is validated", function()
     end))
     H.eq(80, #p.decisions[1].host)
     H.match(r.buf, ("a"):rep(80) .. " is not", true, r.buf)
+    H.no_match(r.buf, ("a"):rep(81), true, r.buf)
     r.pipe:close()
     p.close()
   end)
@@ -812,5 +815,50 @@ describe("the proxy's own limits", function()
     )
     r.pipe:close()
     p.close()
+  end)
+end)
+
+describe("the head and what follows it", function()
+  it("an empty head ('\\r\\n\\r\\n' alone) is a request that is not CONNECT: 405, not a wait", function()
+    local p = start_proxy({ "allowed.test" })
+    local r = raw(p, "\r\n\r\n")
+    H.ok(wait_for(function()
+      return r.eof
+    end, 3000), "the proxy waited: " .. r.buf)
+    H.match(r.buf, "HTTP/1.1 405", true)
+    r.pipe:close()
+    p.close()
+  end)
+
+  it("a target without a port is logged with the whole target, port 0", function()
+    local p = start_proxy({ "allowed.test" })
+    local r = raw(p, "CONNECT noport.test HTTP/1.1\r\n\r\n")
+    H.ok(wait_for(function()
+      return r.eof
+    end))
+    H.eq("noport.test", p.decisions[1].host)
+    H.eq(0, p.decisions[1].port)
+    r.pipe:close()
+    p.close()
+  end)
+
+  it("ONE byte sent with the CONNECT head reaches the upstream, and so do two", function()
+    for _, extra in ipairs({ "Z", "ZZ" }) do
+      local seen = ""
+      local port = listen(nil, function(_, chunk)
+        seen = seen .. chunk
+      end)
+      net.allow_private = true
+      net.resolver = function(_, cb)
+        cb({ "127.0.0.1" })
+      end
+      local p = start_proxy({ "allowed.test:" .. port })
+      local c = client(p, "allowed.test", port, extra)
+      H.ok(wait_for(function()
+        return seen == extra
+      end), "upstream saw " .. vim.inspect(seen))
+      c.pipe:close()
+      p.close()
+    end
   end)
 end)

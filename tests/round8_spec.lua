@@ -1201,3 +1201,174 @@ describe("survivors of the mutation run on the new guard code", function()
     os.remove(project .. "/a/.envrc")
   end)
 end)
+
+describe("the notices of the end-of-run sweep", function()
+  local function release_with_notes(h)
+    local notes = {}
+    local old = vim.notify
+    vim.notify = function(m, l)
+      notes[#notes + 1] = { m, l }
+    end
+    local ok, err = pcall(h.release)
+    vim.notify = old
+    assert(ok, err)
+    return notes
+  end
+
+  it("nothing changed: no notice at all and no mark", function()
+    local project = H.tmpdir()
+    vim.fn.mkdir(project .. "/x", "p")
+    local h = launch(project)
+    H.eq({}, release_with_notes(h))
+    H.eq(nil, sb.dirty(project))
+  end)
+
+  it("one planted name: singular words; the notice is an ERROR", function()
+    local project = H.tmpdir()
+    vim.fn.mkdir(project .. "/x", "p")
+    local h = launch(project)
+    write(project .. "/x/.envrc", "evil\n")
+    local notes = release_with_notes(h)
+    H.eq(1, #notes)
+    H.eq(vim.log.levels.ERROR, notes[1][2])
+    H.match(notes[1][1], "created 1 file that acts outside the sandbox", true)
+    H.match(notes[1][1], "It was moved to", true)
+    H.no_match(notes[1][1], "COULD NOT REMOVE", true)
+    sb.clear_dirty(project)
+  end)
+
+  it("two planted names: plural words, no '...'; six: five are shown and '...'", function()
+    local project = H.tmpdir()
+    vim.fn.mkdir(project .. "/x", "p")
+    local h = launch(project)
+    write(project .. "/x/.envrc", "1\n")
+    write(project .. "/x/.nvimrc", "1\n")
+    local notes = release_with_notes(h)
+    H.match(notes[1][1], "created 2 files that act outside the sandbox", true)
+    H.match(notes[1][1], "They were moved to", true)
+    H.no_match(notes[1][1], "...", true, notes[1][1])
+    sb.clear_dirty(project)
+    local project2 = H.tmpdir()
+    vim.fn.mkdir(project2 .. "/x", "p")
+    local h2 = launch(project2)
+    for _, n in ipairs({ ".envrc", ".nvimrc", ".exrc", ".mcp.json", ".nvim.lua", ".lvimrc" }) do
+      write(project2 .. "/x/" .. n, "1\n")
+    end
+    notes = release_with_notes(h2)
+    H.match(notes[1][1], "created 6 files", true)
+    H.match(notes[1][1], ".nvim.lua, ...", true) -- (sorted: the sixth is .nvimrc)
+    H.no_match(notes[1][1], ".nvimrc", true)
+    sb.clear_dirty(project2)
+  end)
+
+  it("exactly five planted names have no '...'", function()
+    local project = H.tmpdir()
+    vim.fn.mkdir(project .. "/x", "p")
+    local h = launch(project)
+    for _, n in ipairs({ ".envrc", ".nvimrc", ".exrc", ".mcp.json", ".nvim.lua" }) do
+      write(project .. "/x/" .. n, "1\n")
+    end
+    local notes = release_with_notes(h)
+    H.match(notes[1][1], "created 5 files", true)
+    H.no_match(notes[1][1], "...", true, notes[1][1])
+    sb.clear_dirty(project)
+  end)
+
+  it("a name that could not be removed is named in the notice", function()
+    local project = H.tmpdir()
+    vim.fn.mkdir(project .. "/x", "p")
+    local h = launch(project)
+    write(project .. "/x/.envrc", "1\n")
+    local old = guard._delete
+    guard._delete = function()
+      return -1
+    end
+    local notes = release_with_notes(h)
+    guard._delete = old
+    H.match(notes[1][1], "COULD NOT REMOVE: " .. project .. "/x/.envrc", true)
+    os.remove(project .. "/x/.envrc")
+    sb.clear_dirty(project)
+  end)
+
+  it("an empty directory left behind is removed silently; a directory with a file in it is quarantined", function()
+    local project = H.tmpdir()
+    vim.fn.mkdir(project .. "/x", "p")
+    local h = launch(project)
+    vim.fn.mkdir(project .. "/x/.cargo", "p") -- the empty placeholder of a renamed directory
+    vim.fn.mkdir(project .. "/x/.vscode", "p")
+    write(project .. "/x/.vscode/tasks.json", "{}\n")
+    local notes = release_with_notes(h)
+    H.eq(nil, uv.fs_lstat(project .. "/x/.cargo"))
+    H.eq(nil, uv.fs_lstat(project .. "/x/.vscode"))
+    H.eq({ project .. "/x/.vscode" }, sb.dirty(project).planted)
+    H.match(notes[1][1], "created 1 file", true)
+    sb.clear_dirty(project)
+  end)
+
+  it("a tampered move alone marks the project; the planted list stays empty", function()
+    local project = H.tmpdir()
+    write(project .. "/s/.cargo/config.toml", "a\n")
+    local h = launch(project)
+    os.rename(project .. "/s", project .. "/t")
+    write(project .. "/t/.cargo/config.toml", "b\n")
+    release_with_notes(h)
+    local rec = sb.dirty(project)
+    H.ok(rec)
+    H.eq({}, rec.planted)
+    H.eq(1, #rec.tampered)
+    H.eq(project .. "/t/.cargo", rec.tampered[1].to)
+    H.match(guard.dirty_reason(rec), "A protected name was moved", true)
+    sb.clear_dirty(project)
+  end)
+
+  it("a changed existing name alone does not mark the project (a notice only)", function()
+    local project = H.tmpdir()
+    write(project .. "/d/e/.envrc", "a\n")
+    local h = launch(project)
+    write(project .. "/d/e/.envrc", "b\n")
+    local notes = release_with_notes(h)
+    H.eq(nil, sb.dirty(project))
+    H.eq(1, #notes)
+    H.eq(vim.log.levels.ERROR, notes[1][2])
+  end)
+
+  it("a walk that stopped at launch is INFO 'already partial', the project is not marked", function()
+    local project = H.tmpdir()
+    for i = 1, 6 do
+      vim.fn.mkdir(project .. "/d" .. i, "p")
+    end
+    local old = guard.MAX_DIRS
+    guard.MAX_DIRS = 3
+    local ok, err = pcall(function()
+      local h = launch(project)
+      local notes = release_with_notes(h)
+      H.eq(1, #notes)
+      H.eq(vim.log.levels.INFO, notes[1][2])
+      H.match(notes[1][1], "already partial at launch", true)
+      H.eq(nil, sb.dirty(project))
+    end)
+    guard.MAX_DIRS = old
+    assert(ok, err)
+  end)
+
+  it("a walk that stopped only at the end marks the project and says why", function()
+    local project = H.tmpdir()
+    vim.fn.mkdir(project .. "/d1", "p")
+    local old = guard.MAX_DIRS
+    guard.MAX_DIRS = 4
+    local ok, err = pcall(function()
+      local h = launch(project)
+      for i = 2, 9 do
+        vim.fn.mkdir(project .. "/d" .. i, "p")
+      end
+      local notes = release_with_notes(h)
+      H.eq(1, #notes)
+      H.eq(vim.log.levels.ERROR, notes[1][2])
+      H.match(notes[1][1], "could NOT be completed", true)
+      H.ok(sb.dirty(project))
+      sb.clear_dirty(project)
+    end)
+    guard.MAX_DIRS = old
+    assert(ok, err)
+  end)
+end)
