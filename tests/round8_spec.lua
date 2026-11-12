@@ -999,3 +999,183 @@ describe("the quarantine removes without following links", function()
     H.eq(0, uv.fs_stat(q.dir .. "/p/.envrc").size)
   end)
 end)
+
+describe("survivors of the mutation run on the new guard code", function()
+  local function with(field, value, fn)
+    local old = guard[field]
+    guard[field] = value
+    local ok, err = pcall(fn)
+    guard[field] = old
+    assert(ok, err)
+  end
+
+  it("a file whose text was dropped for size (hash kept) also has an unknown line count", function()
+    with("REVIEW_KEEP_BYTES", 0, function()
+      local project = H.tmpdir()
+      write(project .. "/s/.cargo/a.toml", "x\n")
+      local before = guard.snapshot(project)
+      os.rename(project .. "/s", project .. "/t")
+      write(project .. "/t/.cargo/a.toml", "y\nz\n")
+      local res = guard.compare(before, guard.snapshot(project))
+      H.eq(1, #res.tampered)
+      H.eq(nil, res.tampered[1].plus)
+      H.eq(nil, res.tampered[1].minus)
+    end)
+  end)
+
+  it("a protected name that is gone is 'removed'; one that moved is not; the list is sorted", function()
+    local project = H.tmpdir()
+    write(project .. "/z/.envrc", "1\n")
+    write(project .. "/a/.envrc", "1\n")
+    write(project .. "/m/.envrc", "1\n")
+    local before = guard.snapshot(project)
+    os.remove(project .. "/z/.envrc")
+    os.remove(project .. "/a/.envrc")
+    os.rename(project .. "/m", project .. "/n")
+    local res = guard.compare(before, guard.snapshot(project))
+    H.eq({ project .. "/a/.envrc", project .. "/z/.envrc" }, res.removed)
+    H.eq(1, #res.moved)
+    H.eq({}, res.planted)
+  end)
+
+  it("a protected name in the new snapshot only is planted even when the old one has no inode table", function()
+    local project = H.tmpdir()
+    write(project .. "/a/.envrc", "1\n")
+    local now = guard.snapshot(project)
+    local old = { protected = {}, review = {} } -- no ino table: nothing can be 'moved'
+    local res = guard.compare(old, now)
+    H.eq({ project .. "/a/.envrc" }, res.planted)
+    H.eq({}, res.moved)
+    -- an old snapshot WITH an inode table that lacks the entry
+    local old2 = { protected = {}, ino = {}, review = {} }
+    H.eq({}, guard.compare(old2, now).moved)
+    -- and a gone path without an inode entry cannot be matched either
+    local old3 = { protected = { [project .. "/b/.envrc"] = "x" }, ino = {}, review = {} }
+    local res3 = guard.compare(old3, now)
+    H.eq({}, res3.moved)
+    H.eq({ project .. "/b/.envrc" }, res3.removed)
+  end)
+
+  it("the review records: a file of exactly REVIEW_MAX_BYTES has a hash and text, one byte more has none", function()
+    with("REVIEW_MAX_BYTES", 50, function()
+      local project = H.tmpdir()
+      write(project .. "/Makefile", ("a"):rep(50))
+      local snap = guard.snapshot(project)
+      H.ok(snap.review[project .. "/Makefile"].sha)
+      write(project .. "/Makefile", ("a"):rep(51))
+      snap = guard.snapshot(project)
+      H.eq(nil, snap.review[project .. "/Makefile"].sha)
+      H.eq(nil, snap.review[project .. "/Makefile"].text)
+    end)
+  end)
+
+  it("a directory named like a review file is not a review record", function()
+    local project = H.tmpdir()
+    vim.fn.mkdir(project .. "/Makefile", "p")
+    H.eq(nil, guard.snapshot(project).review[project .. "/Makefile"])
+  end)
+
+  it("the refusal text lists 5 planted names and says '...' for more, not for exactly 5", function()
+    local five, six = {}, {}
+    for i = 1, 6 do
+      six[i] = "/p/n" .. i
+      if i <= 5 then
+        five[i] = six[i]
+      end
+    end
+    local t5 = guard.dirty_reason({ planted = five, quarantine = "/q" })
+    H.match(t5, "created 5 files", true)
+    H.match(t5, "/p/n5)", true)
+    H.no_match(t5, "...", true, t5)
+    local t6 = guard.dirty_reason({ planted = six, quarantine = "/q" })
+    H.match(t6, "created 6 files", true)
+    H.match(t6, "/p/n5, ...)", true)
+    H.no_match(t6, "/p/n6", true)
+    H.match(guard.dirty_reason({ planted = { "/p/a" }, quarantine = "/q" }), "created 1 file that run", true)
+  end)
+
+  it("the incomplete-check sentence: alone, and after the planted sentence with one space", function()
+    local alone = guard.dirty_reason({ planted = {}, incomplete = { "the project walk stopped (x)" } })
+    H.match(alone, "The end-of-run check of the project tree could not be completed (the project walk stopped (x)), so more may have been created.", true)
+    H.eq("T", alone:sub(1, 1))
+    local both = guard.dirty_reason({ planted = { "/p/a" }, quarantine = "/q", incomplete = { "b1", "b2" } })
+    H.match(both, "a copy is in /q. The end-of-run check", true)
+    H.match(both, "(b1; b2)", true)
+    H.no_match(guard.dirty_reason({ planted = { "/p/a" }, quarantine = "/q", incomplete = {} }), "end-of-run", true)
+    H.no_match(guard.dirty_reason({ planted = { "/p/a" }, quarantine = "/q" }), "end-of-run", true)
+  end)
+
+  it("report accepts a result without 'tampered' and 'details' (an older caller)", function()
+    local lines = guard.report({ review = {}, modified = { "/p/x" } })
+    H.eq(1, #lines)
+    H.eq(0, #guard.report({ review = {}, modified = {} }))
+  end)
+
+  it("a count needs both numbers: plus alone prints none", function()
+    local lines = guard.report({ review = { { path = "/p/x", change = "changed", plus = 3 } }, modified = {} })
+    H.no_match(lines[1], "+3", true, lines[1])
+    lines = guard.report({
+      review = {},
+      modified = { "/p/y" },
+      details = { ["/p/y"] = { plus = 3 } },
+    })
+    H.no_match(lines[1], "+3", true, lines[1])
+    lines = guard.report({ review = {}, modified = {}, tampered = { { from = "/a", to = "/b", plus = 3, names = {} } } })
+    H.no_match(lines[1], "+3", true, lines[1])
+    lines = guard.report({ review = {}, modified = {}, tampered = { { from = "/a", to = "/b", minus = 3, names = {} } } })
+    H.no_match(lines[1], "-3", true, lines[1])
+  end)
+
+  it("exactly 8 tampered names are all listed without a total; 9 get the total", function()
+    local t = {}
+    for i = 1, 8 do
+      t[i] = { from = "/a" .. i, to = "/b" .. i, names = {} }
+    end
+    local lines = guard.report({ review = {}, modified = {}, tampered = t })
+    H.match(lines[1], "/b8", true)
+    H.no_match(lines[1], "in all", true)
+    t[9] = { from = "/a9", to = "/b9", names = {} }
+    lines = guard.report({ review = {}, modified = {}, tampered = t })
+    H.match(lines[1], "9 in all", true)
+    H.match(lines[1], "/b8", true)
+    H.no_match(lines[1], "/b9", true)
+  end)
+
+  it("the quarantine says it was cut when ANY of the paths was cut", function()
+    local project = H.tmpdir()
+    write(project .. "/a/.envrc", ("x"):rep(guard.QUARANTINE_FILE_MAX + 1))
+    write(project .. "/b/.envrc", "small\n")
+    H.eq(true, guard.quarantine(project, { project .. "/a/.envrc", project .. "/b/.envrc" }).cut)
+    write(project .. "/c/.envrc", ("x"):rep(guard.QUARANTINE_FILE_MAX + 1))
+    write(project .. "/d/.envrc", "small\n")
+    H.eq(true, guard.quarantine(project, { project .. "/d/.envrc", project .. "/c/.envrc" }).cut)
+    write(project .. "/e/.envrc", "small\n")
+    H.eq(false, guard.quarantine(project, { project .. "/e/.envrc" }).cut)
+  end)
+
+  it("a path that does not exist any more is a success with an empty copy", function()
+    local project = H.tmpdir()
+    local q = guard.quarantine(project, { project .. "/gone/.envrc" })
+    H.eq(true, q.moved[1].ok)
+    H.eq(nil, uv.fs_stat(q.dir .. "/gone/.envrc"))
+  end)
+
+  it("a directory that cannot be removed leaves ok = false and the rest of the paths are still done", function()
+    local project = H.tmpdir()
+    write(project .. "/a/.envrc", "1\n")
+    write(project .. "/b/.envrc", "2\n")
+    local old = guard._delete
+    guard._delete = function(p)
+      if p:find("/a/", 1, true) then
+        return -1
+      end
+      return old(p)
+    end
+    local q = guard.quarantine(project, { project .. "/a/.envrc", project .. "/b/.envrc" })
+    guard._delete = old
+    H.eq(false, q.moved[1].ok)
+    H.eq(true, q.moved[2].ok)
+    H.eq(nil, uv.fs_lstat(project .. "/b/.envrc"))
+    os.remove(project .. "/a/.envrc")
+  end)
+end)
