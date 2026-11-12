@@ -55,7 +55,7 @@ local uid = pwd and pwd.uid or -1
 -- ------------------------------------------------------------------ options
 
 local POLICY_LISTS = { "readonly", "writable", "hidden", "guard_dirs", "guard_files", "home_allow", "keep_run",
-  "secret_files", "secret_allow" }
+  "secret_files", "secret_allow", "claude_share" }
 local PREVIEW = { always = true, once = true, never = true }
 
 local function str_list(name, v, errs, check)
@@ -104,6 +104,8 @@ end
 ---   project_secrets = true               hide .env, *.pem, ... in the project (false: do not)
 ---   secret_files = { "*.secret" }        more project file name globs to hide
 ---   secret_allow = { ".env.test" }       project file names (or project-relative paths) never hidden
+---   claude_share = { "settings.json", "CLAUDE.md" }  names below ~/.claude shown read-only in the sandbox (allowlist view;
+---                                        default none: the agent sees only its login and this project's transcripts)
 ---   symlinks    = "warn"                 "warn" (list them in the preview) | "refuse" (do not start when a
 ---                                        symlink leaves the project and its target is readable)
 --- }
@@ -176,6 +178,13 @@ function M.validate_opts(opts)
           end
           if not (e:sub(1, 5) == "/run/" or e:sub(1, 9) == "/var/tmp/") then
             return "must be below /run or /var/tmp (the masked directories)"
+          end
+        end)
+      end
+      if p.claude_share ~= nil then
+        str_list("policy.claude_share", p.claude_share, errs, function(e)
+          if not plan_mod.claude_share_ok((e:gsub("^/+", ""))) then
+            return "not shareable (the login is always shared; transcripts, history and sessions never are; no '..')"
           end
         end)
       end
@@ -556,6 +565,39 @@ local function stale(plan)
   return false
 end
 
+--- The agent's user config without the other projects: ~/.claude.json keeps a record per project
+--- directory (trusted-folder state, MCP servers with their arguments, recent prompts). The copy the
+--- sandbox gets holds the current project's entry only. A file that does not parse is not shared at
+--- all (the agent then starts from a fresh config). The copy is private (0600).
+--- @return boolean
+function M.write_scrubbed_claude_json(src, dest, project)
+  local f = io.open(src, "rb")
+  if not f then
+    return false
+  end
+  local raw = f:read("*a")
+  f:close()
+  local ok, data = pcall(vim.json.decode, raw)
+  if not ok or type(data) ~= "table" then
+    return false
+  end
+  if type(data.projects) == "table" then
+    local keep = {}
+    for _, key in ipairs({ project, vim.uv.fs_realpath(project) }) do
+      if key and data.projects[key] ~= nil then
+        keep[key] = data.projects[key]
+      end
+    end
+    data.projects = next(keep) and keep or vim.empty_dict()
+  end
+  data.githubRepoPaths = nil -- repository name -> local checkouts, of every project
+  local out = assert(vim.uv.fs_open(dest, "w", tonumber("600", 8)))
+  vim.uv.fs_write(out, vim.json.encode(data))
+  vim.uv.fs_close(out)
+  vim.uv.fs_chmod(dest, tonumber("600", 8))
+  return true
+end
+
 local function prepare(plan)
   for _, d in ipairs(plan.needs.mkdir) do
     vim.fn.mkdir(d, "p")
@@ -567,8 +609,8 @@ local function prepare(plan)
   if plan.claude_json then
     -- a private COPY: it works, but nothing the sandbox writes reaches the real file
     local c = plan.claude_json
-    if vim.uv.fs_copyfile(c.src, c.copy) then
-      vim.uv.fs_chmod(c.copy, tonumber("600", 8))
+    local ok = M.write_scrubbed_claude_json(c.src, c.copy, c.project)
+    if ok then
       temp[#temp + 1] = c.copy
     else
       plan.claude_json = nil

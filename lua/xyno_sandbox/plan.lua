@@ -654,6 +654,21 @@ function M.validate_exception(exc, ctx)
   return true
 end
 
+--- May `rel` (a path below ~/.claude) be shared read-only? Not the login (always bound), not the
+--- transcripts, history or session keys, and no ".." .
+function M.claude_share_ok(rel)
+  if rel == "" or rel:find("..", 1, true) then
+    return false
+  end
+  local first = rel:match("^([^/]+)")
+  for _, bad in ipairs({ ".credentials.json", "projects", "history.jsonl", "daemon", "sessions", "shell-snapshots", "session-env" }) do
+    if first == bad then
+      return false
+    end
+  end
+  return true
+end
+
 -- ------------------------------------------------------------------ build
 
 local function resolve_user_path(p, home, project)
@@ -706,6 +721,11 @@ function M.build(input)
   local at_home = project == home or shared
   local net_mode = cfg.network == "open" and "open" or "filtered" -- anything but "open" is filtered
   local home_mode = cfg.home == "denylist" and "denylist" or "allowlist" -- anything but "denylist" is the allowlist
+  -- ~/.claude: in the allowlist view the agent gets a THROW-AWAY directory holding only its login
+  -- file (read-only), this project's transcripts and the names of policy.claude_share (read-only);
+  -- other projects' transcripts, settings, history and sessions are not there. The denylist view
+  -- keeps the old behaviour (the whole directory, writable, with the executable parts re-locked).
+  local claude_minimal = home_mode == "allowlist"
 
   local plan = {
     version = 2,
@@ -724,6 +744,7 @@ function M.build(input)
     run_keep = {},
     homes = { masked = {}, allow = {}, rebind_home = false },
     home_allow = {},
+    claude = { mode = claude_minimal and "minimal" or "full", credentials = nil, shared = {} },
     symlinks = {},
     guard_files = {},
     ephemeral = {},
@@ -873,7 +894,9 @@ function M.build(input)
   end
   writable(tmp_dir, "scratch")
   for _, rel in ipairs(M.WRITABLE) do
-    writable(home .. rel, "agent/cargo cache")
+    if not (claude_minimal and rel == "/.claude") then
+      writable(home .. rel, "agent/cargo cache")
+    end
   end
   local cargo_home = type(env.CARGO_HOME) == "string" and M.normalize(env.CARGO_HOME) or nil
   if cargo_home and cargo_home ~= home .. "/.cargo" then
@@ -1244,10 +1267,27 @@ function M.build(input)
     end
   end
 
+  -- ~/.claude in the allowlist view
+  if claude_minimal then
+    local cred = home .. "/.claude/.credentials.json"
+    if exists(cred) then
+      plan.claude.credentials = cred
+    end
+    local sseen = {}
+    for _, name in ipairs(policy.claude_share or {}) do
+      local rel = tostring(name):gsub("^/+", "")
+      local path = home .. "/.claude/" .. rel
+      if not sseen[path] and M.claude_share_ok(rel) and exists(path) then
+        sseen[path] = true
+        plan.claude.shared[#plan.claude.shared + 1] = { path = path, why = "policy.claude_share" }
+      end
+    end
+  end
+
   -- ~/.claude.json: a private copy
   local cj = home .. "/.claude.json"
   if exists(cj) and aux.claude_json then
-    plan.claude_json = { src = cj, copy = aux.claude_json }
+    plan.claude_json = { src = cj, copy = aux.claude_json, project = project }
     plan.needs.claude_json = plan.claude_json
   end
 
@@ -1335,11 +1375,19 @@ function M.build(input)
       end
     end
   end
-  for _, rel in ipairs(M.HOME_READONLY) do
-    lock(home .. rel, "agent config")
+  if not claude_minimal then
+    for _, rel in ipairs(M.HOME_READONLY) do
+      lock(home .. rel, "agent config")
+    end
   end
-  for _, p in ipairs(probes.glob(home .. "/.claude/projects/*/memory")) do
-    lock(p, "agent memory") -- MEMORY.md auto-loads into the next unsandboxed session
+  -- MEMORY.md auto-loads into the next unsandboxed session
+  for _, p in ipairs(claude_minimal and {} or probes.glob(home .. "/.claude/projects/*/memory")) do
+    lock(p, "agent memory")
+  end
+  if claude_minimal then
+    for _, d in ipairs(own) do
+      lock(d .. "/memory", "agent memory")
+    end
   end
   if claude_dir then
     for _, d in ipairs(own) do
@@ -1382,7 +1430,7 @@ function M.build(input)
       end
     end
   end
-  for _, rel in ipairs(M.HOME_MASK_IF_ABSENT) do
+  for _, rel in ipairs(claude_minimal and {} or M.HOME_MASK_IF_ABSENT) do
     if not exists(home .. rel) then
       mask(home .. rel, "absent agent config")
     end
@@ -1610,6 +1658,16 @@ function M.ops(plan)
       add("hidden", h.why, "--ro-bind", plan.empty_file, h.path)
     end
   end
+  local cl = plan.claude or { mode = "full", shared = {} }
+  if cl.mode == "minimal" then
+    add("claude", "agent state of this run only (nothing of the real ~/.claude, thrown away at exit)", "--tmpfs", plan.home .. "/.claude")
+    if cl.credentials then
+      add("claude", "the agent's login, read-only", "--ro-bind", cl.credentials, cl.credentials)
+    end
+    for _, sh in ipairs(cl.shared) do
+      add("claude", sh.why .. ", read-only", "--ro-bind", sh.path, sh.path)
+    end
+  end
   if plan.claude_json then
     add("claude_json", "private copy of the agent's user config", "--bind", plan.claude_json.copy, plan.claude_json.src)
   end
@@ -1617,7 +1675,9 @@ function M.ops(plan)
   -- point cannot be renamed, so `mv projects/<name> ...; mkdir -p projects/<name>/memory`
   -- cannot get round the memory mask
   local projects = plan.projects or { dir = (plan.home or "") .. "/.claude/projects", own = {} }
-  add("projects", "agent transcripts of all projects, read-only", "--ro-bind", projects.dir, projects.dir)
+  if cl.mode ~= "minimal" then
+    add("projects", "agent transcripts of all projects, read-only", "--ro-bind", projects.dir, projects.dir)
+  end
   for _, d in ipairs(projects.own) do
     add("projects", "this project's transcripts, writable", "--bind", d, d)
   end
