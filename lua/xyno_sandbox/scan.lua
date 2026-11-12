@@ -2,13 +2,13 @@
 --
 -- Bounded on every axis: the number of files, the size of a file, the total bytes read, the
 -- depth and the wall-clock time. Project files only (no $HOME, nothing outside the project), no
--- symlinks followed, no binary files. It matches KNOWN TOKEN FORMATS only (cloud and forge tokens
+-- symlinks followed, no binary files (a NUL byte in the first KB), whatever the file is called. It matches KNOWN TOKEN FORMATS only (cloud and forge tokens
 -- with a recognisable prefix, private key headers): there is no entropy guessing, so a project
 -- full of hashes and ids does not flood the preview.
 --
 -- What it cannot catch (also in the README): a secret in a format that is not listed (a plain
 -- password, a generic API key, a JWT, a database URL), a secret in a file over the size limit, in
--- a binary or compressed file, in a directory it skips (node_modules, target, .git, virtualenvs),
+-- a binary file (NUL byte) or one over the size limit, in a directory it skips (node_modules, target, .git, virtualenvs),
 -- beyond the file, byte, depth or time budget (the result then says "truncated"), encoded
 -- (base64, split over lines), and anything created after the sandbox started.
 local M = {}
@@ -24,14 +24,6 @@ M.SKIP_DIRS = {
   __pycache__ = true, [".mypy_cache"] = true, [".tox"] = true, [".next"] = true, dist = true, build = true,
   [".gradle"] = true, vendor = true, [".terraform"] = true,
 }
--- Files that are never text worth reading.
-M.SKIP_EXT = {
-  png = true, jpg = true, jpeg = true, gif = true, webp = true, ico = true, bmp = true, pdf = true, zip = true, gz = true,
-  xz = true, bz2 = true, zst = true, tar = true, tgz = true, jar = true, war = true, class = true, so = true, o = true,
-  a = true, dll = true, exe = true, wasm = true, mp3 = true, mp4 = true, mov = true, ogg = true, woff = true, woff2 = true,
-  ttf = true, otf = true, eot = true, lock = true, map = true, rlib = true, rmeta = true, pyc = true, sqlite = true, db = true,
-}
-
 local function boundary(s, i, j, prefixed)
   -- the match s[i..j] is not part of a longer token
   local before = i > 1 and s:sub(i - 1, i - 1) or ""
@@ -222,7 +214,7 @@ function M.project(project, opts)
   local uv = vim.uv
   local want_content = opts.content ~= false
   local t0 = uv.hrtime()
-  local res = { hits = {}, multi = {}, files = 0, truncated = false, unread = { large = 0, binary = 0, extension = 0 } }
+  local res = { hits = {}, multi = {}, files = 0, truncated = false, unread = { large = 0, binary = 0 } }
   local total = 0
   local function out_of_budget()
     if res.files >= M.MAX_FILES then
@@ -274,13 +266,12 @@ function M.project(project, opts)
             if st.nlink and st.nlink > 1 then
               res.multi[#res.multi + 1] = { path = path, dev = st.dev, ino = st.ino, nlink = st.nlink }
             end
-            local ext = name:match("%.([%w]+)$")
+            -- No file is skipped by its NAME or extension (key.lock, a.map, x.db may hold a private key): a small
+            -- file is read, and skipped only when it has a NUL byte in its first KB (a binary format).
             if want_content and st.size > M.MAX_FILE_BYTES then
               res.unread.large = res.unread.large + 1
-            elseif want_content and ext and M.SKIP_EXT[ext:lower()] then
-              res.unread.extension = res.unread.extension + 1
             end
-            if want_content and st.size > 0 and st.size <= M.MAX_FILE_BYTES and not (ext and M.SKIP_EXT[ext:lower()]) then
+            if want_content and st.size > 0 and st.size <= M.MAX_FILE_BYTES then
               local key = path
               local c = cache[key]
               local sig = st.mtime.sec .. ":" .. st.mtime.nsec .. ":" .. st.size

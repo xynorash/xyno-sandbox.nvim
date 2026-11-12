@@ -179,9 +179,9 @@ function M.lines(plan, ctx)
       .. " anything in a format it does not know (see the README)."):format(plan.scan.files, plan.scan.files == 1 and "" or "s",
       plan.scan.truncated and (" (STOPPED: " .. tostring(plan.scan.why) .. ")") or "", plan.scan.hits or 0))
     local u = plan.scan.unread
-    if u and (u.large > 0 or u.binary > 0 or u.extension > 0) then
-      add(("  Not read at all: %d over 256 KB, %d binary (NUL byte), %d images/archives/lock files by extension."):format(
-        u.large, u.binary, u.extension))
+    if u and (u.large > 0 or u.binary > 0) then
+      add(("  Not read at all: %d over 256 KB, %d binary (NUL byte). No file is skipped for its name or extension."):format(
+        u.large, u.binary))
     end
   end
   op_section("Other mounts", "ephemeral")

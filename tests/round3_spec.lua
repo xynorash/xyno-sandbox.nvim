@@ -473,12 +473,10 @@ describe("the content scan judges the match, not the line", function()
     local dir = H.tmpdir()
     write(dir .. "/big.txt", string.rep("a", scan.MAX_FILE_BYTES + 10))
     write(dir .. "/bin.dat", "ab\0cd" .. GH)
-    write(dir .. "/a.zip", GH)
     write(dir .. "/ok.txt", "nothing\n")
     local res = scan.project(dir)
     H.eq(1, res.unread.large)
     H.eq(1, res.unread.binary)
-    H.eq(1, res.unread.extension)
     H.eq(0, #res.hits)
     local p = plan.build({
       project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, env = { PATH = "/bin" }, cmd = { "agent" },

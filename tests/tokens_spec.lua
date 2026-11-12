@@ -268,11 +268,11 @@ describe("scan.project", function()
     H.no_match(vim.inspect(r), TOKEN, true)
   end)
 
-  it("skips build and dependency directories, large files, binary files, binary extensions and symlinks", function()
+  it("skips build and dependency directories, large files, binary files and symlinks", function()
     local dir = project_with({
       ["node_modules/x/k.js"] = GH, ["target/debug/k.txt"] = GH, [".git/config"] = GH,
       ["big.txt"] = GH .. string.rep("x", scan.MAX_FILE_BYTES + 10), ["bin.dat"] = "\0\0\0" .. GH,
-      ["img.png"] = GH, ["ok/plain.txt"] = "nothing here\n",
+      ["ok/plain.txt"] = "nothing here\n",
     })
     vim.uv.fs_symlink(dir .. "/ok/plain.txt", dir .. "/link-to-file")
     write(H.tmpdir() .. "/outside.txt", GH)

