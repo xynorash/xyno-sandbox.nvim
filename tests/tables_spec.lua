@@ -21,7 +21,7 @@ end)
 
 local DIRS = {
   [".cargo"] = true, [".vscode"] = true, [".zed"] = true, [".idea"] = true, [".helix"] = true, [".husky"] = true,
-  [".devcontainer"] = true, [".mise"] = true, [".config/mise"] = true, [".claude"] = true, [".git"] = true,
+  [".devcontainer"] = true, [".mise"] = true, [".config/mise"] = true, [".claude"] = true, [".git"] = true, [".githooks"] = true, [".mvn"] = true,
 }
 local function is_dir_entry(rel, project_names)
   rel = rel:gsub("^/", "")

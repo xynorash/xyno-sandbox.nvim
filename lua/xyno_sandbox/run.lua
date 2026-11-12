@@ -276,6 +276,9 @@ function M.register(cfg)
       for _, p in ipairs(rec.failed or {}) do
         lines[#lines + 1] = "  STILL THERE (could not be removed): " .. p
       end
+      for _, why in ipairs(rec.incomplete or {}) do
+        lines[#lines + 1] = "  END-OF-RUN CHECK INCOMPLETE: " .. why .. " (look for .envrc, .cargo/config.toml, .git/hooks... in the part that was not compared)"
+      end
       lines[#lines + 1] = ""
       lines[#lines + 1] = ":XynoSandboxReview clear  allows the next launch"
       notify(table.concat(lines, "\n"), vim.log.levels.WARN)

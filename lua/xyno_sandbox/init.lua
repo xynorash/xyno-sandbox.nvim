@@ -492,23 +492,52 @@ local function sweep(h)
   end
   local ok, err = pcall(function()
     local res = guard.compare(h.snapshot, guard.snapshot(h.plan.project))
-    h.planted, h.modified, h.review = res.planted, res.modified, res.review
+    h.planted, h.modified, h.review, h.moved, h.incomplete = res.planted, res.modified, res.review, res.moved, res.incomplete
+    -- the empty placeholders bwrap mounted over an absent name stay behind when the directory holding them was RENAMED
+    -- (mv sub sub_old): an empty read-only file or an empty directory, not something the agent created
+    local planted = {}
+    for _, p in ipairs(res.planted) do
+      local st = vim.uv.fs_lstat(p)
+      if st and st.type == "directory" and is_empty_leftover(p, "dir") then
+        vim.uv.fs_rmdir(p)
+      elseif st and st.type == "file" and is_empty_leftover(p, "file") then
+        vim.uv.fs_unlink(p)
+      else
+        planted[#planted + 1] = p
+      end
+    end
+    res.planted, h.planted = planted, planted
+    local q, failed = nil, {}
     if #res.planted > 0 then
-      local q = guard.quarantine(h.plan.project, res.planted)
-      local failed = {}
+      q = guard.quarantine(h.plan.project, res.planted)
       for _, m in ipairs(q.moved) do
         if not m.ok then
           failed[#failed + 1] = m.path
         end
       end
       h.quarantine = q.dir
-      guard.mark_dirty(h.plan.project, { planted = res.planted, quarantine = q.dir, failed = failed, modified = res.modified })
+    end
+    if #res.planted > 0 or #res.incomplete > 0 then
+      guard.mark_dirty(h.plan.project, {
+        planted = res.planted, quarantine = q and q.dir, failed = failed, modified = res.modified, incomplete = res.incomplete,
+      })
+    end
+    if #res.planted > 0 then
       local shown = vim.list_slice(res.planted, 1, 5)
       vim.notify(("xyno-sandbox: the agent created %d file%s that act%s outside the sandbox: %s%s. %s moved to %s and removed from the project;"
         .. " the next launch for this project is refused until you review them (:XynoSandboxReview, then :XynoSandboxReview clear).%s"):format(
         #res.planted, #res.planted == 1 and "" or "s", #res.planted == 1 and "s" or "", table.concat(shown, ", "), #res.planted > 5 and ", ..." or "",
         #res.planted == 1 and "It was" or "They were", q.dir,
         #failed > 0 and (" COULD NOT REMOVE: " .. table.concat(failed, ", ")) or ""), vim.log.levels.ERROR)
+    end
+    if #res.incomplete > 0 then
+      vim.notify(("xyno-sandbox: the end-of-run check of the project tree could NOT be completed (%s), so a file that acts outside the sandbox"
+        .. " (.envrc, .cargo/config.toml...) may have been created where it did not look. The next launch for this project is refused until you"
+        .. " looked (:XynoSandboxReview, then :XynoSandboxReview clear)."):format(table.concat(res.incomplete, "; ")), vim.log.levels.ERROR)
+    end
+    if #res.partial > 0 then
+      vim.notify(("xyno-sandbox: the check of the project tree was already partial at launch (%s): names planted beyond that are not compared"):format(
+        table.concat(res.partial, "; ")), vim.log.levels.INFO)
     end
     for _, line in ipairs(guard.report(res)) do
       vim.notify("xyno-sandbox: " .. line, vim.log.levels.WARN)

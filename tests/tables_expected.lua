@@ -29,12 +29,14 @@ return {
     ".vscode/settings.json", ".cargo", ".vscode", ".mcp.json", ".zed", ".idea", ".helix", ".husky", ".devcontainer",
     ".pre-commit-config.yaml", ".lldbinit", ".gdbinit", "mise.toml", "mise.local.toml", ".mise.local.toml", ".mise",
     ".config/mise.toml", ".config/mise", "rust-toolchain", "rust-toolchain.toml",
+    ".githooks", ".mvn", ".pnpmfile.cjs", ".dir-locals.el", ".lvimrc",
   },
   MEMBER_READONLY = {
     ".cargo", ".envrc", ".mise.toml", ".nvim.lua", ".nvimrc", ".exrc", ".claude", ".mcp.json", ".vscode", ".zed",
     ".idea", ".helix", ".husky", ".devcontainer", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit",
     ".tool-versions", "mise.toml", "mise.local.toml", ".mise.local.toml", ".mise", ".config/mise.toml",
     ".config/mise", "rust-toolchain", "rust-toolchain.toml",
+    ".githooks", ".mvn", ".pnpmfile.cjs", ".dir-locals.el", ".lvimrc",
   },
   PROJECT_SECRET_DIRS = {
     ".aws", ".ssh", ".gnupg", ".kube", ".azure", ".envs", ".secrets",
@@ -52,9 +54,10 @@ return {
   PROJECT_GUARD_FILES = {
     ".envrc", ".mise.toml", "mise.toml", "mise.local.toml", ".mise.local.toml", ".nvim.lua", ".nvimrc", ".exrc",
     ".mcp.json", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit",
+    ".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs", ".dir-locals.el", ".lvimrc",
   },
   PROJECT_MASK_IF_ABSENT = {
-    ".cargo", ".git", ".vscode", ".zed", ".idea", ".helix", ".husky", ".devcontainer",
+    ".cargo", ".git", ".vscode", ".zed", ".idea", ".helix", ".husky", ".devcontainer", ".githooks", ".mvn",
   },
   CODE_RUNS_OUTSIDE = {
     "/.bashrc", "/.bash_profile", "/.bash_login", "/.bash_logout", "/.bash_aliases", "/.profile", "/.zshrc",

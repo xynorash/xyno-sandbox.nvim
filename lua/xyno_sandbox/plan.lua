@@ -65,6 +65,9 @@ M.PROJECT_READONLY = {
   -- toolchain a rust-toolchain file names (a malicious override triggers a download on the next cargo)
   "mise.toml", "mise.local.toml", ".mise.local.toml", ".mise", ".config/mise.toml", ".config/mise",
   "rust-toolchain", "rust-toolchain.toml",
+  -- tools that load these from the project without asking: git (core.hooksPath = .githooks), maven (.mvn/extensions.xml
+  -- loads a jar), pnpm (the pnpmfile rewrites dependencies), Emacs (.dir-locals.el evaluates code), vim (.lvimrc plugin)
+  ".githooks", ".mvn", ".pnpmfile.cjs", ".dir-locals.el", ".lvimrc",
 }
 -- Locked in every subdirectory the project walk found (when PRESENT there): cargo reads .cargo/config from
 -- every ancestor of the directory it runs in, direnv the nearest .envrc, claude the .claude of its
@@ -75,10 +78,15 @@ M.MEMBER_READONLY = {
   ".helix", ".husky", ".devcontainer", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit",
   ".tool-versions", "mise.toml", "mise.local.toml", ".mise.local.toml", ".mise", ".config/mise.toml", ".config/mise",
   "rust-toolchain", "rust-toolchain.toml",
+  ".githooks", ".mvn", ".pnpmfile.cjs", ".dir-locals.el", ".lvimrc",
 }
+-- Names that are only guarded while ABSENT and watched (never locked as such): the package managers' own config files
+-- (.npmrc script-shell, .yarnrc.yml yarnPath run a program of the project's choosing). When they exist they are hidden
+-- (they usually hold a token), so the agent can neither read nor change them.
+M.WATCH_EXTRA = { ".npmrc", ".yarnrc", ".yarnrc.yml" }
 -- Names that act outside the sandbox when the agent creates them in a subdirectory: looked for at launch
--- and again when the run ends, and a new one is reported (not prevented, not removed).
-M.WATCH_NAMES = vim.list_extend({ ".git" }, M.MEMBER_READONLY)
+-- and again when the run ends; a new one is moved into a quarantine and the project is marked (xyno_sandbox.guard).
+M.WATCH_NAMES = vim.list_extend(vim.list_extend({ ".git" }, M.MEMBER_READONLY), M.WATCH_EXTRA)
 M.WATCH_DIRS_MAX = 400
 -- Files the agent edits for a reason and that run on your machine later (a build, a test run, CI). Never
 -- locked; the preview lists the ones that exist and the end-of-run report summarises what changed in them
@@ -86,23 +94,26 @@ M.WATCH_DIRS_MAX = 400
 M.REVIEW_NAMES = {
   "Makefile", "makefile", "GNUmakefile", "justfile", "Justfile", "Taskfile.yml", "Taskfile.yaml", "package.json",
   "Cargo.toml", "build.rs", "pyproject.toml", "setup.py", "noxfile.py", "tox.ini", ".gitlab-ci.yml",
+  -- loaded automatically by the test runner / bun / the git hook manager, edited by the agent for a reason
+  "conftest.py", "bunfig.toml", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml",
 }
 -- Absent directories that are masked (an empty read-only directory is mounted there, so the agent cannot
 -- create them) in the SHALLOWEST subdirectories, at most this many mounts: a mount per directory and name for
 -- a whole tree would be thousands. Deeper directories are covered by the end-of-run sweep (xyno_sandbox.guard).
 M.SUBDIR_MASK_DIRS = { ".cargo", ".claude", ".vscode", ".git" }
 -- Absent files that are bound to an empty read-only file in the same directories (cleaned up when the run ends).
-M.SUBDIR_GUARD_FILES = { ".envrc", ".mcp.json", ".nvim.lua", ".mise.toml", ".exrc" }
+M.SUBDIR_GUARD_FILES = { ".envrc", ".mcp.json", ".nvim.lua", ".mise.toml", ".exrc", ".npmrc", ".yarnrc.yml", ".dir-locals.el", ".lvimrc" }
 M.SUBDIR_MASK_MAX = 360
 -- Created empty-and-read-only when absent at the project root: a planted .cargo/config.toml is
 -- the one that bites. .git too: without one the agent ran `git init` and planted
 -- `core.fsmonitor = <cmd>` in .git/config, which the user's next unsandboxed `git status`
 -- executed. .vscode: a planted tasks.json runs from the user's editor. The launcher removes the
 -- empty leftovers when the run ends (see xyno_sandbox.wrap, handle.release).
-M.PROJECT_MASK_IF_ABSENT = { ".cargo", ".git", ".vscode", ".zed", ".idea", ".helix", ".husky", ".devcontainer" }
+M.PROJECT_MASK_IF_ABSENT = { ".cargo", ".git", ".vscode", ".zed", ".idea", ".helix", ".husky", ".devcontainer", ".githooks", ".mvn" }
 -- Files that run unsandboxed later when planted. When absent they are bound to an empty
 -- read-only file for the run (the launcher removes the placeholder afterwards).
-M.PROJECT_GUARD_FILES = { ".envrc", ".mise.toml", "mise.toml", "mise.local.toml", ".mise.local.toml", ".nvim.lua", ".nvimrc", ".exrc", ".mcp.json", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit" }
+M.PROJECT_GUARD_FILES = { ".envrc", ".mise.toml", "mise.toml", "mise.local.toml", ".mise.local.toml", ".nvim.lua", ".nvimrc", ".exrc", ".mcp.json", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit",
+  ".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs", ".dir-locals.el", ".lvimrc" }
 -- Project dir that is ALWAYS locked: read-only when present, otherwise masked.
 M.PROJECT_MASKED = ".claude"
 

@@ -22,13 +22,17 @@ local store = require("xyno_sandbox.store")
 local M = {}
 
 M.MAX_DIRS = 20000
-M.MAX_DEPTH = 16
+M.MAX_DEPTH = 40
 M.MAX_MS = 1500
+-- the directories in SKIP_DIRS are walked too, for the protected names only (a cargo config under target/debug, an .envrc in
+-- node_modules/x), with a budget of their own so that a huge build tree cannot use up the main one
+M.SKIP_MAX_DIRS = 4000
+M.SKIP_MAX_MS = 700
 M.REVIEW_MAX_BYTES = 128 * 1024
 M.REVIEW_KEEP_BYTES = 4 * 1024 * 1024 -- text kept in memory for the diff summary (more: hashes only)
 M.QUARANTINE_FILE_MAX = 1024 * 1024
 M.QUARANTINE_ENTRIES_MAX = 300
--- not entered by the walk (a name below them is not reported)
+-- walked in a second pass with the smaller budget above (M.SKIP_MAX_DIRS / M.SKIP_MAX_MS), after everything else
 M.SKIP_DIRS = { target = true, node_modules = true, [".git"] = true, [".venv"] = true, venv = true, __pycache__ = true }
 -- their content changes by itself while you work (the index, the IDE's workspace file): only their
 -- appearance counts, never a change inside
@@ -98,12 +102,17 @@ local function read_small(path, max)
   return data
 end
 
---- Walk `project` and record the protected names and the review files.
+local function ident(st)
+  return ("%.0f:%.0f"):format(st.dev or 0, st.ino or 0)
+end
+
+--- Walk `project` and record the protected names and the review files. The directories of SKIP_DIRS are
+--- walked after the rest with a budget of their own. A bound that stopped the walk is recorded:
+--- `truncated` (main budget), `skip_truncated` (the second pass), `depth_cut` (a directory below MAX_DEPTH).
 --- @param project string
---- @param opts? { now?: fun(): number }
---- @return { protected: table<string,string>, review: table<string,table>, dirs: integer, truncated: boolean, why?: string }
+--- @return { protected: table<string,string>, ino: table<string,string>, review: table<string,table>, dirs: integer, truncated: boolean, skip_truncated: boolean, depth_cut: boolean, why?: string }
 function M.snapshot(project)
-  local snap = { protected = {}, review = {}, dirs = 0, truncated = false }
+  local snap = { protected = {}, ino = {}, review = {}, dirs = 0, skip_dirs = 0, truncated = false, skip_truncated = false, depth_cut = false }
   local watch, slashed = {}, {}
   for _, n in ipairs(plan_mod.WATCH_NAMES) do
     if n:find("/", 1, true) then
@@ -112,9 +121,7 @@ function M.snapshot(project)
       watch[n] = true
     end
   end
-  local t0 = vim.uv.hrtime()
   local kept = 0
-  local queue, qi = { { project, 0 } }, 1
   local function record_protected(path, noisy)
     local st = vim.uv.fs_lstat(path)
     if st then
@@ -125,6 +132,7 @@ function M.snapshot(project)
         sig = st.type -- appearance only
       end
       snap.protected[path] = sig
+      snap.ino[path] = ident(st)
     end
   end
   local function record_review(path)
@@ -143,44 +151,74 @@ function M.snapshot(project)
     end
     snap.review[path] = rec
   end
-  while qi <= #queue do
-    local dir, depth = queue[qi][1], queue[qi][2]
-    qi = qi + 1
-    snap.dirs = snap.dirs + 1
-    if snap.dirs > M.MAX_DIRS then
-      snap.truncated, snap.why = true, "more than " .. M.MAX_DIRS .. " directories"
-      break
-    end
-    if (vim.uv.hrtime() - t0) / 1e6 > M.MAX_MS then
-      snap.truncated, snap.why = true, "more than " .. M.MAX_MS .. " ms"
-      break
-    end
-    local present = {}
-    for _, e in ipairs(list(dir)) do
-      local name, ty = e[1], e[2]
-      present[name] = true
-      local path = dir .. "/" .. name
-      if watch[name] then
-        record_protected(path, M.NOISY[name])
+  local skipped = {}
+  -- one breadth-first pass over `queue`; directories of SKIP_DIRS go to `skipped` (first pass) or are entered (second)
+  local function pass(queue, second)
+    local t0 = vim.uv.hrtime()
+    local max_dirs, max_ms = second and M.SKIP_MAX_DIRS or M.MAX_DIRS, second and M.SKIP_MAX_MS or M.MAX_MS
+    local count = 0
+    local qi = 1
+    while qi <= #queue do
+      local dir, depth = queue[qi][1], queue[qi][2]
+      qi = qi + 1
+      count = count + 1
+      local over
+      if count > max_dirs then
+        over = "more than " .. max_dirs .. " directories"
+      elseif (vim.uv.hrtime() - t0) / 1e6 > max_ms then
+        over = "more than " .. max_ms .. " ms"
       end
-      if is_review(name, dir) then
-        record_review(path)
+      if over then
+        if second then
+          snap.skip_truncated = true
+          snap.skip_why = over .. " inside target, node_modules, virtualenvs"
+        else
+          snap.truncated, snap.why = true, over
+        end
+        break
       end
-      if ty == nil or ty == "unknown" then
-        local st = vim.uv.fs_lstat(path)
-        ty = st and st.type
+      if second then
+        snap.skip_dirs = snap.skip_dirs + 1
+      else
+        snap.dirs = snap.dirs + 1
       end
-      if ty == "directory" and depth < M.MAX_DEPTH and not M.SKIP_DIRS[name] and not watch[name] then
-        queue[#queue + 1] = { path, depth + 1 }
+      local present = {}
+      for _, e in ipairs(list(dir)) do
+        local name, ty = e[1], e[2]
+        present[name] = true
+        local path = dir .. "/" .. name
+        if watch[name] then
+          record_protected(path, M.NOISY[name])
+        end
+        if is_review(name, dir) then
+          record_review(path)
+        end
+        if ty == nil or ty == "unknown" then
+          local st = vim.uv.fs_lstat(path)
+          ty = st and st.type
+        end
+        if ty == "directory" and not watch[name] then
+          if depth >= M.MAX_DEPTH then
+            snap.depth_cut = true
+          elseif M.SKIP_DIRS[name] and not second then
+            skipped[#skipped + 1] = { path, depth + 1 }
+          else
+            queue[#queue + 1] = { path, depth + 1 }
+          end
+        end
       end
-    end
-    if present[".config"] then
-      for _, rel in ipairs(slashed) do
-        if vim.uv.fs_lstat(dir .. "/" .. rel) then
-          record_protected(dir .. "/" .. rel, false)
+      if present[".config"] then
+        for _, rel in ipairs(slashed) do
+          if vim.uv.fs_lstat(dir .. "/" .. rel) then
+            record_protected(dir .. "/" .. rel, false)
+          end
         end
       end
     end
+  end
+  pass({ { project, 0 } }, false)
+  if #skipped > 0 then
+    pass(skipped, true)
   end
   return snap
 end
@@ -211,19 +249,46 @@ local function line_delta(a, b)
 end
 
 --- What differs between a launch snapshot and a snapshot taken now.
---- @return { planted: string[], modified: string[], removed: string[], review: { path: string, change: string, plus?: integer, minus?: integer }[] }
+--- @return { planted: string[], modified: string[], removed: string[], moved: { from: string, to: string }[], incomplete: string[], partial: string[], review: { path: string, change: string, plus?: integer, minus?: integer }[] }
 function M.compare(before, after)
-  local res = { planted = {}, modified = {}, removed = {}, review = {} }
+  local res = { planted = {}, modified = {}, removed = {}, review = {}, moved = {}, incomplete = {}, partial = {} }
+  -- a directory that was RENAMED during the run (mv sub sub_old) shows its protected names under a new path: they are the
+  -- same inodes as before, not new files
+  local gone = {}
+  for p in pairs(before.protected) do
+    if after.protected[p] == nil and before.ino and before.ino[p] then
+      gone[before.ino[p]] = p
+    end
+  end
   for p, sig in pairs(after.protected) do
-    if before.protected[p] == nil then
+    local from = before.protected[p] == nil and after.ino and gone[after.ino[p] or ""] or nil
+    if from then
+      res.moved[#res.moved + 1] = { from = from, to = p }
+      gone[after.ino[p]] = nil
+    elseif before.protected[p] == nil then
       res.planted[#res.planted + 1] = p
     elseif before.protected[p] ~= sig then
       res.modified[#res.modified + 1] = p
     end
   end
+  local moved_from = {}
+  for _, m in ipairs(res.moved) do
+    moved_from[m.from] = true
+  end
   for p in pairs(before.protected) do
-    if after.protected[p] == nil then
+    if after.protected[p] == nil and not moved_from[p] then
       res.removed[#res.removed + 1] = p
+    end
+  end
+  -- a bound that stopped the walk now but not at launch means the tree grew past what can be checked: whatever was
+  -- created beyond it is unknown. Fail closed (dirty). A tree that was already too large at launch is only reported.
+  for _, b in ipairs({
+    { "truncated", "the project walk stopped (" .. tostring(after.why) .. ")" },
+    { "skip_truncated", "the walk inside target, node_modules and virtualenvs stopped (" .. tostring(after.skip_why) .. ")" },
+    { "depth_cut", "directories deeper than " .. M.MAX_DEPTH .. " levels were not entered" },
+  }) do
+    if after[b[1]] then
+      table.insert(before[b[1]] and res.partial or res.incomplete, b[2])
     end
   end
   for p, a in pairs(after.review) do
@@ -240,6 +305,9 @@ function M.compare(before, after)
       res.review[#res.review + 1] = { path = p, change = "deleted", plus = 0, minus = b.text and count_lines(b.text) - 1 or nil }
     end
   end
+  table.sort(res.moved, function(x, y)
+    return x.to < y.to
+  end)
   table.sort(res.planted)
   table.sort(res.modified)
   table.sort(res.removed)
@@ -323,7 +391,7 @@ end
 function M.mark_dirty(project, info)
   local rec = {
     project = project, ts = os.date("!%Y-%m-%dT%H:%M:%SZ"), planted = info.planted or {}, quarantine = info.quarantine,
-    failed = info.failed or {}, modified = info.modified or {},
+    failed = info.failed or {}, modified = info.modified or {}, incomplete = info.incomplete or {},
   }
   local ok, text = pcall(vim.json.encode, rec)
   if not ok then
@@ -363,14 +431,25 @@ end
 
 --- The refusal text of a dirty project.
 function M.dirty_reason(rec)
+  local planted = rec.planted or {}
   local shown = {}
-  for i = 1, math.min(5, #(rec.planted or {})) do
-    shown[#shown + 1] = rec.planted[i]
+  for i = 1, math.min(5, #planted) do
+    shown[#shown + 1] = planted[i]
   end
-  return ("a previous sandbox run created %d file%s that run outside the sandbox (%s%s) and they were removed from the project;"
-    .. " a copy is in %s. Review them (:XynoSandboxReview), then clear the mark with :XynoSandboxReview clear"):format(
-    #(rec.planted or {}), #(rec.planted or {}) == 1 and "" or "s", table.concat(shown, ", "), #(rec.planted or {}) > 5 and ", ..." or "",
-    rec.quarantine or "the state directory")
+  local text = ""
+  if #planted > 0 then
+    text = ("a previous sandbox run created %d file%s that run outside the sandbox (%s%s) and they were removed from the project;"
+      .. " a copy is in %s."):format(#planted, #planted == 1 and "" or "s", table.concat(shown, ", "), #planted > 5 and ", ..." or "",
+      rec.quarantine or "the state directory")
+  end
+  if rec.incomplete and #rec.incomplete > 0 then
+    text = text .. (#planted > 0 and " " or "") .. ("The end-of-run check of the project tree could not be completed (%s), so more may have been created."):format(
+      table.concat(rec.incomplete, "; "))
+  end
+  if text == "" then
+    text = "a previous sandbox run left this project marked for review."
+  end
+  return text .. " Review it (:XynoSandboxReview), then clear the mark with :XynoSandboxReview clear"
 end
 
 --- The report text of a finished run (nil when nothing changed).
