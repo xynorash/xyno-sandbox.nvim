@@ -135,6 +135,8 @@ policy                  table, default {}
       symlinks     "warn" (list links out of the project) | "refuse"
       content_scan true (default): scan project files for known token formats
                    (cloud/forge tokens, private keys) and hide files that have one
+      tree_secrets true (default): hide secret names (.ssh, .npmrc, credentials,
+                   secrets/ ...) inside the trees shown whole from $HOME
       claude_share names below ~/.claude shown read-only in the sandbox (default
                    none; the login and this project's transcripts are always there)
 
@@ -259,8 +261,24 @@ hostname allowlist.
   - project secrets are found by file name and, for known token formats only,
     by content (bounded scan: 4000 files, 256 KB each, 400 ms). Not found: plain
     passwords, generic keys, JWTs, database URLs, encoded or split secrets,
-    large or binary files, skipped directories, anything past a limit. A hard
-    link to a hidden file outside the project cannot be hidden (the plan warns).
+    large or binary files, skipped directories, anything past a limit. A line
+    saying "example" no longer hides a real token (only a match that spells
+    out it is a placeholder is ignored). A hard link to a hidden file outside
+    the project cannot be hidden (the plan warns); one to a credential of the
+    hidden list in $HOME is found and hidden.
+  - directories shown whole from $HOME (a $PATH entry's parent) are searched
+    for secret NAMES (.ssh, .npmrc, credentials, secrets/ ...), not content;
+    policy.tree_secrets = false turns it off.
+  - the environment scrub finds secrets by name and by known value formats
+    (ghp_, AKIA, sk-ant-, private keys, user:password@ URLs); an unknown format
+    under an unlisted name stays (add it to policy.scrub).
+  - sockets in the project are hidden everywhere (also target/, node_modules/,
+    .git/, 24 levels, 30000 directories); beyond that budget they stay
+    connectable and the plan says so.
+  - the ~/.claude.json copy drops API keys, the e-mail address, MCP server env
+    and headers and token-looking strings; a user-scope MCP server that needs
+    a token from its config does not work inside.
+  - after kill -9 of Neovim its private copies stay until the next launch.
     Symlinks out of the project are listed, not blocked (unless
     policy.symlinks = "refuse").
   - with network = "open", loopback services and abstract sockets are reachable.

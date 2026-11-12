@@ -138,6 +138,7 @@ after_each(function()
   end
   env_restore = {}
   package.loaded[MOD] = real_mod
+  H.reset_sandbox_verdict()
 end)
 
 -- ------------------------------------------------------------ 1, 17: opt-out
@@ -1190,6 +1191,7 @@ end)
 describe("headless skip", function()
   it("sandbox_available reports why when bwrap is missing, and need_sandbox skips", function()
     setenv("PATH", "/nonexistent-xyno-path")
+    setenv("XYNO_TEST_SANDBOX_OK", "") -- (the runner's "bubblewrap works" mark turns a skip into a failure)
     local ok, why = H.sandbox_available()
     H.eq(false, ok)
     H.match(why, "bwrap not found", true)

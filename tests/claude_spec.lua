@@ -134,13 +134,14 @@ describe("the ~/.claude.json copy", function()
   it("keeps the current project's record and the login state, drops every other project", function()
     local project = H.tmpdir()
     local ok, out, path = scrub(vim.json.encode({
-      oauthAccount = { emailAddress = "u@example.com" }, numStartups = 3, mcpServers = vim.empty_dict(),
+      oauthAccount = { emailAddress = "u@example.com", accountUuid = "uuid-1" }, numStartups = 3, mcpServers = vim.empty_dict(),
       projects = { [project] = { allowedTools = {}, hasTrustDialogAccepted = true }, ["/secret/other"] = { history = { "prompt of another project" } } },
       githubRepoPaths = { ["a/b"] = { "/secret/other" } },
     }), project)
     H.ok(ok)
     H.eq({ [project] = { allowedTools = {}, hasTrustDialogAccepted = true } }, out.projects)
-    H.eq("u@example.com", out.oauthAccount.emailAddress)
+    H.eq("uuid-1", out.oauthAccount.accountUuid, "the login state stays")
+    H.eq(nil, out.oauthAccount.emailAddress, "the e-mail address does not")
     H.eq(3, out.numStartups)
     H.eq(nil, out.githubRepoPaths)
     H.eq(tonumber("600", 8), bit.band(vim.uv.fs_stat(path).mode, tonumber("777", 8)))

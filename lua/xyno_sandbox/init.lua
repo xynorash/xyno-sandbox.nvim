@@ -108,6 +108,8 @@ end
 ---                                        default none: the agent sees only its login and this project's transcripts)
 ---   content_scan = true                  look inside project files for known token formats (cloud/forge tokens,
 ---                                        private keys) and hide the files that contain one (false: do not)
+---   tree_secrets = true                  hide secret NAMES (.ssh, .npmrc, credentials, secrets/ ...) inside the trees shown
+---                                        whole from $HOME (a $PATH entry's parent, toolchains); false: do not
 ---   symlinks    = "warn"                 "warn" (list them in the preview) | "refuse" (do not start when a
 ---                                        symlink leaves the project and its target is readable)
 --- }
@@ -157,7 +159,7 @@ function M.validate_opts(opts)
     if type(p) ~= "table" then
       errs[#errs + 1] = "policy must be a table"
     else
-      local pknown = { scrub = true, scan_depth = true, project_secrets = true, symlinks = true, content_scan = true }
+      local pknown = { scrub = true, scan_depth = true, project_secrets = true, symlinks = true, content_scan = true, tree_secrets = true }
       for _, k in ipairs(POLICY_LISTS) do
         pknown[k] = true
       end
@@ -200,6 +202,9 @@ function M.validate_opts(opts)
       if p.secret_allow ~= nil then str_list("policy.secret_allow", p.secret_allow, errs) end
       if p.project_secrets ~= nil and type(p.project_secrets) ~= "boolean" then
         errs[#errs + 1] = "policy.project_secrets must be a boolean"
+      end
+      if p.tree_secrets ~= nil and type(p.tree_secrets) ~= "boolean" then
+        errs[#errs + 1] = "policy.tree_secrets must be a boolean"
       end
       if p.content_scan ~= nil and type(p.content_scan) ~= "boolean" then
         errs[#errs + 1] = "policy.content_scan must be a boolean"
@@ -539,7 +544,14 @@ function M.reap_orphans()
     return #a[1] > #b[1]
   end)
   for _, it in ipairs(list) do
-    if is_empty_leftover(it[1], it[2]) and not store.live_others(it[3], nil) then
+    if it[2] == "temp" then
+      -- only what wrap() itself creates: <nvim tmpdir>/<n>.claude.json | .net | .git, never a symlink
+      local st = vim.uv.fs_lstat(it[1])
+      local name = vim.fs.basename(it[1])
+      if st and st.type ~= "link" and (name:match("%.claude%.json$") or name:match("%.net$") or name:match("%.git$")) then
+        n = n + (vim.fn.delete(it[1], "rf") == 0 and 1 or 0)
+      end
+    elseif is_empty_leftover(it[1], it[2]) and not store.live_others(it[3], nil) then
       if it[2] == "dir" then
         n = n + (vim.uv.fs_rmdir(it[1]) and 1 or 0)
       else
@@ -591,16 +603,7 @@ function M.write_scrubbed_claude_json(src, dest, project)
   if not ok or type(data) ~= "table" then
     return false
   end
-  if type(data.projects) == "table" then
-    local keep = {}
-    for _, key in ipairs({ project, vim.uv.fs_realpath(project) }) do
-      if key and data.projects[key] ~= nil then
-        keep[key] = data.projects[key]
-      end
-    end
-    data.projects = next(keep) and keep or vim.empty_dict()
-  end
-  data.githubRepoPaths = nil -- repository name -> local checkouts, of every project
+  data = require("xyno_sandbox.sanitize").claude_json(data, { project, vim.uv.fs_realpath(project) })
   local out = assert(vim.uv.fs_open(dest, "w", tonumber("600", 8)))
   vim.uv.fs_write(out, vim.json.encode(data))
   vim.uv.fs_close(out)
@@ -768,6 +771,14 @@ function M.wrap(cmd, project, tmp_dir, opts)
     if g.cleanup then
       items[#items + 1] = { g.path, "file" }
     end
+  end
+  -- private copies and the socket directory: a next launch removes them when this nvim dies without
+  -- running VimLeavePre (kill -9 leaves nvim's own tmpdir behind)
+  for _, f in ipairs(temp) do
+    items[#items + 1] = { f, "temp" }
+  end
+  if h.net_dir then
+    items[#items + 1] = { h.net_dir, "temp" }
   end
   h.reg = store.live_add(project, tostring(next_id) .. "-" .. tostring(vim.uv.hrtime()), items)
   h.release = function()

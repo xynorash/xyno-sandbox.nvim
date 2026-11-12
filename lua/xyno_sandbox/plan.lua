@@ -154,6 +154,19 @@ M.PROJECT_SECRET_GLOBS = {
   -- client configs that keep a password or token
   ".pgpass", ".my.cnf", ".mylogin.cnf", ".s3cfg", ".boto", ".yarnrc", ".sentryclirc", ".vault_pass", ".vault-password",
   "vault_pass*", "vault-password*", ".git-credentials", ".gem-credentials", "oauth2.json", "client_secrets.json",
+  -- tool tokens and logins, editor backups of secrets, key variants
+  ".vault-token", ".env~", ".env*~", ".secret", ".npmrc.*", ".npmrc~", ".pypirc.*", "auth.json", "rclone.conf", ".terraformrc",
+  "terraform.rc", "creds.json", "creds.yml", "creds.yaml", "oauth_token", "oauth_token.*", "oauth-token", "wallet.dat",
+  "sa.json", "serviceaccount.json", "*serviceaccount*.json", "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*",
+  "*.pem.*", "*.key.*", "*.key~", "*.keystore.*", "*.jks.*", ".s3cfg.*", ".pgpass.*", "secret", "private.key", "private_key",
+  "private_key.*", "privatekey.*",
+}
+-- Secrets that a base name alone cannot say (config.json): matched as the END of the path, lower-cased.
+M.PROJECT_SECRET_PATHS = {
+  ".docker/config.json", ".config/gh/hosts.yml", ".config/gh/config.yml", ".composer/auth.json", ".m2/settings.xml",
+  ".m2/settings-security.xml", ".gradle/gradle.properties", ".cargo/credentials", ".cargo/credentials.toml", ".kube/config",
+  ".config/gcloud/credentials.db", ".config/gcloud/application_default_credentials.json", ".azure/accesstokens.json",
+  ".bundle/config", ".config/pip/pip.conf", ".config/helm/repositories.yaml", ".config/rclone/rclone.conf",
 }
 -- Names that mean "a secret" only as a data file: token.txt, api_keys.json ... but not tokenizer.rs or
 -- api_key.rs (source code that merely handles keys stays readable).
@@ -172,7 +185,12 @@ M.PROJECT_SECRET_EXCEPT = {
   ".env.local.example", ".env.test.example", "example.env", "sample.env", "template.env",
 }
 -- Directories of that kind inside a project (hidden with an empty tmpfs).
-M.PROJECT_SECRET_DIRS = { ".aws", ".ssh", ".gnupg", ".kube", ".azure" }
+M.PROJECT_SECRET_DIRS = { ".aws", ".ssh", ".gnupg", ".kube", ".azure", ".envs", ".secrets" }
+-- Extra directory names that are hidden inside the TOOLCHAIN trees the sandbox shows from $HOME
+-- (never inside the project, where a `secrets/` directory can be source code).
+M.TREE_SECRET_DIRS = { ".aws", ".ssh", ".gnupg", ".kube", ".azure", ".envs", ".secrets", "secrets", "secret", ".secret", ".private", "private-keys" }
+-- Directories the tree walk does not enter: package caches and build output (large, and no credentials of the user's).
+M.TREE_SKIP = { registry = true, git = true, toolchains = true, node_modules = true, target = true, [".git"] = true, ["site-packages"] = true, pkg = true }
 
 -- Exceptions that are refused outright (a decision, not a policy knob).
 M.WRITABLE_FORBIDDEN = { "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/boot", "/proc", "/sys", "/dev", "/run", "/var/run", "/root" }
@@ -205,8 +223,12 @@ M.ENV_DANGEROUS_PREFIX = { "LD_", "DYLD_", "BASH_FUNC_" }
 -- Environment scrub: any variable whose name contains one of these ...
 M.ENV_CONTAINS = {
   "TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "APIKEY", "CREDENTIAL", "PRIVATE_KEY",
-  "ACCESS_KEY", "AUTH_SOCK", "AGENT_INFO", "PASSPHRASE", "ASKPASS",
+  "ACCESS_KEY", "AUTH_SOCK", "AGENT_INFO", "PASSPHRASE", "ASKPASS", "JWT", "COOKIE", "BEARER",
 }
+-- ... or ends with one of these (OPENROUTER_KEY, SENTRY_DSN, BW_SESSION, ...) ...
+M.ENV_SUFFIX = { "_KEY", "_DSN", "_SESSION", "_AUTH", "_PWD", "_PASS", "_SECRETS" }
+-- ... except these, which a desktop session sets and which hold no secret.
+M.ENV_SUFFIX_OK = { DESKTOP_SESSION = true }
 -- ... or starts with one of these ...
 M.ENV_PREFIX = {
   "AWS_", "AZURE_", "GOOGLE_", "GCP_", "GCLOUD_", "DOCKER_", "KUBE", "GH_", "GITHUB_", "GITLAB_",
@@ -218,7 +240,11 @@ M.ENV_EXACT = {
   XAUTHORITY = true, SSH_AUTH_SOCK = true, GPG_AGENT_INFO = true, KUBECONFIG = true,
   NVIM = true, NVIM_LISTEN_ADDRESS = true, -- the editor's RPC socket: full control of the editor
   MYSQL_PWD = true, SSHPASS = true, -- not a "PASSWORD" by name; a bare PWD would also be the cwd
+  KEY = true, DSN = true, SESSION = true, AUTH = true, SERPAPI = true, PASS = true, PGPASSFILE = true,
 }
+-- ... or whose VALUE looks like a secret (a known token format, a private key, credentials in a URL:
+-- see xyno_sandbox.scan). The name decides first; this catches a token under a name nobody listed.
+M.ENV_VALUE_SCAN = true
 -- Variables claude itself authenticates with. Kept only when login is NOT file based (no
 -- ~/.claude/.credentials.json); with file-based login claude never reads them.
 M.ENV_CLAUDE_AUTH = { "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN" }
@@ -229,7 +255,13 @@ M.SCAN_SKIP = {
   [".venv"] = true, venv = true, __pycache__ = true, [".mypy_cache"] = true, [".tox"] = true,
 }
 M.SCAN_DEPTH = 8 -- nested .git and workspace members are found down to this depth
+M.TREE_DIRS_EACH = 600
+M.TREE_MAX_DIRS = 2400
+M.TREE_CACHE_S = 15 -- a real filesystem walk of a tree is reused this long (when the tree's top directory is unchanged) -- directories looked at in all the trees together (a count, so the result is the same every time)
+M.TREE_DEPTH = 4 -- secret names are looked for this deep inside the toolchain trees shown from $HOME
 M.SCAN_MAX_DIRS = 20000 -- the walk stops here and the plan says so (plan.notes)
+M.SOCK_DEPTH = 24 -- sockets are looked for this deep, also inside target/ node_modules/ .cache/ .git/
+M.SOCK_MAX_DIRS = 30000
 
 M.SKIP_PERMISSIONS_FLAGS = { "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions" }
 
@@ -287,6 +319,7 @@ function M.real_probes()
       return uv.fs_realpath(p)
     end,
     --- { nlink, dev, ino } of a path (symlinks followed), or nil
+    tree_cache = true,
     stat_info = function(p)
       local st = uv.fs_stat(p)
       return st and { nlink = st.nlink, dev = st.dev, ino = st.ino } or nil
@@ -362,6 +395,12 @@ function M.scrub_names(env, file_login, extra)
     for _, s in ipairs(M.ENV_PREFIX) do
       hit = hit or u:sub(1, #s) == s
     end
+    for _, s in ipairs(M.ENV_SUFFIX) do
+      hit = hit or (#u > #s and u:sub(-#s) == s and not M.ENV_SUFFIX_OK[u])
+    end
+    if not hit and M.ENV_VALUE_SCAN and type(env[name]) == "string" and #env[name] >= 12 and not M.ENV_DANGEROUS_EXACT[u] then
+      hit = #require("xyno_sandbox.scan").text(env[name]) > 0
+    end
     for _, s in ipairs(extra.prefix or {}) do
       hit = hit or u:sub(1, #s) == s:upper()
     end
@@ -410,6 +449,9 @@ end
 --- Does base name `name` match a secret glob in `globs` (and no exception)? Case-insensitive.
 function M.is_secret_name(name, globs, except)
   local n = name:lower()
+  if n:sub(-4) == ".pub" then
+    return false -- a public key
+  end
   for _, e in ipairs(except or {}) do
     if n == e:lower() then
       return false
@@ -434,6 +476,7 @@ local function walk(probes, project, depth, opts)
   local gits, gseen, members = {}, {}, {}
   local secrets, links = {}, {}
   local visited, truncated = 0, false
+  local skip = M.SCAN_SKIP
   local function addgit(p)
     if not gseen[p] and probes.exists(p) then
       gseen[p] = true
@@ -443,6 +486,32 @@ local function walk(probes, project, depth, opts)
   local sdirs = {}
   for _, d in ipairs(opts.secret_dirs or {}) do
     sdirs[d] = true
+  end
+  local paths = {}
+  for _, sfx in ipairs(opts.paths or {}) do
+    paths[#paths + 1] = "/" .. sfx:lower()
+  end
+  -- Sockets are looked for EVERYWHERE below the project, also in the directories the rest of the walk
+  -- skips (target, node_modules, .cache, .git) and below its depth: a pathname socket is connectable
+  -- whatever its place. Own budget; the plan says when it ran out.
+  local sock_visited, sock_truncated = 0, false
+  local function sock_only(dir, d)
+    if sock_truncated then
+      return
+    end
+    if d > M.SOCK_DEPTH or sock_visited >= M.SOCK_MAX_DIRS then
+      sock_truncated = true
+      return
+    end
+    sock_visited = sock_visited + 1
+    for _, e in ipairs(probes.list(dir)) do
+      local name, ty = e[1], e[2]
+      if ty == "socket" then
+        secrets[#secrets + 1] = { path = dir .. "/" .. name, kind = "socket" }
+      elseif ty == "directory" then
+        sock_only(dir .. "/" .. name, d + 1)
+      end
+    end
   end
   local function scan(dir, d)
     local dotgit = dir .. "/.git"
@@ -459,7 +528,17 @@ local function walk(probes, project, depth, opts)
     for _, e in ipairs(entries) do
       local name, ty = e[1], e[2]
       if ty == "file" or ty == "link" then
-        if opts.secrets and M.is_secret_name(name, opts.secrets, opts.except) then
+        local hit = opts.secrets and M.is_secret_name(name, opts.secrets, opts.except)
+        if not hit and #paths > 0 then
+          local full = (dir .. "/" .. name):lower()
+          for _, sfx in ipairs(paths) do
+            if full:sub(-#sfx) == sfx then
+              hit = true
+              break
+            end
+          end
+        end
+        if hit then
           secrets[#secrets + 1] = { path = dir .. "/" .. name, kind = "file" }
         elseif ty == "link" then
           links[#links + 1] = dir .. "/" .. name
@@ -470,30 +549,86 @@ local function walk(probes, project, depth, opts)
         secrets[#secrets + 1] = { path = dir .. "/" .. name, kind = "dir" }
       end
     end
-    if d >= depth then
-      return
-    end
     for _, e in ipairs(entries) do
       local name, ty = e[1], e[2]
-      if ty == "directory" and not M.SCAN_SKIP[name] and not sdirs[name] then
-        visited = visited + 1
-        if visited > M.SCAN_MAX_DIRS then
-          truncated = true
-          return
-        end
+      if ty == "directory" and not sdirs[name] then
         local sub = dir .. "/" .. name
-        if name:sub(1, 1) ~= "." then
-          members[#members + 1] = { dir = sub, cargo = probes.exists(sub .. "/Cargo.toml") }
-        end
-        scan(sub, d + 1)
-        if truncated then
-          return
+        if d >= depth or skip[name] then
+          sock_only(sub, d + 1)
+        else
+          visited = visited + 1
+          if visited > M.SCAN_MAX_DIRS then
+            truncated = true
+            return
+          end
+          if name:sub(1, 1) ~= "." then
+            members[#members + 1] = { dir = sub, cargo = probes.exists(sub .. "/Cargo.toml") }
+          end
+          scan(sub, d + 1)
+          if truncated then
+            return
+          end
         end
       end
     end
   end
   scan(project, 0)
-  return { gits = gits, members = members, secrets = secrets, links = links, truncated = truncated }
+  return { gits = gits, members = members, secrets = secrets, links = links, truncated = truncated, sock_truncated = sock_truncated }
+end
+
+--- Secret names inside a toolchain tree shown from $HOME: breadth first (the top of the tree is always
+--- looked at), `budget.dirs` directories in all, deterministic (a count, never a clock).
+--- @return { path: string, kind: string }[] secrets, boolean truncated
+local tree_cache = {}
+local function walk_tree(probes, root, depth, opts, budget)
+  local secrets, truncated, used = {}, false, 0
+  local sdirs = {}
+  for _, d in ipairs(M.TREE_SECRET_DIRS) do
+    sdirs[d] = true
+  end
+  local paths = {}
+  for _, sfx in ipairs(M.PROJECT_SECRET_PATHS) do
+    paths[#paths + 1] = "/" .. sfx:lower()
+  end
+  local queue, qi = { { root, 0 } }, 1
+  while qi <= #queue do
+    local dir, d = queue[qi][1], queue[qi][2]
+    qi = qi + 1
+    if budget.dirs <= 0 or used >= M.TREE_DIRS_EACH then
+      truncated = true
+      break
+    end
+    budget.dirs = budget.dirs - 1
+    used = used + 1
+    for _, e in ipairs(probes.list(dir)) do
+      local name, ty = e[1], e[2]
+      local full = dir .. "/" .. name
+      if ty == "file" or ty == "link" then
+        local hit = M.is_secret_name(name, opts.globs, opts.except)
+        if not hit then
+          local low = full:lower()
+          for _, sfx in ipairs(paths) do
+            if low:sub(-#sfx) == sfx then
+              hit = true
+              break
+            end
+          end
+        end
+        if hit then
+          secrets[#secrets + 1] = { path = full, kind = "file" }
+        end
+      elseif ty == "socket" then
+        secrets[#secrets + 1] = { path = full, kind = "socket" }
+      elseif ty == "directory" then
+        if sdirs[name] then
+          secrets[#secrets + 1] = { path = full, kind = "dir" }
+        elseif d < depth and not M.TREE_SKIP[name] then
+          queue[#queue + 1] = { full, d + 1 }
+        end
+      end
+    end
+  end
+  return secrets, truncated
 end
 
 local function own_project_dirs(probes, home, project, cwd)
@@ -1304,6 +1439,55 @@ function M.build(input)
   for owner in pairs(other_owner) do
     hide_creds(owner)
   end
+  -- Secrets INSIDE the trees that are shown from $HOME (toolchains, the directories of $PATH entries
+  -- and their parents, policy.home_allow): ~/dotfiles/bin on $PATH shows ~/dotfiles whole, with
+  -- its .ssh, .npmrc and credentials. Hidden by name like the project's secrets; not by content.
+  plan.tree_secrets = {}
+  if policy.tree_secrets ~= false and (home_mode == "allowlist" or #plan.homes.allow > 0) then
+    local trees, tseen = {}, {}
+    for _, list in ipairs({ plan.home_allow, plan.homes.allow }) do
+      for _, a in ipairs(list) do
+        if not tseen[a.path] and probes.stat_type(a.path) == "directory" and not inside(project, a.path) then
+          tseen[a.path] = true
+          trees[#trees + 1] = a.path
+        end
+      end
+    end
+    local tglobs = vim.list_extend(copy_list(M.PROJECT_SECRET_GLOBS), policy.secret_files or {})
+    local texcept = copy_list(M.PROJECT_SECRET_EXCEPT)
+    for _, a in ipairs(policy.secret_allow or {}) do
+      if not a:find("/", 1, true) then
+        texcept[#texcept + 1] = a
+      end
+    end
+    local budget = { dirs = M.TREE_MAX_DIRS }
+    local gkey = table.concat(tglobs, ",") .. "|" .. table.concat(texcept, ",")
+    for _, t in ipairs(trees) do
+      local found, trunc
+      local st = probes.tree_cache and vim.uv.fs_stat(t)
+      local sig = st and (st.mtime.sec .. ":" .. st.mtime.nsec .. "|" .. gkey)
+      local c = sig and tree_cache[t]
+      if c and c.sig == sig and (vim.uv.hrtime() - c.at) / 1e9 < M.TREE_CACHE_S then
+        found, trunc = c.found, c.trunc
+      else
+        found, trunc = walk_tree(probes, t, M.TREE_DEPTH, { globs = tglobs, except = texcept }, budget)
+        if sig then
+          tree_cache[t] = { sig = sig, at = vim.uv.hrtime(), found = found, trunc = trunc }
+        end
+      end
+      for _, sec in ipairs(found) do
+        if not hseen[sec.path] then
+          hide(sec.path, "secret in the shown tree " .. t)
+          if hseen[sec.path] then
+            plan.tree_secrets[#plan.tree_secrets + 1] = sec.path
+          end
+        end
+      end
+      if trunc then
+        plan.notes[#plan.notes + 1] = ("the tree %s is large: secret names deeper in it were not looked for"):format(t)
+      end
+    end
+  end
   if cargo_home and cargo_home ~= home .. "/.cargo" then
     hide(cargo_home .. "/credentials", "credentials")
     hide(cargo_home .. "/credentials.toml", "credentials")
@@ -1370,7 +1554,12 @@ function M.build(input)
     end
     w = walk(probes, project, tonumber(policy.scan_depth) or M.SCAN_DEPTH, {
       secrets = globs, except = except, secret_dirs = want_secrets and M.PROJECT_SECRET_DIRS or nil,
+      paths = want_secrets and M.PROJECT_SECRET_PATHS or nil,
     })
+  end
+  if w.sock_truncated then
+    plan.notes[#plan.notes + 1] = ("socket search stopped (more than %d directories or deeper than %d levels below the project):"
+      .. " a unix socket further down stays connectable from inside the sandbox"):format(M.SOCK_MAX_DIRS, M.SOCK_DEPTH)
   end
   if w.truncated then
     plan.notes[#plan.notes + 1] = ("directory walk stopped after %d directories: deeper .git and member"
@@ -1416,7 +1605,8 @@ function M.build(input)
   if not shared and not at_home and probes.scan_project then
     local content = policy.content_scan ~= false
     local sc = probes.scan_project(project, { content = content }) or {}
-    plan.scan = { enabled = content, files = sc.files or 0, truncated = sc.truncated or false, why = sc.why, hits = #(sc.hits or {}) }
+    plan.scan = { enabled = content, files = sc.files or 0, truncated = sc.truncated or false, why = sc.why, hits = #(sc.hits or {}),
+      unread = sc.unread }
     multi = sc.multi or {}
     if sc.truncated then
       plan.notes[#plan.notes + 1] = ("project scan stopped (%s): files beyond that were not checked for secrets or hard links"):format(sc.why or "limit")
@@ -1425,6 +1615,53 @@ function M.build(input)
       local rel = h.path:sub(#project + 2)
       if not rel_allow[rel] then
         hide(h.path, "project content: looks like a " .. h.kind)
+      end
+    end
+  end
+  if probes.stat_info and #multi > 0 then
+    -- a project file that is a hard link of a credential in $HOME (or another owner's home), whether
+    -- or not that credential is mounted at all: reading the link reads the credential
+    local by_inode = {}
+    for _, m in ipairs(multi) do
+      by_inode[tostring(m.dev) .. ":" .. tostring(m.ino)] = by_inode[tostring(m.dev) .. ":" .. tostring(m.ino)] or {}
+      table.insert(by_inode[tostring(m.dev) .. ":" .. tostring(m.ino)], m.path)
+    end
+    local bases = { home }
+    for owner in pairs(other_owner) do
+      bases[#bases + 1] = owner
+    end
+    local pw = input.passwd_home and M.normalize(input.passwd_home)
+    if pw and pw ~= home then
+      bases[#bases + 1] = pw
+    end
+    local nfound = 0
+    local function check(p, d)
+      if nfound > 600 then
+        return
+      end
+      local t = probes.stat_type(p)
+      if t == "file" then
+        nfound = nfound + 1
+        local info = probes.stat_info(p)
+        local names = info and info.nlink and info.nlink > 1 and by_inode[tostring(info.dev) .. ":" .. tostring(info.ino)]
+        for _, name in ipairs(names or {}) do
+          hide(name, "hard link of the credential " .. p)
+          plan.hardlinks[#plan.hardlinks + 1] = { path = p, links = info.nlink, masked = 1, unaccounted = 0, alias = name }
+        end
+      elseif t == "directory" and d < 4 then
+        for _, e in ipairs(probes.list(p)) do
+          check(p .. "/" .. e[1], d + 1)
+        end
+      end
+    end
+    for _, base in ipairs(bases) do
+      for _, rel in ipairs(M.HIDDEN) do
+        check(base .. rel, 0)
+      end
+      for _, g in ipairs(M.HIDDEN_GLOBS) do
+        for _, p in ipairs(probes.glob(base .. g)) do
+          check(p, 0)
+        end
       end
     end
   end

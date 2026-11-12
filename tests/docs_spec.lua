@@ -6,7 +6,7 @@ local sb = require("xyno_sandbox")
 
 describe("docs match the code", function()
   local KEYS = { "readonly", "writable", "hidden", "guard_dirs", "guard_files", "scrub", "scan_depth", "home_allow", "keep_run",
-    "project_secrets", "secret_files", "secret_allow", "symlinks", "content_scan", "claude_share" }
+    "project_secrets", "secret_files", "secret_allow", "symlinks", "content_scan", "claude_share", "tree_secrets" }
 
   it("every policy key is accepted by setup() and appears in the README and the help file", function()
     local readme = io.open(H.repo .. "/README.md"):read("*a")
@@ -17,7 +17,8 @@ describe("docs match the code", function()
     end
     local errs = sb.validate_opts({ policy = { bogus_key = true } })
     H.match(errs[1], "unknown policy key", true)
-    H.eq({}, sb.validate_opts({ policy = { content_scan = false } }))
+    H.eq({}, sb.validate_opts({ policy = { content_scan = false, tree_secrets = false } }))
+    H.match(sb.validate_opts({ policy = { tree_secrets = "no" } })[1], "tree_secrets must be a boolean", true)
     H.eq({}, sb.validate_opts({ policy = { claude_share = { "settings.json" } } }))
   end)
 
@@ -44,5 +45,17 @@ describe("docs match the code", function()
     H.eq(256 * 1024, scan.MAX_FILE_BYTES)
     H.eq(400, scan.MAX_MS)
     H.eq(24 * 1024 * 1024, scan.MAX_TOTAL_BYTES)
+  end)
+
+  it("the documented search budgets (sockets, shown trees) are the real ones", function()
+    local text = H.docs_text()
+    H.eq(30000, plan.SOCK_MAX_DIRS)
+    H.eq(24, plan.SOCK_DEPTH)
+    H.eq(600, plan.TREE_DIRS_EACH)
+    H.eq(2400, plan.TREE_MAX_DIRS)
+    H.eq(4, plan.TREE_DEPTH)
+    for _, s in ipairs({ "30000 directories", "24 levels", "600 directories per tree and 2400 in all", "four levels" }) do
+      H.match(text, s, true, s)
+    end
   end)
 end)

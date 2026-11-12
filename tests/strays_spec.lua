@@ -83,7 +83,9 @@ describe("a shared directory as the project", function()
     sb.config.network = "open"
     local tmp = H.tmpdir()
     local unique = "xyno-created-inside-" .. tostring(vim.uv.hrtime())
+    local prev_cwd = vim.fn.chdir("/tmp") -- (a checkout below /tmp: the default cwd would not exist in the sandbox)
     local cmd, err, h = sb.wrap({ "bash", "-c", "echo x > /tmp/" .. unique .. " 2>/dev/null; echo done" }, "/tmp", tmp)
+    vim.fn.chdir(prev_cwd)
     H.ok(cmd, err)
     for _, a in ipairs(cmd) do
       for _, n in ipairs(STRAYS) do

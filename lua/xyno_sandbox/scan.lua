@@ -59,8 +59,8 @@ M.PATTERNS = {
   { "npm token", "npm_[%w]+", 40 },
   { "SendGrid key", "SG%.[%w_%-]+%.[%w_%-]+", nil, function(m) return #m == 69 end },
   { "private key", "%-%-%-%-%-BEGIN [%u ]*PRIVATE KEY[%u ]*%-%-%-%-%-" },
-  { "credentials in a URL", "https?://[^/%s:@\"']+:[^/%s@\"']+@[%w%.%-]+", nil, function(m)
-    local pw = m:match("^https?://[^:]+:([^@]+)@")
+  { "credentials in a URL", "%a[%w%+%.%-]*://[^/%s:@\"']*:[^/%s@\"']+@[%w%.%-]+", nil, function(m)
+    local pw = m:match("^%a[%w%+%.%-]*://[^:/]*:([^@]+)@")
     if not pw or #pw < 8 or pw:find("[%$%{%}<>%%]") then
       return false
     end
@@ -73,8 +73,19 @@ M.PATTERNS = {
     return true
   end },
 }
--- Lines that are documentation of a format, not a secret.
-local PLACEHOLDER = { "example", "dummy", "placeholder", "your_", "your-", "<your", "xxxxxxxx", "fake", "redacted" }
+-- A MATCH that spells out that it is not real ("AKIAIOSFODNN7EXAMPLE", "ghp_xxxxxxxx...") is
+-- documentation of a format. Judged on the matched token only: a real token on a line that says
+-- "example" (a comment, a repo or a host called example) is still a secret.
+local PLACEHOLDER = { "example", "dummy", "placeholder", "your_", "your-", "xxxxxxxx", "fake", "redacted" }
+local function placeholder(m)
+  local low = m:lower()
+  for _, ph in ipairs(PLACEHOLDER) do
+    if low:find(ph, 1, true) then
+      return true
+    end
+  end
+  return false
+end
 
 --- Kinds of secret found in `text` (a list without duplicates). Never returns the secret itself.
 --- @param text string
@@ -82,32 +93,27 @@ local PLACEHOLDER = { "example", "dummy", "placeholder", "your_", "your-", "<you
 function M.text(text)
   local kinds, seen = {}, {}
   for line in (text .. "\n"):gmatch("([^\n]*)\n") do
-    if #line <= 4000 then -- a minified line is not a config line
-      local low = line:lower()
-      local doc = false
-      for _, ph in ipairs(PLACEHOLDER) do
-        doc = doc or low:find(ph, 1, true) ~= nil
-      end
-      if not doc then
-        for _, pat in ipairs(M.PATTERNS) do
-          local kind = pat[1]
-          if not seen[kind] then
-            local init = 1
-            while true do
-              local i, j = line:find(pat[2], init)
-              if not i then
-                break
-              end
-              local m = line:sub(i, j)
-              local ok = boundary(line, i, j) and (not pat[3] or #m == pat[3]) and (not pat[4] or pat[4](m))
-              if ok then
-                seen[kind] = true
-                kinds[#kinds + 1] = kind
-                break
-              end
-              init = j + 1
-            end
+    for _, pat in ipairs(M.PATTERNS) do
+      local kind = pat[1]
+      if not seen[kind] then
+        local init = 1
+        while true do
+          local i, j = line:find(pat[2], init)
+          if not i then
+            break
           end
+          local m = line:sub(i, j)
+          local ok = boundary(line, i, j) and (not pat[3] or #m == pat[3]) and (not pat[4] or pat[4](m))
+          -- the URL pattern judges its own password part (the host may well be example.com)
+          if ok and kind ~= "credentials in a URL" and placeholder(m) then
+            ok = false
+          end
+          if ok then
+            seen[kind] = true
+            kinds[#kinds + 1] = kind
+            break
+          end
+          init = j + 1
         end
       end
     end
@@ -127,7 +133,7 @@ function M.project(project, opts)
   local uv = vim.uv
   local want_content = opts.content ~= false
   local t0 = uv.hrtime()
-  local res = { hits = {}, multi = {}, files = 0, truncated = false }
+  local res = { hits = {}, multi = {}, files = 0, truncated = false, unread = { large = 0, binary = 0, extension = 0 } }
   local total = 0
   local function out_of_budget()
     if res.files >= M.MAX_FILES then
@@ -167,13 +173,22 @@ function M.project(project, opts)
               res.multi[#res.multi + 1] = { path = path, dev = st.dev, ino = st.ino, nlink = st.nlink }
             end
             local ext = name:match("%.([%w]+)$")
+            if want_content and st.size > M.MAX_FILE_BYTES then
+              res.unread.large = res.unread.large + 1
+            elseif want_content and ext and M.SKIP_EXT[ext:lower()] then
+              res.unread.extension = res.unread.extension + 1
+            end
             if want_content and st.size > 0 and st.size <= M.MAX_FILE_BYTES and not (ext and M.SKIP_EXT[ext:lower()]) then
               local key = path
               local c = cache[key]
               local sig = st.mtime.sec .. ":" .. st.mtime.nsec .. ":" .. st.size
               local kinds
+              local binary = false
               if c and c.sig == sig then
-                kinds = c.kinds
+                kinds, binary = c.kinds, c.binary
+                if binary then
+                  res.unread.binary = res.unread.binary + 1
+                end
               else
                 kinds = {}
                 local f = io.open(path, "rb")
@@ -183,9 +198,12 @@ function M.project(project, opts)
                   total = total + #data
                   if not data:sub(1, 1024):find("%z") then
                     kinds = M.text(data)
+                  else
+                    binary = true
+                    res.unread.binary = res.unread.binary + 1
                   end
                 end
-                cache[key] = { sig = sig, kinds = kinds }
+                cache[key] = { sig = sig, kinds = kinds, binary = binary }
               end
               if #kinds > 0 then
                 res.hits[#res.hits + 1] = { path = path, kind = kinds[1] }

@@ -58,6 +58,10 @@ local function make_root()
       cands[#cands + 1] = c
     end
   end
+  -- short paths first: the specs bind unix sockets below $HOME, and a socket path is limited to 107 bytes
+  table.sort(cands, function(a, b)
+    return (#a > 44 and 1 or 0) < (#b > 44 and 1 or 0)
+  end)
   for _, base in ipairs(cands) do
     if base and base ~= "" and not bad_base(vim.uv.fs_realpath(base) or base) and writable_dir(base) then
       local root = vim.uv.fs_mkdtemp(base .. "/xyno-sandbox-test-XXXXXX")
@@ -88,7 +92,12 @@ local function child_env(root, real_home)
   write_file(home .. "/.claude.json", '{"numStartups":1}\n')
   -- scratch space stays under /tmp (several specs rely on /tmp being the host's tmpfs-hidden place),
   -- in a directory of this run so that its processes can be told apart
-  local tmp = assert(vim.uv.fs_mkdtemp((vim.uv.os_getenv("TMPDIR") or "/tmp") .. "/xyno-run-XXXXXX"))
+  -- The caller's TMPDIR is NOT honoured: a deep one makes every socket path of the net proxy exceed
+  -- the 107 bytes of AF_UNIX, and the run would depend on the shell it was started from.
+  local tmp = vim.uv.fs_mkdtemp("/tmp/xyno-run-XXXXXX")
+  if not tmp then
+    tmp = assert(vim.uv.fs_mkdtemp((vim.uv.os_getenv("TMPDIR") or "/var/tmp") .. "/xyno-run-XXXXXX"))
+  end
   local env = {
     HOME = home, TMPDIR = tmp, XYNO_TEST_ROOT = root, XYNO_TEST_SCRATCH = tmp,
     XYNO_TEST_WORKER = "1", XDG_CONFIG_HOME = home .. "/.config", XDG_CACHE_HOME = home .. "/.cache",
@@ -99,7 +108,12 @@ local function child_env(root, real_home)
   -- check plans and command lines still run, against a stub that always fails.
   local probe_cmd = require("xyno_sandbox.plan").probe_argv(true)
   local pr = vim.fn.executable("bwrap") == 1 and vim.system(probe_cmd, { text = true }):wait(15000) or nil
+  if pr and pr.code == 0 then
+    -- bubblewrap works here: a spec that then finds it unusable is a failure, not a skip
+    env.XYNO_TEST_SANDBOX_OK = "1"
+  end
   if not pr or pr.code ~= 0 then
+    env.XYNO_TEST_SANDBOX_OK = "" -- (an outer run's mark must not survive into a nested one)
     env.XYNO_TEST_NO_SANDBOX = "1"
     io.stdout:write("NOTE no working bubblewrap here: the specs that run commands inside a sandbox are skipped\n")
     if vim.fn.executable("bwrap") ~= 1 then
@@ -148,9 +162,14 @@ local function reap(root, tmp)
   for _, s in ipairs(list) do
     vim.uv.kill(s[1], 9)
   end
-  vim.wait(300)
+  -- wait until they are really gone (a loaded machine can take longer than a fixed pause)
+  vim.wait(5000, function()
+    return #survivors(root, tmp) == 0
+  end, 50)
   return list
 end
+
+local FILE_TIMEOUT_MS = tonumber(vim.env.XYNO_TEST_FILE_TIMEOUT_MS) or 240000
 
 local function run_all(files)
   local root, real_home = make_root()
@@ -162,7 +181,11 @@ local function run_all(files)
     table.sort(files)
   end
   for _, f in ipairs(files) do
-    local r = vim.system({ vim.v.progpath, "--headless", "-l", repo .. "/tests/run.lua", f }, { text = true, env = env }):wait(600000)
+    local r = vim.system({ vim.v.progpath, "--headless", "-l", repo .. "/tests/run.lua", f }, { text = true, env = env }):wait(FILE_TIMEOUT_MS)
+    if r.code == 124 or r.signal == 15 or r.signal == 9 then
+      total.failed = total.failed + 1
+      io.stdout:write(("FAIL %s timed out after %d s (killed): a hang is a failure, not a pause\n"):format(vim.fs.basename(f), FILE_TIMEOUT_MS / 1000))
+    end
     io.stdout:write(r.stdout or "")
     io.stderr:write(r.stderr or "")
     -- the LAST RESULT line is the file's own (a failure message may quote a nested run's)
@@ -173,7 +196,7 @@ local function run_all(files)
     for k in pairs(total) do
       total[k] = total[k] + tonumber((last or ""):match(k .. "=(%d+)") or 0)
     end
-    if r.code ~= 0 and not (r.stdout or ""):find("RESULT", 1, true) then
+    if r.code ~= 0 and not (r.stdout or ""):find("RESULT", 1, true) and not (r.code == 124 or r.signal == 15 or r.signal == 9) then
       total.failed = total.failed + 1
     end
     for n in pairs(strays()) do

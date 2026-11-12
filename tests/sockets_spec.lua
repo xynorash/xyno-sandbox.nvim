@@ -42,6 +42,9 @@ local function listen(path)
   vim.fn.mkdir(vim.fs.dirname(path), "p")
   local pipe = vim.uv.new_pipe(false)
   local ok, err = pipe:bind(path)
+  if ok and not vim.uv.fs_stat(path) then
+    ok, err = nil, "bind succeeded but no socket file exists (path over the sockaddr_un limit)"
+  end
   if not ok then
     pipe:close()
     return nil, err
@@ -122,12 +125,15 @@ describe("host sockets", function()
       local c = canaries(project)
       -- an ssh-agent style socket in a place no directory rule covers: found through $SSH_AUTH_SOCK
       local home = vim.uv.os_homedir()
-      local agent_dir = home .. "/.cache/xyno-canary-agent-" .. rnd
+      local agent_dir = home .. "/.cache/xc-a-" .. rnd
       cleanup[#cleanup + 1] = function()
         vim.fn.delete(agent_dir, "rf")
       end
-      local agent = listen(agent_dir .. "/agent.sock")
-      setenv("SSH_AUTH_SOCK", agent or "")
+      local agent = listen(agent_dir .. "/a.sock")
+      if not agent then
+        return require("xynotest.harness").skip("$HOME is so deep that a unix socket path below it exceeds 107 bytes")
+      end
+      setenv("SSH_AUTH_SOCK", agent)
       local roots = { "/run", "/var", "/etc", "/tmp", "/mnt", "/srv", "/opt", "/media", agent_dir, vim.fs.dirname(c.tmp) }
       local found, plan = sweep(project, roots)
       local allowed = { [plan.net.sock] = true }
@@ -180,11 +186,14 @@ describe("host sockets", function()
   it("a socket named by $SSH_AUTH_SOCK / $XDG_RUNTIME_DIR outside the masked directories is hidden (denylist view)", function()
     sb.config.home = "denylist"
     local home = vim.uv.os_homedir()
-    local dir = home .. "/.cache/xyno-canary-env-" .. rnd
+    local dir = home .. "/.cache/xc-e-" .. rnd
     cleanup[#cleanup + 1] = function()
       vim.fn.delete(dir, "rf")
     end
-    local agent = listen(dir .. "/agent.sock")
+    local agent = listen(dir .. "/a.sock")
+    if not agent then
+      return require("xynotest.harness").skip("$HOME is so deep that a unix socket path below it exceeds 107 bytes")
+    end
     setenv("SSH_AUTH_SOCK", agent or "")
     setenv("XDG_RUNTIME_DIR", dir)
     local p = sb.plan({ "agent" }, H.tmpdir(), H.tmpdir())
