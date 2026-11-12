@@ -71,9 +71,17 @@ end
 
 M.net = false -- set by status(): probe with --unshare-net too (the network filter needs it)
 
-local function key()
+--- The bwrap that is checked AND launched: its absolute path (nil when there is none).
+function M.bwrap_path()
   local p = vim.fn.exepath("bwrap")
-  return (p ~= "" and p or "bwrap") .. (M.net and "+net" or "")
+  if p == "" then
+    return nil
+  end
+  return vim.fn.fnamemodify(p, ":p")
+end
+
+local function key()
+  return (M.bwrap_path() or "bwrap") .. (M.net and "+net" or "")
 end
 
 local function fresh(entry)
@@ -107,7 +115,7 @@ local function record(k, r)
 end
 
 local function spawn(opts, on_exit)
-  local argv = plan.probe_argv(M.net)
+  local argv = plan.probe_argv(M.net, M.bwrap_path())
   local ok, obj = pcall(vim.system, argv, { text = true, timeout = M.timeout }, on_exit)
   if not ok then
     return nil, tostring(obj)

@@ -1022,6 +1022,8 @@ function M.build(input)
   local plan = {
     version = 2,
     mode = "bwrap",
+    bwrap = input.bwrap, -- absolute path of the binary the readiness check ran (M.argv)
+    env_bin = input.env_bin,
     project = project,
     tmp_dir = tmp_dir,
     home = home,
@@ -2153,8 +2155,8 @@ done
 exec "$@"]]
 
 --- bwrap flags of the isolation, without any path (also what the readiness probe runs).
-function M.probe_argv(net)
-  local a = { "bwrap" }
+function M.probe_argv(net, bwrap)
+  local a = { bwrap or "bwrap" }
   vim.list_extend(a, M.ISOLATION_FLAGS)
   if net then
     a[#a + 1] = "--unshare-net"
@@ -2294,11 +2296,13 @@ end
 function M.argv(plan)
   assert(plan.mode == "bwrap", "plan.argv: not a bwrap plan")
   assert(plan.empty_file or (#plan.guard_files == 0 and not plan.needs.empty_file), "plan.argv: aux.empty is missing")
-  local a = { "env", "-i" }
+  -- `env -i` starts bwrap with NO $PATH: env then searches libc's default path only, so the bwrap that
+  -- the availability check found (NixOS, Guix, ~/.local/bin, Homebrew) is named by its ABSOLUTE path.
+  local a = { plan.env_bin or "env", "-i" }
   for _, kv in ipairs(plan.env_pass) do
     a[#a + 1] = kv[1] .. "=" .. kv[2]
   end
-  a[#a + 1] = "bwrap"
+  a[#a + 1] = plan.bwrap or "bwrap"
   for _, op in ipairs(M.ops(plan)) do
     vim.list_extend(a, op.args)
   end

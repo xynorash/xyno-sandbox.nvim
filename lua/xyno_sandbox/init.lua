@@ -404,6 +404,7 @@ function M.plan(cmd, project, tmp_dir, opts)
   end
   return plan_mod.build({
     cmd = cmd, project = project, tmp_dir = tmp_dir, cwd = opts.cwd or vim.uv.cwd(), env = env,
+    bwrap = probe.bwrap_path(), env_bin = (vim.fn.exepath("env") ~= "" and vim.fn.fnamemodify(vim.fn.exepath("env"), ":p") or nil),
     home = home, passwd_home = pwd and pwd.homedir, uid = uid, config = cfg_view(), aux = opts.aux or aux_paths(), exceptions = excs, nvim = vim.v.progpath,
     state_dir = store.dir(),
   })
