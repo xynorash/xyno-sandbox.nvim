@@ -1201,6 +1201,7 @@ describe("headless skip", function()
 
   it("need_sandbox skips with the bwrap message when a user namespace cannot be created", function()
     -- a fake bwrap that fails like a CI container without userns
+    require("xyno_sandbox.probe").reset() -- (a runner without bwrap seeds the verdict; this spec needs the real one)
     local bin = H.tmpdir()
     write(bin .. "/bwrap", "#!/bin/sh\necho 'bwrap: No permissions to create a new namespace' >&2\nexit 1\n")
     vim.uv.fs_chmod(bin .. "/bwrap", tonumber("755", 8))

@@ -8,6 +8,7 @@ local repo = vim.fs.dirname(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)))
 if repo == "" or repo == "." then
   repo = vim.uv.cwd()
 end
+vim.opt.runtimepath:prepend(repo)
 
 -- Names that sandbox guards create in a project directory. A spec that leaves one in /tmp breaks
 -- every unrelated spec and tool that looks for a repository or an .envrc there, so a new one fails the run.
@@ -93,6 +94,20 @@ local function child_env(root, real_home)
     XYNO_TEST_WORKER = "1", XDG_CONFIG_HOME = home .. "/.config", XDG_CACHE_HOME = home .. "/.cache",
     XDG_DATA_HOME = home .. "/.local/share", XDG_STATE_HOME = home .. "/.local/state",
   }
+  -- No working bubblewrap (no binary, no user namespaces: a CI container): the specs that run
+  -- commands inside a sandbox skip themselves (helpers.need_sandbox); the ones that only build and
+  -- check plans and command lines still run, against a stub that always fails.
+  local probe_cmd = require("xyno_sandbox.plan").probe_argv(true)
+  local pr = vim.fn.executable("bwrap") == 1 and vim.system(probe_cmd, { text = true }):wait(15000) or nil
+  if not pr or pr.code ~= 0 then
+    env.XYNO_TEST_NO_SANDBOX = "1"
+    io.stdout:write("NOTE no working bubblewrap here: the specs that run commands inside a sandbox are skipped\n")
+    if vim.fn.executable("bwrap") ~= 1 then
+      write_file(root .. "/fakebin/bwrap", "#!/bin/sh\necho 'bwrap: not installed (test stub)' >&2\nexit 1\n")
+      vim.uv.fs_chmod(root .. "/fakebin/bwrap", tonumber("755", 8))
+      env.PATH = root .. "/fakebin:" .. (vim.env.PATH or "")
+    end
+  end
   for var, rel in pairs({ CARGO_HOME = "/.cargo", RUSTUP_HOME = "/.rustup" }) do
     if not vim.env[var] and real_home ~= "" and vim.uv.fs_stat(real_home .. rel) then
       env[var] = real_home .. rel
@@ -194,6 +209,19 @@ end
 
 local harness = require("xynotest.harness")
 harness.install()
+if vim.env.XYNO_TEST_NO_SANDBOX == "1" then
+  -- plan/argv structure specs need status() to say "bwrap"; the behavioural ones skip on the real run
+  -- (until a spec resets the probe cache: the probe specs then see the real, failing verdict)
+  local probe = require("xyno_sandbox.probe")
+  local seeded, real_cached, real_reset = true, probe.cached, probe.reset
+  probe.cached = function()
+    return seeded and { ok = true, at = os.time() } or real_cached()
+  end
+  probe.reset = function()
+    seeded = false
+    return real_reset()
+  end
+end
 local counts
 local ok, err = xpcall(dofile, debug.traceback, spec)
 if not ok then
