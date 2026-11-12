@@ -140,7 +140,7 @@ describe("every entry of the policy tables is effective in a real run", function
       except[e] = true
     end
     local n = 0
-    for _, g in ipairs(plan.PROJECT_SECRET_GLOBS) do
+    for _, g in ipairs(EXPECT.PROJECT_SECRET_GLOBS) do
       local name = g:gsub("%*", "x")
       if not except[name] and not name:find("[%[%?]") then
         n = n + 1
@@ -300,6 +300,7 @@ describe("every entry of the policy tables is effective in a real run", function
       HOME_READONLY = plan.HOME_READONLY,
       PROJECT_READONLY = plan.PROJECT_READONLY,
       MEMBER_READONLY = plan.MEMBER_READONLY,
+      PROJECT_SECRET_GLOBS = plan.PROJECT_SECRET_GLOBS,
       PROJECT_SECRET_DIRS = plan.PROJECT_SECRET_DIRS,
       PROJECT_SECRET_PATHS = plan.PROJECT_SECRET_PATHS,
       MASKED_SYSTEM = plan.MASKED_SYSTEM,
