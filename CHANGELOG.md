@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Seventh hardening round (verifier findings on the sixth)
+
+Each fix has a spec in `tests/round7_spec.lua` (or `tests/tables_spec.lua`) that failed before it: the new spec file was run against the previous commit in a copy, 24 of its 37 specs failed there (the other 13 test code that already existed and are for the mutation survivors).
+
+- **Sweep gap (confirmed)**: the end-of-run sweep never entered `target/`, `node_modules/`, `.venv/`, `venv/`, `__pycache__/`, so a planted `.envrc`, `.cargo/config.toml` or nested `.git` in them stayed with no quarantine and no mark; the same for a name more than 16 levels deep. Those directories are now walked in a second pass with a budget of their own (`guard.SKIP_MAX_DIRS` = 4000, `guard.SKIP_MAX_MS` = 700) and the depth is 40.
+- **False claim (confirmed)**: the README said directories past the walk bounds were reported; `sweep()` never read `truncated`. The snapshot now records `truncated`, `skip_truncated`, `depth_cut`; `guard.compare` returns `incomplete` (the bound tripped at the end but not at launch: fail closed, the project is marked, the launch is refused, `:XynoSandboxReview` names the bound) and `partial` (already tripped at launch: INFO notice, a name planted beyond the bound is not found; the README says so).
+- **Uncovered auto-exec names (confirmed)**: `.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.pnpmfile.cjs`, `.mvn`, `.dir-locals.el`, `.lvimrc`, `.githooks` are guarded / locked / swept (README for the exact split); `conftest.py`, `bunfig.toml`, `lefthook.yml` are agent-editable and reported. `.gradle/init.d` is NOT covered: `.gradle/` is the build cache and is written on every build.
+- **False positive that deleted the user's files (confirmed)**: `mv sub sub_old` made the sweep see `sub_old/.cargo`, `.envrc` as new, quarantine and delete them and mark the project. Protected names are now matched by device and inode: the same inode under a new path is `moved`; the empty placeholders of the masks that the rename left behind are removed.
+- **Mutation survivors**: (1) a hidden DIRECTORY inside a read-only directory (`policy.readonly = {"~/.config"}`, `~/.config/gcloud/sf1`): a plan spec on the `--tmpfs` op and a real-run spec, plus the `and` / `or` condition; (2) `guard.dir_sig` (recursion at the top and below, depth 6, 400 entries); (3) both guards for a non-object `~/.claude.json` (`sanitize.claude_json` and `write_scrubbed_claude_json`) each have a spec that the other cannot satisfy; the modes of the quarantine directory (0700), its files and the dirty mark (0600); the copy caps (depth 8, entries, file size) and the failed-removal flag; the Hugging Face (37) and SendGrid (69) length predicates. Not addressed: `scan.lua` `st.size > 0` (an empty file has nothing to find), `plan.lua` subdirectory budget lines and `net.lua` lines the verifier listed as untested without a demonstrated defect, and the cosmetic ones (message text, plurals).
+
+Correction to the sixth round: "388 killed, 0 survived" holds for the hand-written mutants listed there, not for operator-generated ones. An independent run of 477 operator mutants (all 327 on lines changed since 663d663 plus 150 older lines) left 155 surviving the full suite; most are cosmetic, the real gaps are fixed below.
+
+Mutation check, round 7: 39 mutants applied one at a time to a copy (`lua/`), run against `round7_spec.lua` and `tables_spec.lua`: 38 killed, 1 survived. Three survived the first run and led to specs: `dirsig_entries` (400 entries bound), `depth_off_by1` (`>=` against `>` at `MAX_DEPTH`) and the SendGrid / Hugging Face bounds; the remaining survivor, `ident_dev` (the device left out of the inode key), cannot be killed on one filesystem (it needs two devices with the same inode number; a mount needs privileges the specs do not have). The rest of the 477-mutant independent run (message text, plurals, `notify` calls, equivalent `find(..., 1, true)`) was not worked through; 155 survivors were reported there and the real gaps among them are the ones above.
+
+| mutants | edit | result |
+|---|---|---|
+| `hidden_dir_branch`, `hidden_and_or` | the `--tmpfs` hide of a directory inside a read-only one removed / `and` to `or` | killed (2) |
+| `dirsig_top_rec`, `dirsig_recurse`, `dirsig_depth`, `dirsig_entries` | no listing / no recursion / depth 60 / 4000 entries | killed (4) |
+| `cj_sanitize_or`, `cj_init_or`, `cj_init_islist` | either non-object guard weakened or removed | killed (3) |
+| `chmod_qdir`, `chmod_qfile`, `chmod_dirty` | 0700 / 0600 / 0600 removed | killed (3) |
+| `copy_depth`, `copy_budget`, `copy_sizecut`, `rc_ok`, `cut_or` | quarantine copy caps and failure flags | killed (5) |
+| `skip_pass_off`, `skip_budget_main`, `time_bound_off`, `depth_cut_off`, `depth_off_by1` | no second pass / shares the main budget / time bound off / depth cut not recorded / off by one | killed (5) |
+| `partial_always`, `incomplete_always`, `dirty_incomplete_off` | a bound never marks / always marks / the mark is not written | killed (3) |
+| `moved_off`, `moved_not_removed`, `leftover_dir_off`, `leftover_file_off` | rename not recognised / reported as removed too / placeholders not cleaned | killed (4) |
+| `watch_extra_off`, `githooks_ro`, `guard_npmrc`, `review_conftest`, `mask_mvn` | a new name removed from its list | killed (5) |
+| `hf_len`, `hf_len2`, `sg_eq`, `sg_eq2` | token length predicates moved by one | killed (4) |
+| `ident_dev` | inode key without the device | survived (1, not killable on one filesystem) |
+
 ### Sixth hardening round
 
 Findings of a review and independent verifiers, each reproduced; every fix has a spec in `tests/round6_spec.lua` or `tests/tables_spec.lua` that failed before it (checked against the previous commit for H1) and a mutation check on a copy (table at the end of this section).

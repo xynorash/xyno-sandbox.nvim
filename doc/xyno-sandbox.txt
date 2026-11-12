@@ -314,6 +314,16 @@ hostname allowlist.
     quarantine (stdpath("state")/xyno-sandbox/quarantine), removed from the
     project and the project is marked: the next launch is refused until
     |:XynoSandboxReview| `clear`. Nothing is swept after kill -9 of Neovim.
+    The sweep also enters target/, node_modules/ and virtualenvs (own budget:
+    4000 directories, 0.7 s). When the walk at the end of a run stops at a
+    bound it did not stop at at launch, the project is marked for review too
+    (the tree grew past what can be checked); a tree that was already too big
+    is only reported, and a name planted beyond the bound is not found. A
+    directory renamed during the run (mv sub sub_old) is recognised by inode
+    and not quarantined. Also covered: .githooks .mvn .pnpmfile.cjs
+    .dir-locals.el .lvimrc (read-only), .npmrc .yarnrc .yarnrc.yml (hidden
+    when present, guarded when absent). Not covered: .gradle/ (the build
+    cache).
     Build and CI files (Makefile, package.json, Cargo.toml, build.rs,
     .github/workflows ...) cannot be locked; the end of the run reports which
     changed, with lines added and removed.
