@@ -250,7 +250,17 @@ local function float(lines, title, footer)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
   local width = math.min(110, math.max(vim.o.columns - 6, 40))
-  local height = math.min(#lines + 1, math.max(vim.o.lines - 6, 8))
+  -- wrapped rows, not lines: a long line that wraps must not push the last lines out of a too-short
+  -- window (they were cut with "@@@")
+  local rows = 0
+  for _, l in ipairs(lines) do
+    rows = rows + math.max(1, math.ceil(vim.fn.strdisplaywidth(l) / width))
+  end
+  local avail = math.max(vim.o.lines - 6, 8)
+  local height = math.min(rows + 1, avail)
+  if rows + 1 > avail then
+    footer = footer .. "   j/k scroll"
+  end
   local win = vim.api.nvim_open_win(buf, true, {
     relative = "editor", style = "minimal", border = "rounded", width = width, height = height,
     row = math.max(math.floor((vim.o.lines - height) / 2) - 1, 0), col = math.max(math.floor((vim.o.columns - width) / 2), 0),
