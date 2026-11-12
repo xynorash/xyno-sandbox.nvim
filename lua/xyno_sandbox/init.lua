@@ -6,7 +6,10 @@
 -- binary) is read-only even inside the writable binds. Credential dirs/files
 -- are hidden, credential env vars are stripped, pid/ipc/uts namespaces are
 -- unshared, capabilities dropped, nested user namespaces disabled.
--- Network stays open (the model needs it).
+-- Network egress is default-deny: the sandbox gets a private network namespace and reaches the
+-- internet only through a local filtering proxy that allows a short list of host names
+-- (xyno_sandbox.net). If that cannot be set up the agent does not start; network = "open" is the
+-- explicit opt-out.
 --
 -- Fails CLOSED. bubblewrap exists only on Linux, so without a working
 -- backend (Windows, macOS, Linux without bwrap) wrap() refuses (nil, reason)
@@ -23,6 +26,10 @@ local probe = require("xyno_sandbox.probe")
 
 local M = {}
 
+--- The hosts allowed by default (the agent's API, crates.io); copy it to extend: allow_hosts =
+--- vim.list_extend(vim.deepcopy(require("xyno_sandbox").default_hosts), { "github.com" })
+M.default_hosts = vim.deepcopy(require("xyno_sandbox.net").DEFAULT_HOSTS)
+
 --- Policy switches. `sandbox` and `allow_unsandboxed` are read at every status()/wrap() call;
 --- only the booleans `false` / `true` count (0, "false", 1, "true" do not). Either may also be a
 --- function returning the value, evaluated at every call.
@@ -33,6 +40,8 @@ M.config = {
   commands = true,
   preview = "once", -- the policy preview before a launch: "always" | "once" (per project) | "never"
   strip_skip_permissions = false, -- true: remove --dangerously-skip-permissions from the command
+  network = "filtered", -- "filtered" (default-deny egress, allowlist) | "open" (no restriction, shown as OPEN)
+  allow_hosts = nil, -- nil: the default list (xyno_sandbox.default_hosts); a list REPLACES it
   policy = {}, -- additive policy lists, see validate_opts()
   agent_cmd = nil, -- command shown by :XynoSandboxPolicy when nothing was launched yet
 }
@@ -92,7 +101,7 @@ end
 function M.validate_opts(opts)
   local errs = {}
   local known = { sandbox = true, allow_unsandboxed = true, keymaps = true, commands = true, preview = true,
-    strip_skip_permissions = true, policy = true, agent_cmd = true }
+    strip_skip_permissions = true, policy = true, agent_cmd = true, network = true, allow_hosts = true }
   for k in pairs(opts) do
     if not known[k] then
       errs[#errs + 1] = "unknown option " .. tostring(k)
@@ -103,6 +112,15 @@ function M.validate_opts(opts)
   end
   if opts.preview ~= nil and not PREVIEW[opts.preview] then
     errs[#errs + 1] = 'preview must be "always", "once" or "never"'
+  end
+  if opts.network ~= nil and opts.network ~= "filtered" and opts.network ~= "open" then
+    errs[#errs + 1] = 'network must be "filtered" or "open"'
+  end
+  if opts.allow_hosts ~= nil then
+    str_list("allow_hosts", opts.allow_hosts, errs, function(e)
+      local _, why = require("xyno_sandbox.net").parse_entry(e)
+      return why
+    end)
   end
   if opts.strip_skip_permissions ~= nil and type(opts.strip_skip_permissions) ~= "boolean" then
     errs[#errs + 1] = "strip_skip_permissions must be a boolean"
@@ -191,8 +209,16 @@ function M.scrub_names(env, file_login)
   return plan_mod.scrub_names(env, file_login, (M.config.policy or {}).scrub)
 end
 
+--- "open" only for the exact string "open" (a function returning it counts); anything else is
+--- filtered, so a typo cannot open the network.
+function M.net_mode()
+  return flag("network") == "open" and "open" or "filtered"
+end
+
 local function cfg_view()
   return {
+    network = M.net_mode(),
+    allow_hosts = flag("allow_hosts"),
     policy = M.config.policy or {},
     strip_skip_permissions = M.config.strip_skip_permissions == true,
   }
@@ -225,6 +251,7 @@ end
 --- Never blocks: the user-namespace probe runs asynchronously (the first call starts it, `ready`
 --- is "pending" until it finished). A failed probe counts as no backend (fail closed).
 function M.status()
+  probe.net = M.net_mode() == "filtered"
   if flag("sandbox") == false then
     return { mode = "unsandboxed", via = "sandbox=false", reason = "sandbox = false" }
   end
@@ -261,6 +288,7 @@ end
 
 --- Probe now (async), then call cb(status). `force` re-runs a cached verdict.
 function M.check(cb, force)
+  probe.net = M.net_mode() == "filtered"
   if flag("sandbox") == false or vim.fn.has("linux") ~= 1 or vim.fn.executable("bwrap") ~= 1 then
     return cb(M.status())
   end
@@ -275,7 +303,7 @@ local aux_empty
 
 local function aux_paths()
   aux_empty = aux_empty or (vim.fn.tempname() .. ".empty")
-  return { empty = aux_empty, claude_json = vim.fn.tempname() .. ".claude.json" }
+  return { empty = aux_empty, claude_json = vim.fn.tempname() .. ".claude.json", net_dir = vim.fn.tempname() .. ".net" }
 end
 
 --- The plan for running `cmd` here: the structured policy the launcher and the preview share.
@@ -306,7 +334,7 @@ function M.plan(cmd, project, tmp_dir, opts)
   end
   return plan_mod.build({
     cmd = cmd, project = project, tmp_dir = tmp_dir, cwd = opts.cwd or vim.uv.cwd(), env = vim.fn.environ(),
-    home = home, uid = uid, config = cfg_view(), aux = opts.aux or aux_paths(), exceptions = excs,
+    home = home, uid = uid, config = cfg_view(), aux = opts.aux or aux_paths(), exceptions = excs, nvim = vim.v.progpath,
     state_dir = store.dir(),
   })
 end
@@ -369,6 +397,12 @@ local function release(h)
   end
   h.released = true
   live[h.id] = nil
+  if h.proxy then
+    pcall(h.proxy.close)
+  end
+  if h.net_dir then
+    vim.fn.delete(h.net_dir, "rf")
+  end
   for _, f in ipairs(h.temp) do
     vim.uv.fs_unlink(f)
   end
@@ -451,6 +485,72 @@ local function prepare(plan)
   return temp
 end
 
+local relay_source
+
+--- Start the filtering proxy of a filtered plan: the socket directory (0700, read-only inside the
+--- sandbox), the relay script next to it, the listener. Returns the handle fields or nil, reason.
+--- Nothing is left behind on failure.
+local function start_net(plan, project)
+  local n = plan.net
+  local function fail(why)
+    pcall(vim.fn.delete, n.dir, "rf")
+    return nil, "network egress cannot be enforced (" .. why .. "); the agent is not started. "
+      .. 'Set network = "open" in setup() to run it with an open network.'
+  end
+  if vim.fn.executable(n.nvim) ~= 1 then
+    return fail(n.nvim .. " is not executable, the in-sandbox relay needs it")
+  end
+  vim.fn.delete(n.dir, "rf")
+  if vim.fn.mkdir(n.dir, "p", tonumber("700", 8)) ~= 1 then
+    return fail("cannot create " .. n.dir)
+  end
+  if not relay_source then
+    local src = debug.getinfo(1, "S").source:sub(2):gsub("init%.lua$", "relay.lua")
+    local f = io.open(src, "rb")
+    relay_source = f and f:read("*a")
+    if f then
+      f:close()
+    end
+  end
+  if not relay_source then
+    return fail("relay.lua not found")
+  end
+  local f = io.open(n.relay, "wb")
+  if not f then
+    return fail("cannot write " .. n.relay)
+  end
+  f:write(relay_source)
+  f:close()
+  local hosts = {}
+  for _, h in ipairs(n.hosts) do
+    hosts[#hosts + 1] = h.host
+  end
+  local warned = {}
+  local ok, proxy, err = pcall(require("xyno_sandbox.net").start, {
+    sock = n.sock,
+    hosts = hosts,
+    on_decision = function(d)
+      if d.allowed or warned[d.host] then
+        return
+      end
+      warned[d.host] = true
+      vim.schedule(function()
+        pcall(store.log, { project = project, kind = "host", value = d.host .. ":" .. tostring(d.port), decision = "blocked",
+          scope = "launch", reason = d.reason })
+        vim.notify(("xyno-sandbox: blocked network access to %s:%s (%s). Allow it with e in :XynoSandboxPolicy."):format(
+          d.host, tostring(d.port), d.reason), vim.log.levels.WARN)
+      end)
+    end,
+  })
+  if not ok then
+    return fail(tostring(proxy))
+  end
+  if not proxy then
+    return fail(tostring(err))
+  end
+  return { proxy = proxy, net_dir = n.dir }
+end
+
 --- @param cmd string[] command to wrap
 --- @param project string project root (writable)
 --- @param tmp_dir string scratch dir of the agent (writable)
@@ -479,12 +579,28 @@ function M.wrap(cmd, project, tmp_dir, opts)
     plan = nil
   end
   plan = plan or M.plan(cmd, project, tmp_dir, { exceptions = excs })
+  local netf
+  if plan.net then
+    local why
+    netf, why = start_net(plan, project)
+    if not netf then
+      return nil, why
+    end
+  end
   local temp = prepare(plan)
   next_id = next_id + 1
   local h = { id = next_id, plan = plan, temp = temp }
+  if netf then
+    h.proxy, h.net_dir = netf.proxy, netf.net_dir
+  end
   h.reg = store.live_add(project, tostring(next_id) .. "-" .. tostring(vim.uv.hrtime()))
   h.release = function()
     release(h)
+  end
+  h.blocked = function()
+    return h.proxy and vim.tbl_filter(function(d)
+      return not d.allowed
+    end, h.proxy.decisions) or {}
   end
   live[h.id] = h
   return plan_mod.argv(plan), nil, h

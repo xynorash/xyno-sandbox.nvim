@@ -143,6 +143,9 @@ M.SCAN_SKIP = {
 M.SCAN_DEPTH = 8 -- nested .git and workspace members are found down to this depth
 M.SCAN_MAX_DIRS = 20000 -- the walk stops here and the plan says so (plan.notes)
 
+-- Host name resolution services reachable over unix sockets; hidden when the network is filtered.
+M.HIDDEN_RESOLVERS = { "/run/systemd/resolve", "/run/nscd", "/run/avahi-daemon", "/run/dnsmasq", "/run/NetworkManager", "/run/unbound" }
+
 M.SKIP_PERMISSIONS_FLAGS = { "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions" }
 
 M.ISOLATION_FLAGS = {
@@ -372,7 +375,7 @@ end
 
 -- --------------------------------------------------------------- exceptions
 
-M.EXCEPTION_KINDS = { env = true, unhide = true, writable = true }
+M.EXCEPTION_KINDS = { env = true, unhide = true, writable = true, host = true }
 
 --- May this exception be applied? Pure. `ctx` = { home, state_dir?, probes }.
 --- @return boolean ok, string? reason
@@ -383,6 +386,13 @@ function M.validate_exception(exc, ctx)
   local v = exc.value
   if type(v) ~= "string" or v == "" then
     return false, "empty value"
+  end
+  if exc.kind == "host" then
+    local ent, why = require("xyno_sandbox.net").parse_entry(v)
+    if not ent then
+      return false, "not an allowlist host (" .. tostring(why) .. "): " .. v
+    end
+    return true
   end
   if exc.kind == "env" then
     if not v:match("^[%a_][%w_]*$") then
@@ -434,6 +444,7 @@ function M.build(input)
   local exists = probes.exists
   local cwd = input.cwd or project
   local at_home = project == home or project == "/"
+  local net_mode = cfg.network == "open" and "open" or "filtered" -- anything but "open" is filtered
 
   local plan = {
     version = 1,
@@ -442,7 +453,7 @@ function M.build(input)
     tmp_dir = tmp_dir,
     home = home,
     flags = copy_list(M.ISOLATION_FLAGS),
-    network = "open",
+    network = net_mode,
     writable = {},
     hidden = {},
     readonly = {},
@@ -459,13 +470,41 @@ function M.build(input)
     claude_json = nil,
   }
 
+  -- network: filtered = private network namespace + the proxy's unix socket; open = untouched
+  if net_mode == "filtered" then
+    local net = require("xyno_sandbox.net")
+    plan.flags[#plan.flags + 1] = "--unshare-net"
+    local dir = aux.net_dir or (tmp_dir .. "/.xyno-net-unset")
+    local hosts, seen = {}, {}
+    local list = cfg.allow_hosts
+    local from_default = list == nil
+    for _, h in ipairs(list or net.DEFAULT_HOSTS) do
+      local ent = net.parse_entry(h)
+      if ent and not seen[ent.text] then
+        seen[ent.text] = true
+        hosts[#hosts + 1] = { host = ent.text, why = from_default and "default" or "allow_hosts" }
+      end
+    end
+    plan.net = {
+      dir = dir, sock = dir .. "/proxy.sock", relay = dir .. "/relay.lua", port = net.PORT,
+      nvim = input.nvim or "nvim", hosts = hosts, seen = seen,
+    }
+  end
+
   -- applicable exceptions
-  local exc_by = { env = {}, unhide = {}, writable = {} }
+  local exc_by = { env = {}, unhide = {}, writable = {}, host = {} }
   local vctx = { home = home, state_dir = input.state_dir, probes = probes }
   for _, e in ipairs(input.exceptions or {}) do
     local ok, why = M.validate_exception(e, vctx)
     if ok then
-      local val = e.kind == "env" and e.value or M.normalize(e.value)
+      local val
+      if e.kind == "env" then
+        val = e.value
+      elseif e.kind == "host" then
+        val = require("xyno_sandbox.net").parse_entry(e.value).text
+      else
+        val = M.normalize(e.value)
+      end
       if not exc_by[e.kind][val] then
         exc_by[e.kind][val] = true
         plan.exceptions[#plan.exceptions + 1] = { kind = e.kind, value = val, scope = e.scope }
@@ -473,6 +512,26 @@ function M.build(input)
     else
       plan.rejected[#plan.rejected + 1] = { kind = e.kind, value = e.value, reason = why }
     end
+  end
+
+  if plan.net then
+    for _, e in ipairs(plan.exceptions) do
+      if e.kind == "host" and not plan.net.seen[e.value] then
+        plan.net.seen[e.value] = true
+        plan.net.hosts[#plan.net.hosts + 1] = { host = e.value, why = "approved exception" }
+      end
+    end
+    plan.net.seen = nil
+  else
+    local keep = {}
+    for _, e in ipairs(plan.exceptions) do
+      if e.kind == "host" then
+        plan.rejected[#plan.rejected + 1] = { kind = e.kind, value = e.value, reason = "the network is open, there is no allowlist" }
+      else
+        keep[#keep + 1] = e
+      end
+    end
+    plan.exceptions = keep
   end
 
   -- ~/.claude is created by the launcher (the masks inside it need the parent)
@@ -551,6 +610,13 @@ function M.build(input)
   end
   for _, p in ipairs(M.hidden_system(input.uid or -1)) do
     hide(p, "system socket / session")
+  end
+  if plan.net then
+    -- name resolution must not leave through a host service: nss-resolve talks to systemd-resolved
+    -- over a unix socket (a DNS exfiltration channel), nscd and avahi do the same
+    for _, p in ipairs(M.HIDDEN_RESOLVERS) do
+      hide(p, "DNS resolver socket")
+    end
   end
   for _, p in ipairs(M.HIDDEN) do
     hide(home .. p, "credentials")
@@ -710,10 +776,31 @@ end
 
 -- -------------------------------------------------------------------- argv
 
+-- Runs inside the sandbox before the agent: start the relay, wait until it listens, or refuse to
+-- start the agent (fail closed). The relay dies with the sandbox's pid namespace.
+M.NET_SCRIPT = [[nv=$1; d=$2; p=$3; shift 3
+r=/tmp/.xyno-net-ready
+rm -f "$r"
+XDG_RUNTIME_DIR=/tmp "$nv" -u NONE -i NONE --headless -l "$d/relay.lua" "$d/proxy.sock" "$p" "$r" </dev/null >/tmp/.xyno-net-relay.log 2>&1 &
+i=0
+while [ ! -e "$r" ]; do
+  i=$((i+1))
+  if [ "$i" -gt 100 ]; then
+    echo "xyno-sandbox: the network relay did not start, the agent is NOT started (setup network = open turns the filter off)" >&2
+    cat /tmp/.xyno-net-relay.log >&2 2>/dev/null
+    exit 125
+  fi
+  sleep 0.1
+done
+exec "$@"]]
+
 --- bwrap flags of the isolation, without any path (also what the readiness probe runs).
-function M.probe_argv()
+function M.probe_argv(net)
   local a = { "bwrap" }
   vim.list_extend(a, M.ISOLATION_FLAGS)
+  if net then
+    a[#a + 1] = "--unshare-net"
+  end
   vim.list_extend(a, { "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "true" })
   return a
 end
@@ -761,8 +848,23 @@ function M.argv(plan)
   for _, p in ipairs(plan.ephemeral) do
     vim.list_extend(a, { "--tmpfs", p })
   end
+  local cmd = plan.agent.cmd
+  if plan.net then
+    local n = plan.net
+    -- the only way out: the proxy's socket directory (read-only), reached through the relay on the
+    -- sandbox's own loopback
+    vim.list_extend(a, { "--ro-bind", n.dir, n.dir })
+    local url = "http://127.0.0.1:" .. n.port
+    for _, name in ipairs({ "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy" }) do
+      vim.list_extend(a, { "--setenv", name, url })
+    end
+    vim.list_extend(a, { "--setenv", "NO_PROXY", "", "--setenv", "no_proxy", "" })
+    vim.list_extend(a, { "--chdir", plan.chdir, "--" })
+    vim.list_extend(a, { "sh", "-c", M.NET_SCRIPT, "xyno-net", n.nvim, n.dir, tostring(n.port) })
+    return vim.list_extend(a, cmd)
+  end
   vim.list_extend(a, { "--chdir", plan.chdir, "--" })
-  return vim.list_extend(a, plan.agent.cmd)
+  return vim.list_extend(a, cmd)
 end
 
 return M

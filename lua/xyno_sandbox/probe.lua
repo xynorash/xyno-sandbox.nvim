@@ -32,6 +32,11 @@ M.read_sysctl = read_sysctl -- replaceable in specs
 function M.diagnose(r, sysctl)
   sysctl = sysctl or M.read_sysctl
   local err = vim.trim(r.stderr or "")
+  if M.net and (err:lower():find("loopback", 1, true) or err:lower():find("rtm_newaddr", 1, true)
+    or err:lower():find("network namespace", 1, true)) then
+    return "bwrap cannot create an isolated network namespace (needed to filter egress): " .. err,
+      'network egress cannot be enforced here; the agent is not started. network = "open" in setup() runs it with the network open'
+  end
   if r.timed_out then
     return ("bwrap did not finish within %d s"):format(M.timeout / 1000),
       "something blocks namespace creation (a hung seccomp/LSM hook or a very loaded machine): run `bwrap --ro-bind / / true` in a shell"
@@ -64,9 +69,11 @@ function M.diagnose(r, sysctl)
   return ("bwrap exited with %d%s"):format(r.code or -1, err ~= "" and (": " .. err) or ""), nil
 end
 
+M.net = false -- set by status(): probe with --unshare-net too (the network filter needs it)
+
 local function key()
   local p = vim.fn.exepath("bwrap")
-  return p ~= "" and p or "bwrap"
+  return (p ~= "" and p or "bwrap") .. (M.net and "+net" or "")
 end
 
 local function fresh(entry)
@@ -100,7 +107,7 @@ local function record(k, r)
 end
 
 local function spawn(opts, on_exit)
-  local argv = plan.probe_argv()
+  local argv = plan.probe_argv(M.net)
   local ok, obj = pcall(vim.system, argv, { text = true, timeout = M.timeout }, on_exit)
   if not ok then
     return nil, tostring(obj)

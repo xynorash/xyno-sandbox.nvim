@@ -19,7 +19,9 @@ xyno-sandbox.nvim wraps a command-line coding agent in bubblewrap (`bwrap`)
 and refuses to start it without a sandbox. The filesystem is read-only except
 the project and a scratch directory, credentials are hidden, secret
 environment variables are stripped, and files that would later run outside the
-sandbox are locked read-only. The network stays open.
+sandbox are locked read-only. Network egress is default-deny: the sandbox has
+no network of its own and reaches a short hostname allowlist through a local
+filtering proxy (|xyno-sandbox-network|). `network = "open"` opts out.
 
 The policy knows the config, cache and state directories of one agent CLI,
 but |wrap()| takes any command.
@@ -43,6 +45,8 @@ but |wrap()| takes any command.
       preview = "once",
       strip_skip_permissions = false,
       agent_cmd = nil,
+      network = "filtered",
+      allow_hosts = nil,
       policy = {
         readonly = {}, writable = {}, hidden = {},
         guard_dirs = {}, guard_files = {},
@@ -61,6 +65,23 @@ allow_unsandboxed       boolean, default false
     `true` lets the agent run unsandboxed when NO backend exists (Windows,
     macOS, Linux without bwrap). It never disables a working sandbox. Only the
     boolean `true` counts.
+
+                                                        *xyno-sandbox-network*
+network                 "filtered" | "open", default "filtered"
+    filtered: `bwrap --unshare-net` plus a CONNECT-only filtering proxy in
+    Neovim, reached through a unix socket and a relay inside the sandbox
+    (HTTPS_PROXY points at it). Only names on the allowlist are reachable;
+    raw IPs, DNS, UDP and host loopback are not. No DNS is done in the
+    sandbox: resolver sockets are hidden and the proxy resolves allowed names.
+    If this cannot be enforced the agent does not start. open: unrestricted,
+    shown as OPEN in the preview. Anything but "open" counts as filtered.
+
+                                                     *xyno-sandbox-allow_hosts*
+allow_hosts             list of strings, default nil
+    nil uses require("xyno_sandbox").default_hosts (api.anthropic.com,
+    platform.claude.com, crates.io, static.crates.io, index.crates.io). A list
+    replaces them. Entries: `host`, `host:port`, `*.suffix`. More hosts can be
+    approved in the preview with `e` (logged, revocable).
 
                                                          *xyno-sandbox-keymaps*
 keymaps                 false or table, default false
@@ -192,16 +213,20 @@ Environment variables that look like secrets are removed.
 ==============================================================================
 7. Residual risks                                              *xyno-sandbox-risks*
 
-It is a denylist on a read-only view of the filesystem with the network open.
+It is a denylist on a read-only view of the filesystem with egress limited to a
+hostname allowlist.
 
   - the agent's credential file under its config directory must stay readable
     and writable.
   - everything unlisted under `$HOME` is readable.
-  - loopback services and abstract sockets are reachable.
+  - with network = "open", loopback services and abstract sockets are reachable.
   - cargo's `registry/src` and `git` are writable.
   - a nested `.git` deeper than 8 levels (policy.scan_depth) is not locked,
     nor one the agent creates in a new directory.
-  - the network is open.
+  - filtered mode: the agent can read its own token and send it to an allowed
+    host; allowed hosts that accept uploads are exfiltration channels; the
+    check is on the CONNECT name (no TLS interception, SNI is not compared);
+    wildcard entries let subdomain labels reach your resolver.
   - placeholders of the guards are removed when the run ends, not after a
     crash; masks inside the agent's config directory stay.
 

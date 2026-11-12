@@ -18,7 +18,8 @@ function M.describe(st)
   st = st or require("xyno_sandbox").status()
   local hint = st.hint and (" -> " .. st.hint) or ""
   if st.mode == "bwrap" then
-    return st.ready == "pending" and "sandboxed (bubblewrap; readiness check running)" or "sandboxed (bubblewrap, user namespaces work)"
+    local net = require("xyno_sandbox").net_mode() == "open" and "; network OPEN" or "; network filtered (allowlist)"
+    return (st.ready == "pending" and "sandboxed (bubblewrap; readiness check running" or "sandboxed (bubblewrap, user namespaces work") .. net .. ")"
   elseif st.mode == "unsandboxed" then
     return "UNSANDBOXED (" .. st.via .. "): " .. st.reason .. hint
   end

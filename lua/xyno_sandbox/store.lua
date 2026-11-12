@@ -46,6 +46,8 @@ function M.log(entry)
   }
   if entry.kind == "env" then
     rec.name = entry.value
+  elseif entry.kind == "host" then
+    rec.host = entry.value
   else
     rec.path = entry.value
   end

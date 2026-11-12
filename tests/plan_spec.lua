@@ -54,13 +54,17 @@ local function input(over, fs_entries, lines)
     end
   end
   local probes = fakefs(entries, lines)
+  over = over or {}
+  if over.config and over.config.network == nil then
+    over.config = vim.tbl_extend("force", { network = "open" }, over.config) -- these specs pin the filesystem policy
+  end
   return vim.tbl_extend("force", {
     project = PROJECT, tmp_dir = TMP, cwd = PROJECT, home = HOME, uid = 1000, probes = probes,
     env = { PATH = "/bin", HOME = HOME, GITHUB_TOKEN = "SECRET-VALUE-1", MY_API_KEY = "SECRET-VALUE-2" },
     cmd = { "agent", "--dangerously-skip-permissions", "-p", "do it" },
     aux = { empty = "/aux/empty", claude_json = "/aux/claude.json" },
-    config = {},
-  }, over or {})
+    config = { network = "open" },
+  }, over)
 end
 
 local function paths(list)

@@ -259,12 +259,16 @@ describe("wrapped command layout", function()
     local a = wrap(m, { "echo", "hi there" }, project, tmp, cwd)
     local prefix = {
       "bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--disable-userns", "--unshare-pid",
-      "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--cap-drop", "ALL", "--ro-bind", "/", "/",
+      "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--cap-drop", "ALL", "--unshare-net", "--ro-bind", "/", "/",
       "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
     }
     H.eq(prefix, vim.list_slice(a, 1, #prefix))
+    -- filtered network (the default): the command runs behind the relay launcher
     local n = #a
-    H.eq({ "--chdir", cwd, "--", "echo", "hi there" }, vim.list_slice(a, n - 4, n))
+    local c = find_seq(a, "--chdir", cwd, "--", "sh", "-c")
+    H.ok(c, "--chdir <cwd> -- sh -c <relay launcher>")
+    H.eq({ "echo", "hi there" }, vim.list_slice(a, n - 1, n))
+    H.eq("xyno-net", a[c + 6])
   end)
 
   it("--chdir is the project root unless nvim's cwd is inside the project (from $HOME the agent started in $HOME)", function()
@@ -276,7 +280,11 @@ describe("wrapped command layout", function()
     local project, tmp = H.tmpdir(), H.tmpdir()
     local function chdir_of(cwd)
       local a = wrap(m, { "true" }, project, tmp, cwd)
-      return a[#a - 2]
+      for i = #a, 1, -1 do
+        if a[i] == "--chdir" then
+          return a[i + 1]
+        end
+      end
     end
     H.eq(project, chdir_of(home), "cwd = $HOME")
     H.eq(project, chdir_of(H.tmpdir()), "cwd elsewhere under /tmp")
@@ -1153,13 +1161,14 @@ describe("network", function()
     return srv, srv:getsockname().port
   end
 
-  it("reaches loopback listeners (documented residual; ::1 too, the netns is shared) but not /run/user/UID", function()
+  it("network = 'open': reaches loopback listeners (the netns is shared) but not /run/user/UID", function()
     H.need_sandbox()
     local srv, port = listener("127.0.0.1")
     H.ok(srv, "could not listen on 127.0.0.1")
     local srv6, port6 = listener("::1")
     local home = fake_home()
     local m = load_for(home)
+    m.config.network = "open"
     local script = table.concat({
       "(exec 3<>/dev/tcp/127.0.0.1/" .. port .. ") 2>/dev/null && echo v4=reachable || echo v4=blocked",
       port6 and ("(exec 3<>/dev/tcp/::1/" .. port6 .. ") 2>/dev/null && echo v6=reachable || echo v6=blocked") or "echo v6=nolistener",

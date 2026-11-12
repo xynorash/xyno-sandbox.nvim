@@ -58,8 +58,11 @@ function M.lines(plan, ctx)
 
   local st = ctx.status
   add("sandbox   bubblewrap" .. (st and st.ready == "pending" and " (readiness check running)" or ""))
-  add("network   " .. (plan.network == "open" and "OPEN (not restricted: the agent reaches the internet and local services)"
-    or plan.network))
+  if plan.network == "open" then
+    add("network   OPEN (not restricted: the agent reaches the internet and local services)")
+  else
+    add("network   FILTERED: no direct network; HTTPS only through a local proxy, by host name (no DNS from the sandbox)")
+  end
   add("")
   if plan.agent.stripped then
     add("Agent permission prompts: ON (" .. "--dangerously-skip-permissions removed by strip_skip_permissions)")
@@ -70,6 +73,11 @@ function M.lines(plan, ctx)
     add("Agent permission prompts: not disabled by the command")
   end
 
+  if plan.net then
+    section("Network allowlist (all other hosts, raw IPs and DNS are blocked)", plan.net.hosts, function(h)
+      return ("%s  [%s]"):format(h.host, h.why)
+    end)
+  end
   section("Writable", plan.writable, function(w)
     return ("%s  [%s]"):format(short(w.path, home), w.why)
   end)
@@ -165,6 +173,9 @@ function M.pick_exception(plan, project, done)
     cands[#cands + 1] = { label = "let environment variable " .. n .. " through", kind = "env", value = n }
   end
   cands[#cands + 1] = { label = "make another path writable...", kind = "writable" }
+  if plan.net then
+    cands[#cands + 1] = { label = "allow another network host (name, *.suffix, host:port)...", kind = "host" }
+  end
   select(cands, { prompt = "Exception to consider", format_item = function(c) return c.label end }, function(c)
     if not c then
       return done(nil)
@@ -173,7 +184,7 @@ function M.pick_exception(plan, project, done)
       if not value or value == "" then
         return done(nil)
       end
-      local what = ("%s %s"):format(c.kind, c.kind == "writable" and value or short(value, home))
+      local what = ("%s %s"):format(c.kind, (c.kind == "writable" or c.kind == "unhide") and short(value, home) or value)
       local choices = { "Approve for this launch only", "Approve for this project (remembered, revocable)", "Refuse" }
       select(choices, { prompt = "Exception: " .. what .. " (project " .. short(project, home) .. ")" }, function(_, idx)
         if idx == 1 or idx == 2 then
@@ -187,7 +198,9 @@ function M.pick_exception(plan, project, done)
         return done(nil)
       end)
     end
-    if c.kind == "writable" then
+    if c.kind == "host" then
+      vim.ui.input({ prompt = "Host name to allow (e.g. github.com): " }, decide)
+    elseif c.kind == "writable" then
       vim.ui.input({ prompt = "Absolute path to make writable: " }, decide)
     else
       decide(c.value)

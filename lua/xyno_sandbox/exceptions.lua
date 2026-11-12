@@ -6,6 +6,7 @@
 -- kinds:  env       let one environment variable through (it is no longer stripped)
 --         unhide    show one hidden credential path (the real one, read-only like the rest of $HOME)
 --         writable  make one more existing path writable
+--         host      allow one more network host (name, *.suffix, optional :port) through the proxy
 -- scopes: "once"    for this launch only (the caller passes the returned exception as opts.exceptions)
 --         "project" remembered for this project; listed and revocable (:XynoSandboxApprovals)
 local plan = require("xyno_sandbox.plan")
@@ -15,6 +16,9 @@ local M = {}
 local function normalize(kind, value)
   if kind == "env" then
     return value
+  elseif kind == "host" then
+    local ent = require("xyno_sandbox.net").parse_entry(value)
+    return ent and ent.text or value
   end
   return plan.normalize(value) or value
 end
