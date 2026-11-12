@@ -357,13 +357,13 @@ end)
 describe("the content scan, token boundaries", function()
   local tokens = {
     { "AWS access key id", "AKIAJ5Q7R2M9TXLB4NWC" },
-    { "GitHub token", "ghp_" .. string.rep("Zq7x", 9) },
-    { "GitLab token", "glpat" .. "-aB3dE5fG7hI9jK1lM3nO" },
+    { "GitHub token", "ghp_" .. string.rep("Zq7x", 9), true },
+    { "GitLab token", "glpat" .. "-aB3dE5fG7hI9jK1lM3nO", true },
     { "Slack token", "xoxb-1234567890-abcdefghijkl", true },
     { "Stripe live key", "sk_live" .. "_4eC39HqLyjWDarjtT1zdp7dc", true },
     { "Anthropic key", "sk-ant-api03-" .. string.rep("Zq7xK9mP", 6), true },
     { "Google API key", "AIza" .. string.rep("Zq7xK9mPqL", 3) .. "abcde" },
-    { "npm token", "npm_" .. string.rep("Zq7x", 9) },
+    { "npm token", "npm_" .. string.rep("Zq7x", 9), true },
   }
   local wrappers = {
     ["bare"] = "%s",
@@ -399,9 +399,17 @@ describe("the content scan, token boundaries", function()
         H.has(scan.text(("first\r\n%s\r\nlast\r\n"):format(fmt:format(t[2]))), t[1], "with CRLF line ends")
       end)
     end
-    it(t[1] .. " is NOT found inside a longer word", function()
-      H.eq({}, scan.text("a" .. t[2]), "word character before")
-      H.eq({}, scan.text("_" .. t[2]), "underscore before")
+    it(t[1] .. " follows the word-boundary rule of its format", function()
+      -- a token with a distinctive prefix is one wherever it starts (round 5: tokenghp_..., 1ghp_...); an AWS key id
+      -- is not looked for inside an upper-case word (...ASIAPACIFIC...)
+      if t[1] == "AWS access key id" then
+        H.eq({}, scan.text("A" .. t[2]), "upper-case letter before")
+        H.has(scan.text("a" .. t[2]), t[1], "lower-case letter before")
+        H.has(scan.text("_" .. t[2]), t[1], "underscore before")
+      else
+        H.has(scan.text("a" .. t[2]), t[1], "word character before")
+        H.has(scan.text("_" .. t[2]), t[1], "underscore before")
+      end
       if not t[3] then -- (the open-ended formats simply take the extra characters into the token)
         H.eq({}, scan.text(t[2] .. "Q"), "word character after")
         H.eq({}, scan.text(t[2] .. "_x"), "underscore after")
@@ -772,6 +780,16 @@ end
 
 describe("the runner without a usable $HOME", function()
   it("HOME=/nonexistent does not die with E739: it runs (or skips cleanly) and exits 0", function()
+    -- (an OUTER run with the same unusable HOME is itself using <checkout>/.test-root: compare what is in it)
+    local function listing()
+      local names = {}
+      for n in vim.fs.dir(H.repo .. "/.test-root") do
+        names[#names + 1] = n
+      end
+      table.sort(names)
+      return names
+    end
+    local before = listing()
     local out, code = nested('it("runs", function() end)', { HOME = "/nonexistent", XDG_CACHE_HOME = "", XYNO_TEST_BASE = "" })
     H.no_match(out, "E739", true, out)
     H.eq(0, code, out)
@@ -780,7 +798,10 @@ describe("the runner without a usable $HOME", function()
       -- a checkout outside /tmp can hold the private root itself (.test-root): the run then really runs
       H.match(out, "passed=1", true, out)
       H.no_match(out, "SKIP all specs", true, out)
-      H.eq(nil, uv.fs_stat(H.repo .. "/.test-root"), "the fallback directory is removed again")
+      H.eq(before, listing(), "the nested run's private root inside the fallback directory is removed again")
+      if #before == 0 then
+        H.eq(nil, uv.fs_stat(H.repo .. "/.test-root"), "the fallback directory itself is removed again")
+      end
     end
   end)
 
@@ -789,6 +810,7 @@ describe("the runner without a usable $HOME", function()
     local dir = H.tmpdir()
     vim.fn.mkdir(dir .. "/tests", "p")
     vim.fn.writefile(vim.fn.readfile(H.repo .. "/tests/run.lua"), dir .. "/tests/run.lua")
+    vim.fn.writefile(vim.fn.readfile(H.repo .. "/tests/reaper.lua"), dir .. "/tests/reaper.lua")
     write(dir .. "/tests/x_spec.lua", 'it("never runs", function() error("boom") end)')
     local r = vim.system({ vim.v.progpath, "--headless", "-l", dir .. "/tests/run.lua" }, {
       text = true, env = { HOME = "/nonexistent", XDG_CACHE_HOME = "", XYNO_TEST_BASE = "", XYNO_TEST_WORKER = "0" } }):wait(60000)

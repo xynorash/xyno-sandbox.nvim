@@ -455,7 +455,13 @@ describe("inside the sandbox", function()
     local m = load_for(home)
     local seen = {}
     local orig = vim.notify
-    vim.notify = function(msg) seen[#seen + 1] = msg end
+    -- (only this plugin's own messages count: Neovim itself may announce on its first loop turn that it cannot
+    -- write its log file, e.g. when the caller's $HOME does not exist)
+    vim.notify = function(msg)
+      if tostring(msg):find("^xyno%-sandbox:") then
+        seen[#seen + 1] = msg
+      end
+    end
     local r, h = run_in(m, home, via_proxy("evil.test:443") .. "\n" .. via_proxy("evil.test:443"), H.tmpdir(), { "allowed.test" })
     wait_for(function() return #store.read_log() > 0 end)
     vim.notify = orig

@@ -481,12 +481,48 @@ local function is_empty_leftover(path, kind)
   return st.type == "file" and st.size == 0 and bit.band(st.mode, tonumber("222", 8)) == 0
 end
 
+--- The watched names (plan.watch) that exist in the plan's subdirectories now: { path = true }.
+local function watched_now(plan)
+  local out = {}
+  local w = plan.watch
+  if not w then
+    return out
+  end
+  for _, dir in ipairs(w.dirs) do
+    for _, name in ipairs(w.names) do
+      local p = dir .. "/" .. name
+      if vim.uv.fs_lstat(p) then
+        out[p] = true
+      end
+    end
+  end
+  return out
+end
+
+--- Names that act outside the sandbox and were created in a subdirectory during the run.
+local function planted(h)
+  local now, out = watched_now(h.plan), {}
+  for p in pairs(now) do
+    if not h.watch_before[p] then
+      out[#out + 1] = p
+    end
+  end
+  table.sort(out)
+  return out
+end
+
 local function release(h)
   if h.released then
     return
   end
   h.released = true
   live[h.id] = nil
+  h.planted = planted(h)
+  if #h.planted > 0 then
+    local shown = vim.list_slice(h.planted, 1, 5)
+    vim.notify(("xyno-sandbox: the agent created %d file%s that act%s outside the sandbox (not prevented in subdirectories): %s%s. Review before running cargo, direnv, claude or your editor there."):format(
+      #h.planted, #h.planted == 1 and "" or "s", #h.planted == 1 and "s" or "", table.concat(shown, ", "), #h.planted > 5 and ", ..." or ""), vim.log.levels.WARN)
+  end
   if h.proxy then
     pcall(h.proxy.close)
   end
@@ -757,7 +793,7 @@ function M.wrap(cmd, project, tmp_dir, opts)
   end
   local temp = prepare(plan)
   next_id = next_id + 1
-  local h = { id = next_id, plan = plan, temp = temp }
+  local h = { id = next_id, plan = plan, temp = temp, watch_before = watched_now(plan) }
   if netf then
     h.proxy, h.net_dir = netf.proxy, netf.net_dir
   end

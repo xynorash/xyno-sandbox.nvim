@@ -54,6 +54,11 @@ local function bad_base(d)
   return false
 end
 
+-- ------------------------------------------------------- leftovers of a killed run
+-- (tests/reaper.lua: the owner marks and the removal of the roots of runners that no longer exist)
+local reaper = dofile(repo .. "/tests/reaper.lua")
+local mark_owner, reap_stale = reaper.mark_owner, reaper.reap_stale
+
 local made_dirs = {} -- directories this run created only to hold the root (removed at the end when empty)
 
 --- A private root outside /tmp, or nil when nowhere is writable (the caller then skips the run).
@@ -82,6 +87,7 @@ local function make_root()
       if root then
         root = vim.uv.fs_realpath(root)
         if not bad_base(root) then
+          mark_owner(root)
           if not existed then
             made_dirs[#made_dirs + 1] = base
           end
@@ -115,6 +121,7 @@ local function child_env(root, real_home)
   if not tmp then
     tmp = assert(vim.uv.fs_mkdtemp((vim.uv.os_getenv("TMPDIR") or "/var/tmp") .. "/xyno-run-XXXXXX"))
   end
+  mark_owner(tmp)
   local env = {
     HOME = home, TMPDIR = tmp, XYNO_TEST_ROOT = root, XYNO_TEST_SCRATCH = tmp,
     XYNO_TEST_WORKER = "1", XDG_CONFIG_HOME = home .. "/.config", XDG_CACHE_HOME = home .. "/.cache",
@@ -189,6 +196,10 @@ end
 local FILE_TIMEOUT_MS = tonumber(vim.env.XYNO_TEST_FILE_TIMEOUT_MS) or 240000
 
 local function run_all(files)
+  local reaped = reaper.reap_stale(reaper.bases(repo))
+  if reaped > 0 then
+    io.stdout:write(("NOTE removed %d private root(s) of earlier runs that were killed\n"):format(reaped))
+  end
   local root, real_home = make_root()
   if not root then
     -- nothing to build a private $HOME in (HOME=/nonexistent, a read-only checkout): say so and skip

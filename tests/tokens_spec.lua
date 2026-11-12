@@ -231,9 +231,10 @@ describe("scan.text (known token formats)", function()
     end
   end)
 
-  it("a prefix inside a longer word is not a token", function()
-    H.eq({}, kinds("xghp_" .. z(36, "a")))
-    H.eq({}, kinds("ghp_" .. z(36, "a") .. "extra"))
+  it("a token glued to a word is still a token (round 5); a shorter one is not", function()
+    H.eq({ "GitHub token" }, kinds("xghp_" .. z(36, "a")))
+    H.eq({ "GitHub token" }, kinds("ghp_" .. z(36, "a") .. "extra"))
+    H.eq({}, kinds("ghp_" .. z(30, "a")))
   end)
 
   it("does not flood: 20000 lines of hashes, ids, base64 and code give no hit", function()

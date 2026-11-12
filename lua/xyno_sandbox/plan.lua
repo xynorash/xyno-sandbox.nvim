@@ -32,6 +32,7 @@ M.HOME_READONLY = {
   "/.claude/settings.json", "/.claude/settings.local.json", "/.claude/CLAUDE.md",
   "/.claude/keybindings.json", "/.claude/hooks", "/.claude/commands", "/.claude/agents",
   "/.claude/skills", "/.claude/plugins", "/.claude/output-styles",
+  "/.claude/.credentials.json", -- the login: the sandbox may use it, not rewrite it (the allowlist view binds it read-only too)
   "/.claude/ide", -- IDE lock files make claude connect to a local server
   "/.claude/rules",
   "/.claude/chrome", -- chrome-native-host is a shell script Chrome launches unsandboxed
@@ -56,19 +57,32 @@ M.PROJECT_READONLY = {
   ".cargo", -- whole dir: config.toml sets runner / linker / rustflags and runs on the next cargo build
   ".vscode", -- whole dir, so tasks.json cannot be swapped by renaming the parent
   ".mcp.json",
+  -- editors and tools of other people on the team that act outside the sandbox: Zed tasks, JetBrains run
+  -- configurations, Helix language servers, husky hooks (core.hooksPath), pre-commit hooks, dev containers,
+  -- debugger init files
+  ".zed", ".idea", ".helix", ".husky", ".devcontainer", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit",
 }
--- Locked in workspace members too: cargo reads .cargo/config from every ancestor of the
--- directory it runs in; direnv reads the nearest .envrc.
-M.MEMBER_READONLY = { ".cargo", ".envrc" }
+-- Locked in every subdirectory the project walk found (when PRESENT there): cargo reads .cargo/config from
+-- every ancestor of the directory it runs in, direnv the nearest .envrc, claude the .claude of its
+-- directory, the editors their own. A file that is ABSENT there can still be created (one mount per
+-- directory and name would be thousands): the run reports those when it ends, see M.WATCH_NAMES.
+M.MEMBER_READONLY = {
+  ".cargo", ".envrc", ".mise.toml", ".nvim.lua", ".nvimrc", ".exrc", ".claude", ".mcp.json", ".vscode", ".zed", ".idea",
+  ".helix", ".husky", ".devcontainer", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit",
+}
+-- Names that act outside the sandbox when the agent creates them in a subdirectory: looked for at launch
+-- and again when the run ends, and a new one is reported (not prevented, not removed).
+M.WATCH_NAMES = vim.list_extend({ ".git" }, M.MEMBER_READONLY)
+M.WATCH_DIRS_MAX = 400
 -- Created empty-and-read-only when absent at the project root: a planted .cargo/config.toml is
 -- the one that bites. .git too: without one the agent ran `git init` and planted
 -- `core.fsmonitor = <cmd>` in .git/config, which the user's next unsandboxed `git status`
 -- executed. .vscode: a planted tasks.json runs from the user's editor. The launcher removes the
 -- empty leftovers when the run ends (see xyno_sandbox.wrap, handle.release).
-M.PROJECT_MASK_IF_ABSENT = { ".cargo", ".git", ".vscode" }
+M.PROJECT_MASK_IF_ABSENT = { ".cargo", ".git", ".vscode", ".zed", ".idea", ".helix", ".husky", ".devcontainer" }
 -- Files that run unsandboxed later when planted. When absent they are bound to an empty
 -- read-only file for the run (the launcher removes the placeholder afterwards).
-M.PROJECT_GUARD_FILES = { ".envrc", ".mise.toml", ".nvim.lua", ".nvimrc", ".exrc", ".mcp.json" }
+M.PROJECT_GUARD_FILES = { ".envrc", ".mise.toml", ".nvim.lua", ".nvimrc", ".exrc", ".mcp.json", ".pre-commit-config.yaml", ".lldbinit", ".gdbinit" }
 -- Project dir that is ALWAYS locked: read-only when present, otherwise masked.
 M.PROJECT_MASKED = ".claude"
 
@@ -87,6 +101,8 @@ M.HIDDEN = {
   "/.config/Slack", "/.config/discord", "/.config/Signal", "/.config/rustdesk",
   "/.config/winapps", "/.config/freerdp", "/.config/obs-studio", "/.config/JetBrains",
   "/.config/spotify", "/.config/herdr", "/.anydesk", "/.neuralstark-live",
+  -- package-index logins and key files of tools that are not in the list above
+  "/.config/sops", "/.gem/credentials", "/.config/pypoetry/auth.toml", "/.pip/pip.conf", "/.config/pip/pip.conf", "/.npm/_logs",
   -- browsers / mail
   "/.config/google-chrome", "/.config/google-chrome-headless", "/.config/Google",
   "/.config/chromium", "/.config/BraveSoftware", "/.config/microsoft-edge",
@@ -239,7 +255,7 @@ M.CODE_RUNS_OUTSIDE = {
     "/.deno/bin", "/.config/conda", "/.condarc", "/.conda", "/.config/containers", "/.docker/config.json", "/.docker/cli-plugins" } },
   { category = "agents: hooks, commands, MCP servers", paths = {
     "/.claude/settings.json", "/.claude/settings.local.json", "/.claude/hooks", "/.claude/commands", "/.claude/agents",
-    "/.claude/skills", "/.claude/plugins", "/.claude/CLAUDE.md", "/.claude/keybindings.json", "/.claude.json", "/.mcp.json",
+    "/.claude/skills", "/.claude/plugins", "/.claude/CLAUDE.md", "/.claude/keybindings.json", "/.claude/.credentials.json", "/.claude.json", "/.mcp.json",
     "/.codex", "/.gemini", "/.config/opencode", "/.aider.conf.yml", "/.config/goose", "/.config/claude" } },
 }
 M.WRITABLE_FORBIDDEN_HOME = {}
@@ -593,9 +609,10 @@ local function walk(probes, project, depth, opts)
   for _, d in ipairs(opts.secret_dirs or {}) do
     sdirs[d] = true
   end
-  local paths = {}
+  local paths, plast = {}, {}
   for _, sfx in ipairs(opts.paths or {}) do
     paths[#paths + 1] = "/" .. sfx:lower()
+    plast[sfx:lower():match("([^/]+)$")] = true -- (only a file with one of these base names can end in such a path)
   end
   -- Sockets are looked for EVERYWHERE below the project, also in the directories the rest of the walk
   -- skips (target, node_modules, .cache, .git) and below its depth: a pathname socket is connectable
@@ -635,7 +652,7 @@ local function walk(probes, project, depth, opts)
       local name, ty = e[1], e[2]
       if ty == "file" or ty == "link" then
         local hit = opts.secrets and M.is_secret_name(name, opts.secrets, opts.except)
-        if not hit and #paths > 0 then
+        if not hit and #paths > 0 and plast[name:lower()] then
           local full = (dir .. "/" .. name):lower()
           for _, sfx in ipairs(paths) do
             if full:sub(-#sfx) == sfx then
@@ -692,9 +709,10 @@ local function walk_tree(probes, root, depth, opts, budget)
   for _, d in ipairs(M.TREE_SECRET_DIRS) do
     sdirs[d] = true
   end
-  local paths = {}
+  local paths, plast = {}, {}
   for _, sfx in ipairs(M.PROJECT_SECRET_PATHS) do
     paths[#paths + 1] = "/" .. sfx:lower()
+    plast[sfx:lower():match("([^/]+)$")] = true
   end
   local queue, qi = { { root, 0 } }, 1
   while qi <= #queue do
@@ -711,7 +729,7 @@ local function walk_tree(probes, root, depth, opts, budget)
       local full = dir .. "/" .. name
       if ty == "file" or ty == "link" then
         local hit = M.is_secret_name(name, opts.globs, opts.except)
-        if not hit then
+        if not hit and plast[name:lower()] then
           local low = full:lower()
           for _, sfx in ipairs(paths) do
             if low:sub(-#sfx) == sfx then
@@ -1945,6 +1963,19 @@ function M.build(input)
     end
   end
   plan.masks = masks
+  -- subdirectories whose watched names are compared when the run ends (see M.WATCH_NAMES)
+  plan.watch = { dirs = {}, names = M.WATCH_NAMES }
+  if not at_home and not shared then
+    for _, m in ipairs(w.members) do
+      if #plan.watch.dirs < M.WATCH_DIRS_MAX then
+        plan.watch.dirs[#plan.watch.dirs + 1] = m.dir
+      end
+    end
+    if #w.members > 0 then
+      plan.notes[#plan.notes + 1] = "files that run outside the sandbox (.cargo/config.toml, .envrc, .claude/settings.json, an editor's task file...)"
+        .. " that the agent CREATES in a subdirectory are not prevented (the ones that exist are read-only); a new one is reported when the run ends"
+    end
+  end
   for _, rel in ipairs(M.HOME_EPHEMERAL) do
     if exists(home .. rel) then
       plan.ephemeral[#plan.ephemeral + 1] = home .. rel

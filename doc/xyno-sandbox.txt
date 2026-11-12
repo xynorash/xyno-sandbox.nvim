@@ -261,7 +261,10 @@ hostname allowlist.
   - project secrets are found by file name and, for known token formats only,
     by content (bounded scan: 4000 files, 6000 directories, 256 KB each, 400 ms). Not found: plain
     passwords, generic keys, JWTs, database URLs, encoded or split secrets,
-    large or binary files, skipped directories, anything past a limit. A line
+    large or binary files, skipped directories, anything past a limit, a
+    header that is URL-encoded, an HTML entity, hex, base64 wrapped inside the
+    header or encoded twice, UTF-16 text. The scan is linear in the size of a
+    line and checks its time budget inside a file too. A line
     saying "example" no longer hides a real token (only a match that spells
     out it is a placeholder is ignored). A hard link to a hidden file outside
     the project cannot be hidden (the plan warns); one to a credential of the
@@ -270,6 +273,8 @@ hostname allowlist.
     ~/.config/direnv, ~/.claude/settings.json, the project's .git/hooks ...):
     it is hidden, the comparison looks at up to 1500 files. Other multi-link
     files are reported as a note. A private key header inside base64 is found.
+    The login file ~/.claude/.credentials.json is read-only in both home views
+    and a project hard link of it is hidden.
     A writable approval for any of those places, below one or above one
     (~/.config), is refused; there is no override (expert_exceptions only
     concerns environment variables).
@@ -293,7 +298,11 @@ hostname allowlist.
   - with network = "open", loopback services and abstract sockets are reachable.
   - cargo's `registry/src` and `git` are writable.
   - a nested `.git` deeper than 8 levels (policy.scan_depth) is not locked,
-    nor one the agent creates in a new directory.
+    nor one the agent creates in a new directory. The same holds for
+    .cargo/config.toml, .envrc, .claude/settings.json, .mcp.json, .vscode,
+    .zed, .idea, .helix, .husky ... that the agent creates in a SUBDIRECTORY
+    (the ones that exist there are read-only): the plan says so, and release()
+    warns about every new one (handle.planted). It does not prevent or remove them.
   - filtered mode: the agent can read its own token and send it to an allowed
     host; allowed hosts that accept uploads are exfiltration channels; the
     check is on the CONNECT name (no TLS interception, SNI is not compared);
