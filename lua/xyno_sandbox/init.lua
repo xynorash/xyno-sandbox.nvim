@@ -363,11 +363,10 @@ end
 
 -- --------------------------------------------------------------------- plan
 
-local aux_empty
-
+-- Every plan gets its own names: what a launch creates (the empty file that hidden files are bound
+-- to, the private copies, the socket directory) belongs to that launch and is removed with it.
 local function aux_paths()
-  aux_empty = aux_empty or (vim.fn.tempname() .. ".empty")
-  return { empty = aux_empty, claude_json = vim.fn.tempname() .. ".claude.json", net_dir = vim.fn.tempname() .. ".net",
+  return { empty = vim.fn.tempname() .. ".empty", claude_json = vim.fn.tempname() .. ".claude.json", net_dir = vim.fn.tempname() .. ".net",
     git_dir = vim.fn.tempname() .. ".git" }
 end
 
@@ -548,7 +547,7 @@ function M.reap_orphans()
       -- only what wrap() itself creates: <nvim tmpdir>/<n>.claude.json | .net | .git, never a symlink
       local st = vim.uv.fs_lstat(it[1])
       local name = vim.fs.basename(it[1])
-      if st and st.type ~= "link" and (name:match("%.claude%.json$") or name:match("%.net$") or name:match("%.git$")) then
+      if st and st.type ~= "link" and (name:match("%.claude%.json$") or name:match("%.net$") or name:match("%.git$") or (name:match("%.empty$") and st.size == 0)) then
         n = n + (vim.fn.delete(it[1], "rf") == 0 and 1 or 0)
       end
     elseif is_empty_leftover(it[1], it[2]) and not store.live_others(it[3], nil) then
@@ -618,6 +617,7 @@ local function prepare(plan)
   local temp = {}
   if plan.empty_file and not exists(plan.empty_file) then
     vim.fn.writefile({}, plan.empty_file)
+    temp[#temp + 1] = plan.empty_file
   end
   if plan.claude_json then
     -- a private COPY: it works, but nothing the sandbox writes reaches the real file
@@ -779,6 +779,14 @@ function M.wrap(cmd, project, tmp_dir, opts)
   end
   if h.net_dir then
     items[#items + 1] = { h.net_dir, "temp" }
+  end
+  -- Neovim's own temporary directory (/tmp/nvim.<user>/<id>) holds all of these; a killed Neovim
+  -- leaves it behind, empty once the files above are gone, and the next launch removes it too
+  if #temp > 0 or h.net_dir then
+    local d = vim.fs.dirname(temp[1] or h.net_dir)
+    if d and vim.fs.basename(vim.fs.dirname(d) or ""):match("^nvim%.") then
+      items[#items + 1] = { d, "dir" }
+    end
   end
   h.reg = store.live_add(project, tostring(next_id) .. "-" .. tostring(vim.uv.hrtime()), items)
   h.release = function()

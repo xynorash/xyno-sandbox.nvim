@@ -32,7 +32,11 @@ end
 -- line names the root (bwrap, the in-sandbox relay) is a process the specs created: any that is
 -- still alive after a spec file finished is killed and FAILS the run.
 local function writable_dir(d)
-  vim.fn.mkdir(d, "p")
+  -- (a $HOME that does not exist, or a read-only base, raises E739: that is "not usable", not a crash)
+  local ok = pcall(vim.fn.mkdir, d, "p")
+  if not ok then
+    return false
+  end
   local probe = vim.uv.fs_mkdtemp(d .. "/.probe-XXXXXX")
   if probe then
     vim.uv.fs_rmdir(probe)
@@ -50,10 +54,19 @@ local function bad_base(d)
   return false
 end
 
+local made_dirs = {} -- directories this run created only to hold the root (removed at the end when empty)
+
+--- A private root outside /tmp, or nil when nowhere is writable (the caller then skips the run).
 local function make_root()
   local real_home = vim.uv.os_homedir() or ""
   local cands = {}
-  for _, c in ipairs({ vim.env.XYNO_TEST_BASE or "", real_home ~= "" and (real_home .. "/.cache") or "", repo .. "/.test-root" }) do
+  local xdg = vim.env.XDG_CACHE_HOME
+  for _, c in ipairs({
+    vim.env.XYNO_TEST_BASE or "",
+    real_home ~= "" and (real_home .. "/.cache") or "",
+    (xdg and xdg:sub(1, 1) == "/") and xdg or "",
+    repo .. "/.test-root",
+  }) do
     if c ~= "" then
       cands[#cands + 1] = c
     end
@@ -63,18 +76,22 @@ local function make_root()
     return (#a > 44 and 1 or 0) < (#b > 44 and 1 or 0)
   end)
   for _, base in ipairs(cands) do
-    if base and base ~= "" and not bad_base(vim.uv.fs_realpath(base) or base) and writable_dir(base) then
+    local existed = vim.uv.fs_stat(base) ~= nil
+    if not bad_base(vim.uv.fs_realpath(base) or base) and writable_dir(base) then
       local root = vim.uv.fs_mkdtemp(base .. "/xyno-sandbox-test-XXXXXX")
       if root then
         root = vim.uv.fs_realpath(root)
         if not bad_base(root) then
+          if not existed then
+            made_dirs[#made_dirs + 1] = base
+          end
           return root, real_home
         end
         vim.fn.delete(root, "rf")
       end
     end
   end
-  error("tests/run.lua: no writable directory outside /tmp for the test root (set XYNO_TEST_BASE)")
+  return nil, real_home
 end
 
 local function write_file(path, text)
@@ -173,6 +190,12 @@ local FILE_TIMEOUT_MS = tonumber(vim.env.XYNO_TEST_FILE_TIMEOUT_MS) or 240000
 
 local function run_all(files)
   local root, real_home = make_root()
+  if not root then
+    -- nothing to build a private $HOME in (HOME=/nonexistent, a read-only checkout): say so and skip
+    io.stdout:write("SKIP all specs (no writable directory outside /tmp for the test root: set XYNO_TEST_BASE)\n")
+    io.stdout:write("RESULT passed=0 failed=0 skipped=1 xfailed=0\n")
+    os.exit(0)
+  end
   local env = child_env(root, real_home)
   local before = strays()
   local total = { passed = 0, failed = 0, skipped = 0, xfailed = 0 }
@@ -213,6 +236,9 @@ local function run_all(files)
   end
   vim.fn.delete(root, "rf")
   vim.fn.delete(env.XYNO_TEST_SCRATCH, "rf")
+  for _, d in ipairs(made_dirs) do
+    vim.uv.fs_rmdir(d) -- only when empty
+  end
   io.stdout:write(("RESULT passed=%d failed=%d skipped=%d xfailed=%d\n"):format(total.passed, total.failed, total.skipped, total.xfailed))
   os.exit(total.failed > 0 and 1 or 0)
 end

@@ -200,14 +200,64 @@ M.WRITABLE_FORBIDDEN_EXACT = {
   "/tmp", "/var", "/var/tmp", "/var/lib", "/var/cache", "/var/log", "/var/spool", "/mnt", "/media", "/srv", "/opt",
   "/home", "/dev/shm", "/nix", "/lost+found",
 }
--- Under $HOME: files and directories that run, or steer tools, outside the sandbox later.
-M.WRITABLE_FORBIDDEN_HOME = {
-  "/.bashrc", "/.bash_profile", "/.bash_login", "/.bash_logout", "/.profile", "/.zshrc", "/.zshenv", "/.zprofile",
-  "/.zlogin", "/.zlogout", "/.inputrc", "/.xinitrc", "/.xprofile", "/.xsession", "/.xsessionrc", "/.gitconfig",
-  "/.ssh", "/.gnupg", "/.pam_environment", "/.config/autostart", "/.config/systemd", "/.config/environment.d",
-  "/.config/fish", "/.config/nvim", "/.config/git", "/.config/plasma-workspace", "/.local/bin", "/.cargo/bin",
-  "/.cargo/config", "/.cargo/config.toml", "/.local/share/applications", "/.config/Code", "/.vscode",
+-- Under $HOME: files and directories that run, or steer tools, outside the sandbox later. The list
+-- is GENERATED from the categories below (documented in the README): a path is a member when some
+-- program of the user's, started later and outside the sandbox, reads it and ACTS on it (executes
+-- it, sources it, loads it as a plugin or hook, takes a command line from it). A writable approval
+-- is refused for such a path, for anything below it and for every parent of it (a writable
+-- ~/.config would contain ~/.config/nvim). There is no override for this: expert_exceptions only
+-- concerns environment variables.
+M.CODE_RUNS_OUTSIDE = {
+  { category = "shell startup files", paths = {
+    "/.bashrc", "/.bash_profile", "/.bash_login", "/.bash_logout", "/.bash_aliases", "/.profile", "/.zshrc", "/.zshenv",
+    "/.zprofile", "/.zlogin", "/.zlogout", "/.zsh", "/.zim", "/.zimrc", "/.oh-my-zsh", "/.inputrc", "/.config/zsh",
+    "/.config/fish", "/.config/nushell", "/.config/xonsh", "/.xonshrc", "/.config/elvish", "/.cshrc", "/.tcshrc", "/.kshrc",
+    "/.config/starship.toml", "/.pam_environment", "/.config/environment.d" } },
+  { category = "login session and desktop", paths = {
+    "/.xinitrc", "/.xprofile", "/.xsession", "/.xsessionrc", "/.Xresources", "/.Xdefaults", "/.config/autostart",
+    "/.config/systemd", "/.local/share/systemd", "/.config/plasma-workspace", "/.config/i3", "/.config/sway",
+    "/.config/hypr", "/.config/bspwm", "/.config/sxhkd", "/.config/awesome", "/.config/openbox", "/.config/xfce4",
+    "/.local/share/applications", "/.local/share/dbus-1", "/.config/dbus-1", "/.local/share/gnome-shell" } },
+  { category = "git", paths = { "/.gitconfig", "/.config/git", "/.git-templates", "/.config/gh" } },
+  { category = "remote access", paths = { "/.ssh", "/.gnupg" } },
+  { category = "editors and their plugins", paths = {
+    "/.config/nvim", "/.local/share/nvim", "/.vim", "/.vimrc", "/.config/vim", "/.emacs", "/.emacs.d",
+    "/.config/emacs", "/.config/helix", "/.config/zed", "/.local/share/zed", "/.config/Code", "/.config/Code - OSS",
+    "/.config/VSCodium", "/.config/Cursor", "/.vscode", "/.vscode-oss", "/.cursor", "/.config/JetBrains", "/.config/sublime-text",
+    "/.config/micro", "/.nanorc", "/.config/nano" } },
+  { category = "terminals and multiplexers", paths = {
+    "/.tmux.conf", "/.tmux", "/.config/tmux", "/.screenrc", "/.config/kitty", "/.config/alacritty", "/.config/wezterm",
+    "/.wezterm.lua", "/.config/ghostty", "/.config/foot", "/.config/zellij" } },
+  { category = "environment and version managers", paths = {
+    "/.config/direnv", "/.local/share/direnv", "/.direnvrc", "/.config/mise", "/.local/share/mise", "/.mise.toml", "/.tool-versions",
+    "/.asdf", "/.asdfrc", "/.config/asdf", "/.pyenv", "/.rbenv", "/.nvm", "/.sdkman", "/.jenv", "/.goenv", "/.nodenv", "/.volta",
+    "/.config/nix", "/.nix-profile", "/.nix-defexpr", "/.config/home-manager", "/.config/nixpkgs", "/.config/devbox" } },
+  { category = "toolchains and package manager configuration", paths = {
+    "/.local/bin", "/bin", "/.cargo/bin", "/.cargo/config", "/.cargo/config.toml", "/.cargo/env", "/.rustup", "/go/bin",
+    "/.npmrc", "/.yarnrc", "/.yarnrc.yml", "/.npm-global", "/.config/pip", "/.pip", "/.config/uv", "/.config/pypoetry",
+    "/.gradle/init.d", "/.gradle/gradle.properties", "/.m2/settings.xml", "/.m2/toolchains.xml", "/.bunfig.toml", "/.bun/bin",
+    "/.deno/bin", "/.config/conda", "/.condarc", "/.conda", "/.config/containers", "/.docker/config.json", "/.docker/cli-plugins" } },
+  { category = "agents: hooks, commands, MCP servers", paths = {
+    "/.claude/settings.json", "/.claude/settings.local.json", "/.claude/hooks", "/.claude/commands", "/.claude/agents",
+    "/.claude/skills", "/.claude/plugins", "/.claude/CLAUDE.md", "/.claude/keybindings.json", "/.claude.json", "/.mcp.json",
+    "/.codex", "/.gemini", "/.config/opencode", "/.aider.conf.yml", "/.config/goose", "/.config/claude" } },
 }
+M.WRITABLE_FORBIDDEN_HOME = {}
+for _, group in ipairs(M.CODE_RUNS_OUTSIDE) do
+  for _, rel in ipairs(group.paths) do
+    M.WRITABLE_FORBIDDEN_HOME[#M.WRITABLE_FORBIDDEN_HOME + 1] = rel
+  end
+end
+-- The same, with the category (for the refusal message).
+local function code_runs_category(rel)
+  for _, group in ipairs(M.CODE_RUNS_OUTSIDE) do
+    for _, r in ipairs(group.paths) do
+      if r == rel then
+        return group.category
+      end
+    end
+  end
+end
 -- System secrets that "unhide" never reveals.
 M.UNHIDE_FORBIDDEN = { "/etc/shadow", "/etc/gshadow", "/etc/shadow-", "/etc/gshadow-", "/etc/sudoers", "/etc/sudoers.d", "/etc/ssh", "/etc/security", "/root" }
 -- Environment variables that decide which code runs; "env" exceptions for them need the expert flag.
@@ -254,6 +304,7 @@ M.SCAN_SKIP = {
   target = true, node_modules = true, [".git"] = true, [".cache"] = true,
   [".venv"] = true, venv = true, __pycache__ = true, [".mypy_cache"] = true, [".tox"] = true,
 }
+M.HARDLINK_CODE_MAX = 1500 -- files compared with the project's multi-link files (hard-link check of code that runs outside)
 M.SCAN_DEPTH = 8 -- nested .git and workspace members are found down to this depth
 M.TREE_DIRS_EACH = 600
 M.TREE_MAX_DIRS = 2400
@@ -446,23 +497,78 @@ local function glob_pattern(g)
   return "^" .. g:gsub("[%^%$%(%)%%%.%[%]%+%-%?]", "%%%0"):gsub("%*", ".*") .. "$"
 end
 
---- Does base name `name` match a secret glob in `globs` (and no exception)? Case-insensitive.
-function M.is_secret_name(name, globs, except)
-  local n = name:lower()
-  if n:sub(-4) == ".pub" then
-    return false -- a public key
-  end
+--- A matcher for base names: `globs` (`*` = any characters) minus `except`, case-insensitive, public keys
+--- (`*.pub`) never. Built once per list: exact names are a set lookup, `prefix*` and `*suffix` are bucketed by
+--- their first / last character, only the rest runs a Lua pattern. A walk over a directory of 100000 files
+--- compiled every glob again for every file (18 s); this is a few hundred milliseconds.
+--- @return fun(name: string): boolean
+function M.secret_matcher(globs, except)
+  local exact, ex_set, prefix, suffix, mixed = {}, {}, {}, {}, {}
   for _, e in ipairs(except or {}) do
-    if n == e:lower() then
-      return false
-    end
+    ex_set[e:lower()] = true
   end
   for _, g in ipairs(globs) do
-    if n:match(glob_pattern(g:lower())) then
-      return true
+    local l = g:lower()
+    local stars = select(2, l:gsub("%*", ""))
+    if stars == 0 then
+      exact[l] = true
+    elseif stars == 1 and l:sub(-1) == "*" and #l > 1 then
+      local pre = l:sub(1, -2)
+      local c = pre:sub(1, 1)
+      prefix[c] = prefix[c] or {}
+      table.insert(prefix[c], pre)
+    elseif stars == 1 and l:sub(1, 1) == "*" and #l > 1 then
+      local suf = l:sub(2)
+      local c = suf:sub(-1)
+      suffix[c] = suffix[c] or {}
+      table.insert(suffix[c], suf)
+    else
+      mixed[#mixed + 1] = glob_pattern(l)
     end
   end
-  return false
+  return function(name)
+    local n = name:lower()
+    if n:sub(-4) == ".pub" or ex_set[n] then
+      return false
+    end
+    if exact[n] then
+      return true
+    end
+    local list = prefix[n:sub(1, 1)]
+    if list then
+      for _, pre in ipairs(list) do
+        if n:sub(1, #pre) == pre then
+          return true
+        end
+      end
+    end
+    list = suffix[n:sub(-1)]
+    if list then
+      for _, suf in ipairs(list) do
+        if #n >= #suf and n:sub(-#suf) == suf then
+          return true
+        end
+      end
+    end
+    for _, pat in ipairs(mixed) do
+      if n:match(pat) then
+        return true
+      end
+    end
+    return false
+  end
+end
+
+local matchers = setmetatable({}, { __mode = "k" })
+
+--- Does base name `name` match a secret glob in `globs` (and no exception)? Case-insensitive.
+function M.is_secret_name(name, globs, except)
+  local c = matchers[globs]
+  if not c or c.n ~= #globs or c.except ~= except or c.en ~= #(except or {}) then
+    c = { n = #globs, except = except, en = #(except or {}), f = M.secret_matcher(globs, except) }
+    matchers[globs] = c
+  end
+  return c.f(name)
 end
 
 --- One walk of the project down to `depth`: every `.git` (dir or file, plus the real gitdirs
@@ -712,7 +818,7 @@ function M.writable_forbidden(p, home, masked)
   for _, rel in ipairs(M.WRITABLE_FORBIDDEN_HOME) do
     local f = home .. rel
     if inside(p, f) or inside(f, p) then
-      return f .. " would run, or steer tools, outside the sandbox later"
+      return f .. " would run, or steer tools, outside the sandbox later (" .. (code_runs_category(rel) or "code") .. ")"
     end
   end
 end
@@ -738,7 +844,7 @@ end
 --- @return boolean ok, string? reason
 function M.validate_exception(exc, ctx)
   if type(exc) ~= "table" or not M.EXCEPTION_KINDS[exc.kind] then
-    return false, "unknown exception kind " .. vim.inspect(exc and exc.kind)
+    return false, "unknown exception kind " .. vim.inspect(type(exc) == "table" and exc.kind or nil)
   end
   local v = exc.value
   if type(v) ~= "string" or v == "" then
@@ -1663,6 +1769,84 @@ function M.build(input)
           check(p, 0)
         end
       end
+    end
+    -- A project name for a file that RUNS outside the sandbox later (a shell rc file, a git config or
+    -- hook, direnv, an editor or agent hook...): the name is writable, the other name is the same
+    -- inode, so a write through the project name plants code. The name is hidden (empty, read-only);
+    -- names below a path that is mounted read-only anyway are fine. Files first, then directories
+    -- under one budget, so a huge ~/.local/share/nvim cannot crowd out ~/.bashrc.
+    local covered = {}
+    local code = { stat = 0, queue = {}, stopped = false }
+    local function match_code(p)
+      local info = probes.stat_info(p)
+      local names = info and info.nlink and info.nlink > 1 and by_inode[tostring(info.dev) .. ":" .. tostring(info.ino)]
+      for _, name in ipairs(names or {}) do
+        covered[name] = true
+        if not M.shadow(plan, name) then
+          hide(name, "hard link of " .. p .. ", which runs outside the sandbox")
+          plan.hardlinks[#plan.hardlinks + 1] = { path = p, links = info.nlink, masked = 1, unaccounted = 0, alias = name, code = true }
+        end
+      end
+    end
+    local function visit(p, d)
+      if code.stat >= M.HARDLINK_CODE_MAX then
+        code.stopped = true
+        return
+      end
+      code.stat = code.stat + 1
+      local t = probes.stat_type(p)
+      if t == "file" then
+        match_code(p)
+      elseif t == "directory" and d < 4 then
+        code.queue[#code.queue + 1] = { p, d }
+      end
+    end
+    for _, base in ipairs(bases) do
+      for _, rel in ipairs(M.WRITABLE_FORBIDDEN_HOME) do
+        visit(base .. rel, 0)
+      end
+    end
+    for _, r in ipairs(plan.readonly) do
+      if inside(r.path, project) then
+        if r.why == "git" then
+          for _, sub in ipairs({ "/config", "/hooks", "/info", "/config.worktree" }) do
+            visit(r.path .. sub, 0)
+          end
+        else
+          visit(r.path, 0)
+        end
+      end
+    end
+    local qi = 1
+    while qi <= #code.queue and not code.stopped do
+      local dir, d = code.queue[qi][1], code.queue[qi][2]
+      qi = qi + 1
+      for _, e in ipairs(probes.list(dir)) do
+        visit(dir .. "/" .. e[1], d + 1)
+      end
+    end
+    if code.stopped then
+      plan.notes[#plan.notes + 1] = ("hard-link check of files that run outside the sandbox stopped after %d files:"
+        .. " names beyond that were not compared with the project's multi-link files"):format(M.HARDLINK_CODE_MAX)
+    end
+    -- every other multi-link file: its other names cannot be seen from here
+    local unknown = {}
+    for _, m in ipairs(multi) do
+      if not covered[m.path] and not M.shadow(plan, m.path) then
+        local hid = false
+        for _, h in ipairs(plan.hidden) do
+          hid = hid or h.path == m.path
+        end
+        if not hid then
+          unknown[#unknown + 1] = m.path
+        end
+      end
+    end
+    if #unknown > 0 then
+      plan.multilinks = { count = #unknown, sample = vim.list_slice(unknown, 1, 5) }
+      plan.notes[#plan.notes + 1] = ("%d project file%s ha%s other hard links that are not a known credential or a file that runs outside the sandbox"
+        .. " (e.g. %s): a write through such a name also changes the other names, wherever they are"):format(
+        #unknown, #unknown == 1 and "" or "s", #unknown == 1 and "s" or "ve", table.concat(vim.list_slice(unknown, 1, 3), ", "))
     end
   end
   if probes.stat_info then

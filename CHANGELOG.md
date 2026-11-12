@@ -2,6 +2,128 @@
 
 ## Unreleased
 
+### Fourth hardening round
+
+The second verification of the third round found the following, each confirmed by running it. Every fix has a spec that failed before it (checked against the previous commit) and passes now; the mutation table is below.
+
+- **Writable approvals for code that runs outside the sandbox**: `~/.config/direnv`, `~/.config/mise`, `~/.claude/{settings.json,hooks,commands,agents}`, `~/.local/share/nvim`, `~/.zshenv`, `~/.profile`, `~/.inputrc`, `~/.config/git`, `~/.cargo/config.toml`, `~/.rustup`, `~/.config/fish`, `~/.tmux.conf` and more were approved. The forbidden list is now generated from `plan.CODE_RUNS_OUTSIDE` (eight documented categories), the refusal names the category, a parent of a listed path is refused as before, and there is no override (`expert_exceptions` still only concerns environment variables). (`tests/round4_spec.lua`)
+- **Hard link write-through**: `ln ~/.bashrc proj/dot_bashrc` made the project name writable and every write reached the real file (reproduced in a real sandbox before the fix). Project names whose inode matches any file of the code-runs list, or a locked file of the project (`.git/config`, `.git/hooks`, `.envrc`, ...), are hidden (empty, read-only); files are compared before directories under a 1500-file budget with a note when it runs out. Every other multi-link project file is reported as a note and in `plan.multilinks`.
+- **Content scan boundaries**: `key=-----BEGIN RSA PRIVATE KEY-----MIIE...` on one line was missed (the header needed a non-word character after the dashes); a token after a JSON `\n`/`\t` escape was missed. Fixed, plus a private key header inside base64 (three alignments). A matrix spec covers 23 wrappers (quotes, `=`, `:`, JSON, YAML, URLs, CRLF) for eight token formats.
+- **kill -9 leftovers**: the empty file that hidden files are bound to stayed in Neovim's temporary directory (`/tmp/nvim.<user>/<id>`) and was shared by all launches. Every launch now has its own, removed by `release()`; it and Neovim's emptied directory are recorded and removed by the next launch. A relay inside the sandbox cannot do this (its socket directory is read-only there), so a Neovim that is never started again leaves them.
+- **Performance**: matching every file name against the ~250 secret globs compiled each glob again per file: a directory with 100000 files (not `target/`) took 18 s to plan. A compiled matcher (exact set, bucketed prefix/suffix) brings it to 0.4 s; the content scan also stops at 6000 directories and on its time budget while entering directories, and reads file systems that report no entry types. A plan for 100000 files in `target/` builds in about 0.2 s (0.4 s with 40000 directories, where the socket search stops at its budget and says so).
+- **Runner**: `HOME=/nonexistent` died with E739 in `make_root`; it now falls back (`$XDG_CACHE_HOME`, `<checkout>/.test-root`, removed afterwards) and skips cleanly with a reason where nothing is writable.
+- **Bug found by the new specs**: `validate_exception` raised an error for a non-table, non-string argument (a number) instead of refusing it.
+- **Surviving mutants of the third round**: specs for `run_keep` argv, a socket under `/tmp`, `home_allow` outside `$HOME`/through symlinks, `NO_PROXY`, hard-link aliases, `..` in approvals, submodule configs, every sanitizer branch, the URL placeholder filter, key file name suffixes, `/var/run`, kept `/run` entries, `$NVIM`, relay signals and bind address, a double `release()`, and the front door of approvals. (`tests/survivors2_spec.lua`)
+
+Mutation check of the fourth round (each edit applied to a copy of the repository outside /tmp, the named spec file run, the copy deleted): 102 mutants, 102 killed, 0 survived. One earlier candidate (dropping `name ~= p` in the hard-link loop) was equivalent, so that redundant condition was removed from the code.
+
+| mutation | edit | file | result |
+|---|---|---|---|
+| run_keep_all_rw | add("sockets", k.why, "--ro-bind", k.path, k.path) -> add("sockets", k.why, "--bind", k.path, k.path) | plan.lua | killed by survivors2_spec.lua |
+| in_masked_tmp_always_false | local in_masked = function(p) if inside(p, "/tmp") then -> local in_masked = function(p) if false then | plan.lua | killed by survivors2_spec.lua |
+| home_allow_inside_check | if not (p and p ~= home and inside(p, home) and exists(p)) t -> if not (p and p ~= home and exists(p)) then | plan.lua | killed by survivors2_spec.lua |
+| home_allow_not_home_itself | if not (p and p ~= home and inside(p, home) and exists(p)) t -> if not (p and inside(p, home) and exists(p)) then | plan.lua | killed by survivors2_spec.lua |
+| home_allow_symlink | if lstat_type(p) == "link" then -- bwrap cannot mount on a s -> if false then -- bwrap cannot mount on a symlink | plan.lua | killed by survivors2_spec.lua |
+| home_allow_symlink_target_unchecked | if real and real ~= p then return allow(real, why) end retur -> if real and real ~= p then aseen[real] = true plan | plan.lua | killed by survivors2_spec.lua |
+| no_proxy_empty | add("setenv", "no direct connections", "--setenv", "NO_PROXY -> add("setenv", "no direct connections", "--setenv", | plan.lua | killed by survivors2_spec.lua |
+| no_proxy_lower_empty | add("setenv", "no direct connections", "--setenv", "no_proxy -> local _ = 1 | plan.lua | killed by survivors2_spec.lua |
+| hardlink_alias | hide(m.path, "hard link of the hidden " .. h.path) -> local _ = m | plan.lua | killed by survivors2_spec.lua |
+| hardlink_cred_alias | hide(name, "hard link of the credential " .. p) -> local _ = name | plan.lua | killed by round3_spec.lua |
+| validate_dotdot | if seg == ".." then return nil elseif -> if seg == ".." then -- dropped elseif | plan.lua | killed by survivors2_spec.lua |
+| git_modules | add_config(mc) -> local _ = mc | plan.lua | killed by survivors2_spec.lua |
+| git_modules_only_first | for _, mc in ipairs(probes.glob(g .. "/modules/*/config")) d -> for _, mc in ipairs(vim.list_slice(probes.glob(g . | plan.lua | killed by survivors2_spec.lua |
+| san_token | password = true, token = true, -> password = true, | sanitize.lua | killed by survivors2_spec.lua |
+| san_password | password = true, token = true, -> token = true, | sanitize.lua | killed by survivors2_spec.lua |
+| san_askpass | askpass = true, -> (removed) | sanitize.lua | killed by survivors2_spec.lua |
+| san_extraheader | extraheader = true, -> (removed) | sanitize.lua | killed by survivors2_spec.lua |
+| san_cont_top | if drop_cont then drop_cont = line:sub(-1) == "\\" -> if drop_cont then drop_cont = false | sanitize.lua | killed by survivors2_spec.lua |
+| san_cont_in | changes[#changes + 1] = section .. "." .. k .. " hidden" dro -> changes[#changes + 1] = section .. "." .. k .. " h | sanitize.lua | killed by survivors2_spec.lua |
+| san_header_case | section = header:lower() -> section = header | sanitize.lua | killed by survivors2_spec.lua |
+| san_key_case | local k = key:lower() -> local k = key | sanitize.lua | killed by survivors2_spec.lua |
+| san_helper_any_section | (section:match("^credential") and k == "helper") -> (k == "helper") | sanitize.lua | killed by survivors2_spec.lua |
+| san_helper_dropped_never | (section:match("^credential") and k == "helper") or -> false or | sanitize.lua | killed by survivors2_spec.lua |
+| san_bare_key | or line:match("^%s*([%w_-]+)%s*$") -> (removed) | sanitize.lua | killed by survivors2_spec.lua |
+| san_userinfo | if new ~= line then -> if false then | sanitize.lua | killed by survivors2_spec.lua |
+| scan_urlcreds_placeholder | for _, ph in ipairs({ "password", "passw0rd", "changeme", "s -> for _, ph in ipairs({}) do | scan.lua | killed by survivors2_spec.lua |
+| scan_urlcreds_ph_redacted | , "********", "redacted" }) do -> , "********" }) do | scan.lua | killed by survivors2_spec.lua |
+| scan_urlcreds_ph_secret | "changeme", "secret", "example" -> "changeme", "example" | scan.lua | killed by survivors2_spec.lua |
+| scan_urlcreds_len | #pw < 8 -> #pw < 4 | scan.lua | killed by survivors2_spec.lua |
+| scan_urlcreds_chars | pw:find("[%$%{%}<>%%]") -> pw:find("[%$%{%}<>]") | scan.lua | killed by survivors2_spec.lua |
+| secret_idrsa | "sa.json", "serviceaccount.json", "*serviceaccount*.json", " -> "sa.json", "serviceaccount.json", "*serviceaccount | plan.lua | killed by survivors2_spec.lua |
+| secret_idrsa_ed | "id_ecdsa*", "id_ed25519*", -> "id_ecdsa*", | plan.lua | killed by survivors2_spec.lua |
+| secret_idrsa_dsa | "id_rsa*", "id_dsa*", -> "id_rsa*", | plan.lua | killed by survivors2_spec.lua |
+| mask_varrun | M.MASKED_IF_DIR = { "/var/run" } -> M.MASKED_IF_DIR = {} | plan.lua | killed by survivors2_spec.lua |
+| mask_varrun_always | if lstat_type(p) == "directory" then plan.masked[#plan.maske -> if lstat_type(p) ~= nil then plan.masked[#plan.mas | plan.lua | killed by survivors2_spec.lua |
+| runkeep_none | M.RUN_KEEP = { "/run/current-system", "/run/booted-system",  -> M.RUN_KEEP = {} | plan.lua | killed by survivors2_spec.lua |
+| runkeep_opengl | "/run/booted-system", "/run/opengl-driver" } -> "/run/booted-system" } | plan.lua | killed by survivors2_spec.lua |
+| sockenv_nvim | , "NVIM", "NVIM_LISTEN_ADDRESS" } -> , "NVIM" } | plan.lua | killed by survivors2_spec.lua |
+| sockenv_nvim_both | , "NVIM", "NVIM_LISTEN_ADDRESS" } -> } | plan.lua | killed by survivors2_spec.lua |
+| relay_sighup | { "sigterm", "sigint", "sighup" } -> { "sigterm", "sigint" } | relay.lua | killed by survivors2_spec.lua |
+| relay_sigint | { "sigterm", "sigint", "sighup" } -> { "sigterm", "sighup" } | relay.lua | killed by survivors2_spec.lua |
+| relay_bind_all | server:bind("127.0.0.1", port) -> server:bind("0.0.0.0", port) | relay.lua | killed by survivors2_spec.lua |
+| release_guard | if h.released then return end h.released = true -> h.released = true | init.lua | killed by survivors2_spec.lua |
+| v_unknown_kind | if type(exc) ~= "table" or not M.EXCEPTION_KINDS[exc.kind] t -> if type(exc) ~= "table" then | plan.lua | killed by survivors2_spec.lua |
+| v_unknown_kind_table | if type(exc) ~= "table" or not M.EXCEPTION_KINDS[exc.kind] t -> if not M.EXCEPTION_KINDS[exc.kind] then | plan.lua | killed by survivors2_spec.lua |
+| v_empty | if type(v) ~= "string" or v == "" then -> if false then | plan.lua | killed by survivors2_spec.lua |
+| v_empty_only | if type(v) ~= "string" or v == "" then -> if type(v) ~= "string" then | plan.lua | killed by survivors2_spec.lua |
+| v_nonstring | if type(v) ~= "string" or v == "" then -> if v == "" then | plan.lua | killed by survivors2_spec.lua |
+| v_envname | if not v:match("^[%a_][%w_]*$") then -> if false then | plan.lua | killed by survivors2_spec.lua |
+| v_envname_anchor | if not v:match("^[%a_][%w_]*$") then -> if not v:match("^[%a_][%w_]*") then | plan.lua | killed by survivors2_spec.lua |
+| code_drop_direnv | "/.config/direnv", -> (removed) | plan.lua | killed by round4_spec.lua |
+| code_drop_rustup | "/.cargo/env", "/.rustup", -> "/.cargo/env", | plan.lua | killed by round4_spec.lua |
+| code_drop_claude_hooks | "/.claude/settings.json", "/.claude/settings.local.json", "/ -> "/.claude/settings.json", "/.claude/settings.local | plan.lua | killed by round4_spec.lua |
+| code_drop_zshenv | "/.zshrc", "/.zshenv", "/.zprofile" -> "/.zshrc", "/.zprofile" | plan.lua | killed by round4_spec.lua |
+| code_ancestor_half | if inside(p, f) or inside(f, p) then return f .. " would run -> if inside(p, f) then return f .. " would run | plan.lua | killed by round4_spec.lua |
+| code_child_half | if inside(p, f) or inside(f, p) then return f .. " would run -> if inside(f, p) then return f .. " would run | plan.lua | killed by round4_spec.lua |
+| code_flatten | M.WRITABLE_FORBIDDEN_HOME[#M.WRITABLE_FORBIDDEN_HOME + 1] =  -> local _ = rel | plan.lua | killed by round4_spec.lua |
+| code_category_msg | (" .. (code_runs_category(rel) or "code") .. ")" -> " | plan.lua | killed by round4_spec.lua |
+| hl_code_loop | for _, rel in ipairs(M.WRITABLE_FORBIDDEN_HOME) do visit(bas -> for _, rel in ipairs({}) do visit(base .. rel, 0) | plan.lua | killed by round4_spec.lua |
+| hl_never_hide | if not M.shadow(plan, name) then -> if false then | plan.lua | killed by round4_spec.lua |
+| hl_git_paths | for _, sub in ipairs({ "/config", "/hooks", "/info", "/confi -> for _, sub in ipairs({}) do | plan.lua | killed by round4_spec.lua |
+| hl_git_hooks | { "/config", "/hooks", "/info", "/config.worktree" } -> { "/config", "/info", "/config.worktree" } | plan.lua | killed by round4_spec.lua |
+| hl_project_readonly | if inside(r.path, project) then if r.why == "git" then -> if false then if r.why == "git" then | plan.lua | killed by round4_spec.lua |
+| hl_unknown_note | if #unknown > 0 then -> if false then | plan.lua | killed by round4_spec.lua |
+| hl_budget | if code.stat >= M.HARDLINK_CODE_MAX then -> if false then | plan.lua | killed by round4_spec.lua |
+| hl_budget_note | if code.stopped then plan.notes -> if false then plan.notes | plan.lua | killed by round4_spec.lua |
+| hl_dirs_depth | elseif t == "directory" and d < 4 then code.queue -> elseif t == "directory" and d < 0 then code.queue | plan.lua | killed by round4_spec.lua |
+| hl_queue | while qi <= #code.queue and not code.stopped do -> while false do | plan.lua | killed by round4_spec.lua |
+| sc_loose | (pat[5] or boundary(line, i, j)) and -> boundary(line, i, j) and | scan.lua | killed by round4_spec.lua |
+| sc_json_escape | local esc = i > 2 and s:sub(i - 2, i - 2) == "\\" and before -> local esc = false | scan.lua | killed by round4_spec.lua |
+| sc_json_escape_n_only | before:match("[nrt]") -> before:match("[n]") | scan.lua | killed by round4_spec.lua |
+| sc_b64_off | for _, form in ipairs(b64_forms(hdr)) do -> for _, form in ipairs({}) do | scan.lua | killed by round4_spec.lua |
+| sc_b64_align | for k = 0, 2 do local enc -> for k = 0, 1 do local enc | scan.lua | killed by round4_spec.lua |
+| sc_b64_cert | "-----BEGIN PRIVATE KEY", "-----BEGIN RSA PRIVATE KEY" -> "-----BEGIN CERTIFICATE", "-----BEGIN RSA PRIVATE | scan.lua | killed by round4_spec.lua |
+| sc_maxdirs | if qi > M.MAX_DIRS + 1 then -> if false then | scan.lua | killed by round4_spec.lua |
+| sc_unknown_type | if ty == nil or ty == "unknown" then -> if false then | scan.lua | killed by round4_spec.lua |
+| sc_dir_time | if (uv.hrtime() - t0) / 1e6 > M.MAX_MS then res.truncated, r -> local h = uv.fs_scandir(dir) | scan.lua | killed by round4_spec.lua |
+| sc_private_key_pub | "%-%-%-%-%-BEGIN [%u ]*PRIVATE KEY[%u ]*%-%-%-%-%-" -> "%-%-%-%-%-BEGIN [%u ]*KEY[%u ]*%-%-%-%-%-" | scan.lua | killed by round4_spec.lua |
+| d_empty_recorded | vim.fn.writefile({}, plan.empty_file) temp[#temp + 1] = plan -> vim.fn.writefile({}, plan.empty_file) | init.lua | killed by round4_spec.lua |
+| d_reap_empty_name | or (name:match("%.empty$") and st.size == 0)) -> ) | init.lua | killed by round4_spec.lua |
+| d_reap_empty_size | name:match("%.empty$") and st.size == 0 -> name:match("%.empty$") | init.lua | killed by round4_spec.lua |
+| d_dir_recorded | items[#items + 1] = { d, "dir" } -> local _ = d | init.lua | killed by round4_spec.lua |
+| d_per_launch | return { empty = vim.fn.tempname() .. ".empty", -> _G.__xe = _G.__xe or (vim.fn.tempname() .. ".empty | init.lua | killed by round4_spec.lua |
+| d_net_recorded | items[#items + 1] = { h.net_dir, "temp" } -> local _ = h | init.lua | killed by round4_spec.lua |
+| f_pcall | local ok = pcall(vim.fn.mkdir, d, "p") if not ok then return -> vim.fn.mkdir(d, "p") | run.lua | killed by round4_spec.lua |
+| f_skip | if not root then -- nothing -> if false then -- nothing | run.lua | killed by round4_spec.lua |
+| f_skip_exit | io.stdout:write("RESULT passed=0 failed=0 skipped=1 xfailed= -> io.stdout:write("RESULT passed=0 failed=0 skipped= | run.lua | killed by round4_spec.lua |
+| f_fallback_repo | repo .. "/.test-root", }) do -> }) do | run.lua | killed by round4_spec.lua |
+| f_made_dirs | vim.uv.fs_rmdir(d) -- only when empty -> local _ = d | run.lua | killed by round4_spec.lua |
+| x_exc_nontable | vim.inspect(type(exc) == "table" and exc.kind or nil) -> vim.inspect(exc and exc.kind) | plan.lua | killed by survivors2_spec.lua |
+| hl_shadow_dropped2 | if not M.shadow(plan, name) then -> if true then | plan.lua | killed by round4_spec.lua |
+| docs_readme_override | there is no override -> there is an override | README.md | killed by docs_spec.lua |
+| m_exact | if exact[n] then return true end -> if false then return true end | plan.lua | killed by round4_spec.lua |
+| m_except | if n:sub(-4) == ".pub" or ex_set[n] then -> if n:sub(-4) == ".pub" then | plan.lua | killed by round4_spec.lua |
+| m_pub | if n:sub(-4) == ".pub" or ex_set[n] then -> if ex_set[n] then | plan.lua | killed by round4_spec.lua |
+| m_prefix | if n:sub(1, #pre) == pre then -> if n:sub(1, #pre) == pre and #n > #pre then | plan.lua | killed by round4_spec.lua |
+| m_prefix_bucket | local list = prefix[n:sub(1, 1)] -> local list = prefix[n:sub(2, 2)] | plan.lua | killed by round4_spec.lua |
+| m_suffix | if #n >= #suf and n:sub(-#suf) == suf then -> if #n > #suf and n:sub(-#suf) == suf then | plan.lua | killed by round4_spec.lua |
+| m_suffix_bucket | list = suffix[n:sub(-1)] -> list = suffix[n:sub(1, 1)] | plan.lua | killed by round4_spec.lua |
+| m_mixed | for _, pat in ipairs(mixed) do if n:match(pat) then -> for _, pat in ipairs({}) do if n:match(pat) then | plan.lua | killed by round4_spec.lua |
+| m_cache_invalidate | if not c or c.n ~= #globs or c.except ~= except or c.en ~= # -> if not c then | plan.lua | killed by round4_spec.lua |
+| m_star_only | elseif stars == 1 and l:sub(-1) == "*" and #l > 1 then -> elseif stars == 1 and l:sub(-1) == "*" then | plan.lua | killed by round4_spec.lua |
+
+Remaining limits (also in the README): the code-runs list is a list of known places, not proof; hard links to files outside both lists, or in directories the scan skips, stay writable (the plan warns when it sees a multi-link file); a key in base64 is found only as a private key header, every other encoded secret is not; the guard that registers Neovim's emptied temporary directory is only for `nvim.<user>/<id>` and has no spec of its own; timings are from one machine.
+
 ### Third hardening round
 
 A second independent verification found the following; each has a spec in `tests/round3_spec.lua` or `tests/survivors_spec.lua` that fails when the fix is removed (mutation table below).

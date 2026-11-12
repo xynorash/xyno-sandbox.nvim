@@ -5,7 +5,7 @@ nvim -l tests/run.lua                  # every tests/*_spec.lua, one headless nv
 nvim -l tests/run.lua tests/x_spec.lua # one spec file
 ```
 
-`tests/run.lua` builds a private root (fake `$HOME` with fake credentials, outside `/tmp`) for the whole run, fails when a spec file leaves a `bwrap` or relay process behind, and removes the root. Set `XYNO_TEST_BASE` to choose where it is created.
+`tests/run.lua` builds a private root (fake `$HOME` with fake credentials, outside `/tmp`) for the whole run, fails when a spec file leaves a `bwrap` or relay process behind, and removes the root. Set `XYNO_TEST_BASE` to choose where it is created. Without a usable `$HOME` (`HOME=/nonexistent`) it falls back to `$XDG_CACHE_HOME`, then to `<checkout>/.test-root` (removed again); with nowhere writable outside `/tmp` it prints `SKIP all specs (...)` and exits 0.
 
 One line per test, then `RESULT passed=N failed=N skipped=N xfailed=N`. The exit code is 0 only without failures.
 
@@ -29,6 +29,7 @@ One line per test, then `RESULT passed=N failed=N skipped=N xfailed=N`. The exit
 - `harness_spec.lua`: the harness itself.
 - `leak_spec.lua`: relay, bwrap and proxy lifetime; the runner's process-leak check.
 - `hermetic_spec.lua`: the private fake `$HOME`, cleanup, a machine without bubblewrap.
+- `round3_spec.lua`, `round4_spec.lua`, `survivors_spec.lua`, `survivors2_spec.lua`: one `describe` per finding of the third and fourth hardening rounds (hard links to credentials and to files that run outside the sandbox, token boundaries of the content scan, what a kill -9 leaves behind, the runner without a usable `$HOME`, the secret-name matcher and large-project timings) and the specs that kill the mutants listed in the CHANGELOG.
 - `claude_spec.lua`, `homes_spec.lua`, `tokens_spec.lua`, `writable_spec.lua`, `sections_spec.lua`: `~/.claude`, other homes, secrets without a telling name, writable approvals, one check per preview section.
 
 Specs that need a working user namespace call `H.need_sandbox()` and `SKIP` with the reason where none exists.

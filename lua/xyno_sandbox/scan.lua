@@ -17,6 +17,7 @@ M.MAX_FILES = 4000
 M.MAX_FILE_BYTES = 256 * 1024
 M.MAX_TOTAL_BYTES = 24 * 1024 * 1024
 M.MAX_DEPTH = 8
+M.MAX_DIRS = 6000 -- directories entered (a tree of 100k empty directories must not cost 100k scandir calls)
 M.MAX_MS = 400
 M.SKIP_DIRS = {
   target = true, node_modules = true, [".git"] = true, [".cache"] = true, [".venv"] = true, venv = true,
@@ -35,7 +36,28 @@ local function boundary(s, i, j)
   -- the match s[i..j] is not part of a longer token
   local before = i > 1 and s:sub(i - 1, i - 1) or ""
   local after = s:sub(j + 1, j + 1)
-  return not before:match("[%w_]") and not after:match("[%w_]")
+  if before:match("[%w_]") then
+    -- "\nAKIA..." inside a JSON / YAML string: the "n" belongs to an escape, not to a word
+    local esc = i > 2 and s:sub(i - 2, i - 2) == "\\" and before:match("[nrt]")
+    if not esc then
+      return false
+    end
+  end
+  return not after:match("[%w_]")
+end
+
+-- Base64 of the private key header at the three alignments it can have in an encoded document
+-- (a Kubernetes secret, a CI variable, a JSON field holding a base64 file): only the characters
+-- that do not depend on what comes before or after.
+local function b64_forms(text)
+  local out = {}
+  for k = 0, 2 do
+    local enc = vim.base64.encode(("x"):rep(k) .. text)
+    -- whole 3-byte groups made of header bytes only: the neighbours cannot change them
+    local first, last = math.ceil(k / 3), math.floor((k + #text) / 3)
+    out[#out + 1] = (enc:sub(4 * first + 1, 4 * last):gsub("%p", "%%%0"))
+  end
+  return out
 end
 
 -- { kind, lua pattern, optional exact length of the whole match }
@@ -58,7 +80,8 @@ M.PATTERNS = {
   { "Google API key", "AIza[%w_%-]+", 39 },
   { "npm token", "npm_[%w]+", 40 },
   { "SendGrid key", "SG%.[%w_%-]+%.[%w_%-]+", nil, function(m) return #m == 69 end },
-  { "private key", "%-%-%-%-%-BEGIN [%u ]*PRIVATE KEY[%u ]*%-%-%-%-%-" },
+  -- loose: the dashes are distinctive, and a key is often glued to its neighbours (key=-----BEGIN ...-----MIIE...)
+  { "private key", "%-%-%-%-%-BEGIN [%u ]*PRIVATE KEY[%u ]*%-%-%-%-%-", nil, nil, true },
   { "credentials in a URL", "%a[%w%+%.%-]*://[^/%s:@\"']*:[^/%s@\"']+@[%w%.%-]+", nil, function(m)
     local pw = m:match("^%a[%w%+%.%-]*://[^:/]*:([^@]+)@")
     if not pw or #pw < 8 or pw:find("[%$%{%}<>%%]") then
@@ -73,6 +96,12 @@ M.PATTERNS = {
     return true
   end },
 }
+for _, hdr in ipairs({ "-----BEGIN PRIVATE KEY", "-----BEGIN RSA PRIVATE KEY", "-----BEGIN EC PRIVATE KEY", "-----BEGIN DSA PRIVATE KEY",
+  "-----BEGIN OPENSSH PRIVATE KEY", "-----BEGIN ENCRYPTED PRIVATE KEY", "-----BEGIN PGP PRIVATE KEY" }) do
+  for _, form in ipairs(b64_forms(hdr)) do
+    M.PATTERNS[#M.PATTERNS + 1] = { "private key (base64)", form, nil, nil, true }
+  end
+end
 -- A MATCH that spells out that it is not real ("AKIAIOSFODNN7EXAMPLE", "ghp_xxxxxxxx...") is
 -- documentation of a format. Judged on the matched token only: a real token on a line that says
 -- "example" (a comment, a repo or a host called example) is still a secret.
@@ -103,7 +132,7 @@ function M.text(text)
             break
           end
           local m = line:sub(i, j)
-          local ok = boundary(line, i, j) and (not pat[3] or #m == pat[3]) and (not pat[4] or pat[4](m))
+          local ok = (pat[5] or boundary(line, i, j)) and (not pat[3] or #m == pat[3]) and (not pat[4] or pat[4](m))
           -- the URL pattern judges its own password part (the host may well be example.com)
           if ok and kind ~= "credentials in a URL" and placeholder(m) then
             ok = false
@@ -148,6 +177,14 @@ function M.project(project, opts)
   while qi <= #queue do
     local dir, depth = queue[qi][1], queue[qi][2]
     qi = qi + 1
+    if qi > M.MAX_DIRS + 1 then
+      res.truncated, res.why = true, "more than " .. M.MAX_DIRS .. " directories"
+      return res
+    end
+    if (uv.hrtime() - t0) / 1e6 > M.MAX_MS then
+      res.truncated, res.why = true, "more than " .. M.MAX_MS .. " ms"
+      return res
+    end
     local h = uv.fs_scandir(dir)
     if h then
       while true do
@@ -156,6 +193,11 @@ function M.project(project, opts)
           break
         end
         local path = dir .. "/" .. name
+        if ty == nil or ty == "unknown" then
+          -- some file systems do not report the type with the name
+          local l = uv.fs_lstat(path)
+          ty = l and l.type or nil
+        end
         if ty == "directory" then
           if depth < M.MAX_DEPTH and not M.SKIP_DIRS[name] then
             queue[#queue + 1] = { path, depth + 1 }

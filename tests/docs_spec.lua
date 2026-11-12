@@ -59,3 +59,31 @@ describe("docs match the code", function()
     end
   end)
 end)
+
+describe("docs match the code (fourth round)", function()
+  it("every category of places that run code outside the sandbox is named in the README", function()
+    local readme = io.open(H.repo .. "/README.md"):read("*a")
+    for _, group in ipairs(plan.CODE_RUNS_OUTSIDE) do
+      -- the README names the category in words; the first path of the category is the anchor
+      H.match(readme, group.paths[1]:sub(2), true, group.category .. " (" .. group.paths[1] .. ")")
+    end
+    H.match(readme, "plan.CODE_RUNS_OUTSIDE", true)
+    H.match(readme, "there is no override", true)
+  end)
+
+  it("the documented budgets of the scan and of the hard-link comparison are the real ones", function()
+    local scan = require("xyno_sandbox.scan")
+    local text = H.docs_text()
+    H.eq(6000, scan.MAX_DIRS)
+    H.eq(1500, plan.HARDLINK_CODE_MAX)
+    H.match(text, "6000 directories", true)
+    H.match(text, "1500 files", true)
+  end)
+
+  it("the limits that remain are stated: a key in base64 only, kill -9 leftovers, unknown hard links", function()
+    local text = H.docs_text()
+    for _, s in ipairs({ "inside base64", "emptied directory itself", "cannot remove them", "Anything an unlisted program reads and runs is not covered" }) do
+      H.match(text, s, true, s)
+    end
+  end)
+end)

@@ -259,13 +259,20 @@ hostname allowlist.
     the default allowlist the rest of the filesystem (/etc, /var, /opt, files
     of other users) still is.
   - project secrets are found by file name and, for known token formats only,
-    by content (bounded scan: 4000 files, 256 KB each, 400 ms). Not found: plain
+    by content (bounded scan: 4000 files, 6000 directories, 256 KB each, 400 ms). Not found: plain
     passwords, generic keys, JWTs, database URLs, encoded or split secrets,
     large or binary files, skipped directories, anything past a limit. A line
     saying "example" no longer hides a real token (only a match that spells
     out it is a placeholder is ignored). A hard link to a hidden file outside
     the project cannot be hidden (the plan warns); one to a credential of the
-    hidden list in $HOME is found and hidden.
+    hidden list in $HOME is found and hidden. So is a project name for a file
+    that runs outside the sandbox later (~/.bashrc, ~/.gitconfig,
+    ~/.config/direnv, ~/.claude/settings.json, the project's .git/hooks ...):
+    it is hidden, the comparison looks at up to 1500 files. Other multi-link
+    files are reported as a note. A private key header inside base64 is found.
+    A writable approval for any of those places, below one or above one
+    (~/.config), is refused; there is no override (expert_exceptions only
+    concerns environment variables).
   - directories shown whole from $HOME (a $PATH entry's parent) are searched
     for secret NAMES (.ssh, .npmrc, credentials, secrets/ ...), not content;
     policy.tree_secrets = false turns it off.
@@ -278,7 +285,9 @@ hostname allowlist.
   - the ~/.claude.json copy drops API keys, the e-mail address, MCP server env
     and headers and token-looking strings; a user-scope MCP server that needs
     a token from its config does not work inside.
-  - after kill -9 of Neovim its private copies stay until the next launch.
+  - after kill -9 of Neovim its private copies, the empty file of the
+    launch and Neovim's emptied temporary directory stay until the next
+    launch (any wrap()) removes them.
     Symlinks out of the project are listed, not blocked (unless
     policy.symlinks = "refuse").
   - with network = "open", loopback services and abstract sockets are reachable.
