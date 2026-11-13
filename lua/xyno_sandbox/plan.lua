@@ -226,7 +226,15 @@ M.REVIEW_NAMES = {
   ".python-version",
   ".ruby-version",
   ".gitattributes",
+  "init.gradle",
+  "init.gradle.kts",
 }
+-- Directories whose sources are COMPILED AND RUN by a tool you start later (Gradle builds buildSrc and included builds
+-- before every build). The agent has to edit them, so they are not locked: a content record is taken at launch and
+-- the changed files are reported at ERROR level with the lines that differ.
+M.REVIEW_TREES = { "buildSrc", "build-logic" }
+-- Gradle init scripts: not loaded from the project by Gradle, but passed with `-I` / copied to GRADLE_USER_HOME by
+-- habit; reported when edited, like the other build files.
 -- Absent directories that are masked (an empty read-only directory is mounted there, so the agent cannot
 -- create them) in the SHALLOWEST subdirectories, at most this many mounts: a mount per directory and name for
 -- a whole tree would be thousands. Deeper directories are covered by the end-of-run sweep (xyno_sandbox.guard).

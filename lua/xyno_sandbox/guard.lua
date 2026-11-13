@@ -33,6 +33,8 @@ M.CONTENT_MAX_BYTES = 8 * 1024 * 1024 -- content read inside protected names per
 M.REVIEW_KEEP_BYTES = 4 * 1024 * 1024 -- text kept in memory for the diff summary (more: hashes only)
 M.QUARANTINE_FILE_MAX = 1024 * 1024
 M.QUARANTINE_ENTRIES_MAX = 300
+M.QUARANTINE_DEPTH = 8 -- directory levels copied into the quarantine
+M.UNLOCK_MAX = 5000 -- entries opened for the owner when a removal fails on read-only directories
 -- walked in a second pass with the smaller budget above (M.SKIP_MAX_DIRS / M.SKIP_MAX_MS), after everything else
 M.SKIP_DIRS = { target = true, node_modules = true, [".git"] = true, [".venv"] = true, venv = true, __pycache__ = true }
 -- their content changes by itself while you work (the index, the IDE's workspace file): only their
@@ -122,6 +124,8 @@ function M.snapshot(project)
     ino = {},
     content = {},
     review = {},
+    trees = {},
+    bin = {},
     dirs = 0,
     skip_dirs = 0,
     truncated = false,
@@ -205,6 +209,39 @@ function M.snapshot(project)
     end
     snap.review[path] = rec
   end
+  -- sources that a tool compiles and runs later (plan.REVIEW_TREES): the content of the whole directory
+  local trees = {}
+  for _, n in ipairs(plan_mod.REVIEW_TREES) do
+    trees[n] = true
+  end
+  local function record_tree(path)
+    local files = { [""] = { id = "directory" } }
+    dir_sig(path, function(rel, est, epath)
+      files[rel] = file_rec(epath, est)
+    end)
+    local ids = {}
+    for rel, f in pairs(files) do
+      ids[#ids + 1] = rel .. "\0" .. f.id
+    end
+    table.sort(ids)
+    snap.trees[path] = { files = files, hash = vim.fn.sha256(table.concat(ids, "\n")) }
+  end
+  -- node_modules/.bin (of the project and of its workspaces, not of dependencies): what an `npm run` / `npx` on your
+  -- machine starts by name. One record per entry: a link's target, a file's hash (signature past 128 KB).
+  local function record_bin(path)
+    local n = 0
+    for _, e in ipairs(list(path)) do
+      n = n + 1
+      if n > 500 then
+        break
+      end
+      local ep = path .. "/" .. e[1]
+      local st = vim.uv.fs_lstat(ep)
+      if st then
+        snap.bin[ep] = file_rec(ep, st).id
+      end
+    end
+  end
   local skipped = {}
   -- one breadth-first pass over `queue`; directories of SKIP_DIRS go to `skipped` (first pass) or are entered (second)
   local function pass(queue, second)
@@ -246,6 +283,12 @@ function M.snapshot(project)
         end
         if is_review(name, dir) then
           record_review(path)
+        end
+        if trees[name] and (ty == "directory" or ty == nil or ty == "unknown") then
+          record_tree(path)
+        end
+        if name == ".bin" and dir:sub(-13) == "/node_modules" and not dir:sub(1, -14):find("/node_modules", 1, true) then
+          record_bin(path)
         end
         if ty == nil or ty == "unknown" then
           local st = vim.uv.fs_lstat(path)
@@ -310,6 +353,36 @@ local function nlines(text)
   return n + (text:sub(-1) == "\n" and 0 or 1)
 end
 
+--- The lines that differ between two texts, as "+ x" / "- y" (at most `max`, each cut at 72 characters). nil when a
+--- text was not kept. A created file has `a == ""`.
+local function diff_lines(a, b, max)
+  if not a or not b then
+    return nil
+  end
+  local ok, hunks = pcall(vim.diff, a, b, { result_type = "indices" })
+  if not ok or type(hunks) ~= "table" then
+    return nil
+  end
+  local al, bl = vim.split(a, "\n", { plain = true }), vim.split(b, "\n", { plain = true })
+  local out = {}
+  local function put(sign, text)
+    if #out < max then
+      text = text:gsub("[%c]", " ")
+      out[#out + 1] = sign .. " " .. (#text > 72 and (text:sub(1, 72) .. "...") or text)
+    end
+  end
+  for _, h in ipairs(hunks) do
+    for i = h[1], h[1] + h[2] - 1 do
+      put("-", al[i] or "")
+    end
+    for i = h[3], h[3] + h[4] - 1 do
+      put("+", bl[i] or "")
+    end
+  end
+  return out
+end
+M._diff_lines = diff_lines
+
 --- What changed between two content records of a protected name: lines added and removed (nil when a file's text
 --- was not kept) and the names (relative to the protected name) that differ.
 local function content_delta(b, a)
@@ -360,6 +433,8 @@ function M.compare(before, after)
     modified = {},
     removed = {},
     review = {},
+    trees = {},
+    bin = {},
     moved = {},
     tampered = {},
     details = {},
@@ -440,10 +515,11 @@ function M.compare(before, after)
     local b = before.review[p]
     if not b then
       res.review[#res.review + 1] =
-        { path = p, change = "created", plus = a.text and count_lines(a.text) - 1 or nil, minus = 0 }
+        { path = p, change = "created", plus = a.text and count_lines(a.text) - 1 or nil, minus = 0, lines = a.text and diff_lines("", a.text, 6) or nil }
     elseif (a.sha or a.sig) ~= (b.sha or b.sig) then
       local plus, minus = line_delta(b.text, a.text)
-      res.review[#res.review + 1] = { path = p, change = "changed", plus = plus, minus = minus }
+      res.review[#res.review + 1] =
+        { path = p, change = "changed", plus = plus, minus = minus, lines = diff_lines(b.text, a.text, 6) }
     end
   end
   for p, b in pairs(before.review) do
@@ -451,6 +527,45 @@ function M.compare(before, after)
       res.review[#res.review + 1] =
         { path = p, change = "deleted", plus = 0, minus = b.text and count_lines(b.text) - 1 or nil }
     end
+  end
+  -- build sources and node_modules/.bin
+  res.trees, res.bin = {}, {}
+  for p, a in pairs(after.trees or {}) do
+    local b = before.trees and before.trees[p]
+    if not b then
+      local plus, _, names = content_delta({ files = {} }, a)
+      res.trees[#res.trees + 1] = { path = p, change = "created", plus = plus, minus = 0, names = names }
+    elseif b.hash ~= a.hash then
+      local plus, minus, names = content_delta(b, a)
+      res.trees[#res.trees + 1] = { path = p, change = "changed", plus = plus, minus = minus, names = names }
+    end
+  end
+  for p, b in pairs(before.trees or {}) do
+    if not (after.trees and after.trees[p]) then
+      res.trees[#res.trees + 1] = { path = p, change = "deleted", names = {} }
+    end
+  end
+  table.sort(res.trees, function(x, y)
+    return x.path < y.path
+  end)
+  -- (only where the second pass looked at launch AND now: a bound that stopped it is already reported above)
+  if not before.skip_truncated and not after.skip_truncated then
+    for ep, id in pairs(after.bin or {}) do
+      local bid = before.bin and before.bin[ep]
+      if bid == nil then
+        res.bin[#res.bin + 1] = { path = ep, change = "added", id = id }
+      elseif bid ~= id then
+        res.bin[#res.bin + 1] = { path = ep, change = "changed", id = id }
+      end
+    end
+    for ep in pairs(before.bin or {}) do
+      if not (after.bin and after.bin[ep]) then
+        res.bin[#res.bin + 1] = { path = ep, change = "removed", id = "" }
+      end
+    end
+    table.sort(res.bin, function(x, y)
+      return x.path < y.path
+    end)
   end
   table.sort(res.moved, function(x, y)
     return x.to < y.to
@@ -487,7 +602,7 @@ local function copy_tree(src, dest, budget, depth)
     end
   elseif st.type == "directory" then
     vim.fn.mkdir(dest, "p")
-    if depth < 8 then
+    if depth < M.QUARANTINE_DEPTH then
       if not vim.uv.fs_scandir(src) then
         vim.uv.fs_chmod(src, bit.bor(st.mode, tonumber("700", 8))) -- (a 000 directory the agent made: it is ours)
       end
@@ -583,7 +698,7 @@ local function force_delete(root, p)
     end
     dir = vim.fs.dirname(dir)
   end
-  unlock_tree(p, { n = 5000 })
+  unlock_tree(p, { n = M.UNLOCK_MAX })
   rc = M._delete(p)
   for _, r in ipairs(restore) do
     vim.uv.fs_chmod(r[1], r[2])
@@ -755,11 +870,52 @@ function M.report(res)
     local parts = {}
     for _, r in ipairs(res.review) do
       local d = (r.plus and r.minus) and (" +%d -%d"):format(r.plus, r.minus) or ""
-      parts[#parts + 1] = ("%s %s%s"):format(r.change, r.path, d)
+      local shown = r.lines and #r.lines > 0 and (" [" .. table.concat(r.lines, " | ") .. "]") or ""
+      parts[#parts + 1] = ("%s %s%s%s"):format(r.change, r.path, d, shown)
     end
     lines[#lines + 1] = ("files that run on your machine later were edited (review before you build or run them): %s"):format(
       table.concat(vim.list_slice(parts, 1, 8), "; ") .. (#parts > 8 and ("; ... " .. #parts .. " in all") or "")
     )
+  end
+  if res.trees and #res.trees > 0 then
+    local parts = {}
+    for _, t in ipairs(res.trees) do
+      local d = (t.plus and t.minus) and (" +%d -%d"):format(t.plus, t.minus) or ""
+      local names = #t.names > 0 and (" (" .. table.concat(vim.list_slice(t.names, 1, 4), ", ") .. ")") or ""
+      parts[#parts + 1] = ("%s %s%s%s"):format(t.change, t.path, d, names)
+    end
+    lines[#lines + 1] = ("build sources that a tool compiles and RUNS on your machine at the next build were edited (read the diff before you build): %s"):format(
+      table.concat(vim.list_slice(parts, 1, 8), "; ") .. (#parts > 8 and ("; ... " .. #parts .. " in all") or "")
+    )
+    loud[#lines] = true
+  end
+  if res.bin and #res.bin > 0 then
+    local added, changed, removed = {}, {}, {}
+    for _, b in ipairs(res.bin) do
+      local list_ = b.change == "added" and added or b.change == "changed" and changed or removed
+      local what = b.id:sub(1, 5) == "link:" and (" -> " .. b.id:sub(6)) or (b.id:sub(1, 4) == "sha:" and " (file)" or "")
+      list_[#list_ + 1] = vim.fs.basename(b.path) .. what
+    end
+    local function part(label, l)
+      return #l > 0 and ("%s %d: %s%s"):format(label, #l, table.concat(vim.list_slice(l, 1, 6), ", "), #l > 6 and ", ..." or "")
+        or nil
+    end
+    local parts = vim.tbl_filter(function(x)
+      return x ~= nil
+    end, { part("added", added), part("changed", changed), part("removed", removed) })
+    lines[#lines + 1] = ("node_modules/.bin changed (what `npm run` / `npx` starts on your machine; an install does this too, a plain file or a link out of node_modules is not what an install makes): %s"):format(
+      table.concat(parts, "; ")
+    )
+    -- loud: a REGULAR file added or changed (an npm install makes links; pnpm makes shell shims, which is noise), or a link
+    -- whose target leaves node_modules
+    for _, b in ipairs(res.bin) do
+      if b.change ~= "removed" then
+        local target = b.id:sub(1, 5) == "link:" and b.id:sub(6) or nil
+        if not target or target:sub(1, 1) == "/" or target:sub(1, 6) == "../../" then
+          loud[#lines] = true
+        end
+      end
+    end
   end
   if #res.modified > 0 then
     local parts = {}
