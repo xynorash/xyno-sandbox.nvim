@@ -287,7 +287,11 @@ function M.snapshot(project)
         if trees[name] and (ty == "directory" or ty == nil or ty == "unknown") then
           record_tree(path)
         end
-        if name == ".bin" and dir:sub(-13) == "/node_modules" and not dir:sub(1, -14):find("/node_modules", 1, true) then
+        if
+          name == ".bin"
+          and dir:sub(-13) == "/node_modules"
+          and not dir:sub(1, -14):find("/node_modules", 1, true)
+        then
           record_bin(path)
         end
         if ty == nil or ty == "unknown" then
@@ -514,8 +518,13 @@ function M.compare(before, after)
   for p, a in pairs(after.review) do
     local b = before.review[p]
     if not b then
-      res.review[#res.review + 1] =
-        { path = p, change = "created", plus = a.text and count_lines(a.text) - 1 or nil, minus = 0, lines = a.text and diff_lines("", a.text, 6) or nil }
+      res.review[#res.review + 1] = {
+        path = p,
+        change = "created",
+        plus = a.text and count_lines(a.text) - 1 or nil,
+        minus = 0,
+        lines = a.text and diff_lines("", a.text, 6) or nil,
+      }
     elseif (a.sha or a.sig) ~= (b.sha or b.sig) then
       local plus, minus = line_delta(b.text, a.text)
       res.review[#res.review + 1] =
@@ -893,11 +902,13 @@ function M.report(res)
     local added, changed, removed = {}, {}, {}
     for _, b in ipairs(res.bin) do
       local list_ = b.change == "added" and added or b.change == "changed" and changed or removed
-      local what = b.id:sub(1, 5) == "link:" and (" -> " .. b.id:sub(6)) or (b.id:sub(1, 4) == "sha:" and " (file)" or "")
+      local what = b.id:sub(1, 5) == "link:" and (" -> " .. b.id:sub(6))
+        or (b.id:sub(1, 4) == "sha:" and " (file)" or "")
       list_[#list_ + 1] = vim.fs.basename(b.path) .. what
     end
     local function part(label, l)
-      return #l > 0 and ("%s %d: %s%s"):format(label, #l, table.concat(vim.list_slice(l, 1, 6), ", "), #l > 6 and ", ..." or "")
+      return #l > 0
+          and ("%s %d: %s%s"):format(label, #l, table.concat(vim.list_slice(l, 1, 6), ", "), #l > 6 and ", ..." or "")
         or nil
     end
     local parts = vim.tbl_filter(function(x)

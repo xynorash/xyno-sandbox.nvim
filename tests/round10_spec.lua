@@ -25,11 +25,38 @@ end
 
 describe("git write allowlist: every name git itself writes stays writable", function()
   local ALLOWED = {
-    "HEAD", "ORIG_HEAD", "FETCH_HEAD", "COMMIT_EDITMSG", "TAG_EDITMSG", "SQUASH_MSG", "AUTO_MERGE",
-    "CHERRY_PICK_HEAD", "REVERT_HEAD", "packed-refs", "shallow", "index", "objects", "refs", "logs",
-    "description", "lfs", "rr-cache", "gc.log", "gc.pid", "lost-found",
-    "MERGE_HEAD", "MERGE_MSG", "MERGE_MODE", "BISECT_LOG", "BISECT_START", "NOTES_MERGE_REF", "NOTES_MERGE_WORKTREE",
-    "sharedindex.0123abcd", "index.lock", "HEAD.lock", "packed-refs.lock",
+    "HEAD",
+    "ORIG_HEAD",
+    "FETCH_HEAD",
+    "COMMIT_EDITMSG",
+    "TAG_EDITMSG",
+    "SQUASH_MSG",
+    "AUTO_MERGE",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "packed-refs",
+    "shallow",
+    "index",
+    "objects",
+    "refs",
+    "logs",
+    "description",
+    "lfs",
+    "rr-cache",
+    "gc.log",
+    "gc.pid",
+    "lost-found",
+    "MERGE_HEAD",
+    "MERGE_MSG",
+    "MERGE_MODE",
+    "BISECT_LOG",
+    "BISECT_START",
+    "NOTES_MERGE_REF",
+    "NOTES_MERGE_WORKTREE",
+    "sharedindex.0123abcd",
+    "index.lock",
+    "HEAD.lock",
+    "packed-refs.lock",
   }
   it("each of these names is allowed (one literal list, so a flipped entry fails by name)", function()
     for _, n in ipairs(ALLOWED) do
@@ -47,72 +74,94 @@ describe("git write allowlist: every name git itself writes stays writable", fun
   end)
   it("everything that runs or redirects stays out", function()
     for _, n in ipairs({
-      "hooks", "config", "info", "config.worktree", "commondir", "gitdir", "modules", "worktrees", "remotes",
-      "branches", "rebase-merge", "rebase-apply", "sequencer", "alternates", "evil", "locks", "x.lock.d", "HEAD2",
+      "hooks",
+      "config",
+      "info",
+      "config.worktree",
+      "commondir",
+      "gitdir",
+      "modules",
+      "worktrees",
+      "remotes",
+      "branches",
+      "rebase-merge",
+      "rebase-apply",
+      "sequencer",
+      "alternates",
+      "evil",
+      "locks",
+      "x.lock.d",
+      "HEAD2",
     }) do
       H.not_ok(plan.git_write_allowed(n), n)
     end
   end)
 end)
 
-describe("git write mode: the history commands git users run all work (each file of the allowlist is needed)", function()
-  local function inside(script, project)
-    H.need_sandbox()
-    if vim.fn.executable("git") ~= 1 then
-      harness.skip("git not installed")
+describe(
+  "git write mode: the history commands git users run all work (each file of the allowlist is needed)",
+  function()
+    local function inside(script, project)
+      H.need_sandbox()
+      if vim.fn.executable("git") ~= 1 then
+        harness.skip("git not installed")
+      end
+      sb.config.network = "open"
+      sb.config.policy = vim.tbl_extend("force", sb.config.policy or {}, { git_write = true })
+      local wrapped, err, h = sb.wrap({ "bash", "-c", script }, project, H.tmpdir())
+      H.ok(wrapped, err)
+      local r = vim.system(wrapped, { text = true, cwd = project }):wait(120000)
+      h.release()
+      return "\n" .. (r.stdout or "") .. (r.stderr or ""), r
     end
-    sb.config.network = "open"
-    sb.config.policy = vim.tbl_extend("force", sb.config.policy or {}, { git_write = true })
-    local wrapped, err, h = sb.wrap({ "bash", "-c", script }, project, H.tmpdir())
-    H.ok(wrapped, err)
-    local r = vim.system(wrapped, { text = true, cwd = project }):wait(120000)
-    h.release()
-    return "\n" .. (r.stdout or "") .. (r.stderr or ""), r
+    local saved = vim.deepcopy(sb.config)
+    after_each(function()
+      sb.config = vim.deepcopy(saved)
+    end)
+    local G = "git -c user.name=agent -c user.email=a@example.invalid "
+
+    it(
+      "checkout -b (HEAD), reset --hard (ORIG_HEAD), pack-refs (packed-refs), tag -a, merge --squash, cherry-pick",
+      function()
+        local project = H.fixture("basic", { git = true })
+        H.git(project, "commit", "-q", "--allow-empty", "-m", "second")
+        local script = table.concat({
+          "cd " .. project,
+          G .. "checkout -q -b topic 2>&1; echo checkout=$?",
+          "echo more >> README.md; " .. G .. "add README.md; " .. G .. "commit -q -m third 2>&1; echo commit=$?",
+          G .. "reset -q --hard HEAD~1 2>&1; echo reset=$?",
+          G .. "pack-refs --all 2>&1; echo packrefs=$?",
+          G .. "tag -a v1 -m v1 2>&1; echo tag=$?",
+          G .. "checkout -q main 2>&1; echo back=$?",
+          G .. "merge --squash topic 2>&1 >/dev/null; echo squash=$?",
+          G .. "merge --no-ff -q topic -m m 2>&1; echo merge=$?",
+          G .. "rev-parse ORIG_HEAD >/dev/null 2>&1; echo origHead=$?",
+        }, "\n")
+        local out = inside(script, project)
+        for _, k in ipairs({ "checkout", "commit", "reset", "packrefs", "tag", "back", "squash", "merge" }) do
+          H.match(out, "\n" .. k .. "=0", true, k .. " must work in git write mode:\n" .. out)
+        end
+        local branch = H.git(project, "branch", "--list", "topic")
+        H.match(branch, "topic", true)
+        H.match(H.git(project, "tag", "--list"), "v1", true)
+      end
+    )
+
+    it("fetch (FETCH_HEAD), gc and update-ref work", function()
+      local project = H.fixture("basic", { git = true })
+      local script = table.concat({
+        "cd " .. project,
+        G .. "fetch -q . main 2>&1; echo fetch=$?",
+        G .. "gc -q 2>&1; echo gc=$?",
+        G .. "update-ref refs/heads/x HEAD 2>&1; echo updateref=$?",
+      }, "\n")
+      local out = inside(script, project)
+      for _, k in ipairs({ "fetch", "gc", "updateref" }) do
+        H.match(out, "\n" .. k .. "=0", true, k .. ":\n" .. out)
+      end
+    end)
   end
-  local saved = vim.deepcopy(sb.config)
-  after_each(function()
-    sb.config = vim.deepcopy(saved)
-  end)
-  local G = "git -c user.name=agent -c user.email=a@example.invalid "
-
-  it("checkout -b (HEAD), reset --hard (ORIG_HEAD), pack-refs (packed-refs), tag -a, merge --squash, cherry-pick", function()
-    local project = H.fixture("basic", { git = true })
-    H.git(project, "commit", "-q", "--allow-empty", "-m", "second")
-    local script = table.concat({
-      "cd " .. project,
-      G .. "checkout -q -b topic 2>&1; echo checkout=$?",
-      "echo more >> README.md; " .. G .. "add README.md; " .. G .. "commit -q -m third 2>&1; echo commit=$?",
-      G .. "reset -q --hard HEAD~1 2>&1; echo reset=$?",
-      G .. "pack-refs --all 2>&1; echo packrefs=$?",
-      G .. "tag -a v1 -m v1 2>&1; echo tag=$?",
-      G .. "checkout -q main 2>&1; echo back=$?",
-      G .. "merge --squash topic 2>&1 >/dev/null; echo squash=$?",
-      G .. "merge --no-ff -q topic -m m 2>&1; echo merge=$?",
-      G .. "rev-parse ORIG_HEAD >/dev/null 2>&1; echo origHead=$?",
-    }, "\n")
-    local out = inside(script, project)
-    for _, k in ipairs({ "checkout", "commit", "reset", "packrefs", "tag", "back", "squash", "merge" }) do
-      H.match(out, "\n" .. k .. "=0", true, k .. " must work in git write mode:\n" .. out)
-    end
-    local branch = H.git(project, "branch", "--list", "topic")
-    H.match(branch, "topic", true)
-    H.match(H.git(project, "tag", "--list"), "v1", true)
-  end)
-
-  it("fetch (FETCH_HEAD), gc and update-ref work", function()
-    local project = H.fixture("basic", { git = true })
-    local script = table.concat({
-      "cd " .. project,
-      G .. "fetch -q . main 2>&1; echo fetch=$?",
-      G .. "gc -q 2>&1; echo gc=$?",
-      G .. "update-ref refs/heads/x HEAD 2>&1; echo updateref=$?",
-    }, "\n")
-    local out = inside(script, project)
-    for _, k in ipairs({ "fetch", "gc", "updateref" }) do
-      H.match(out, "\n" .. k .. "=0", true, k .. ":\n" .. out)
-    end
-  end)
-end)
+)
 
 describe("git_top / git_audit: a new name below modules/ and the top level", function()
   local function gitdir()
@@ -206,7 +255,8 @@ describe("git write plan: submodule git directories are audited, bounded by GIT_
     })
   end
   local function chain(levels)
-    local e = { ["/h"] = "directory", ["/h/proj"] = "directory", ["/h/scratch"] = "directory", ["/h/proj/.git"] = "directory" }
+    local e =
+      { ["/h"] = "directory", ["/h/proj"] = "directory", ["/h/scratch"] = "directory", ["/h/proj/.git"] = "directory" }
     local cur = "/h/proj/.git"
     local dirs = { cur }
     for i = 1, levels do
@@ -330,11 +380,14 @@ describe("end-of-run report formats, exactly", function()
     H.eq(PRE .. table.concat(parts, "; ") .. "; ... 9 in all", l9)
   end)
   it("review: shows the diff lines in brackets", function()
-    local lines = guard.report(res({ review = { { change = "created", path = "/p/.nvmrc", plus = 1, minus = 0, lines = { "+ 20" } } } }))
+    local lines = guard.report(
+      res({ review = { { change = "created", path = "/p/.nvmrc", plus = 1, minus = 0, lines = { "+ 20" } } } })
+    )
     H.eq(PRE .. "created /p/.nvmrc +1 -0 [+ 20]", lines[1])
   end)
 
-  local TPRE = "build sources that a tool compiles and RUNS on your machine at the next build were edited (read the diff before you build): "
+  local TPRE =
+    "build sources that a tool compiles and RUNS on your machine at the next build were edited (read the diff before you build): "
   local function tree(i, names)
     return { change = "changed", path = "/p/buildSrc" .. i, plus = 2, minus = 1, names = names or {} }
   end
@@ -358,12 +411,15 @@ describe("end-of-run report formats, exactly", function()
     H.eq(TPRE .. "removed /p/buildSrc", lines[1])
   end)
 
-  local BPRE = "node_modules/.bin changed (what `npm run` / `npx` starts on your machine; an install does this too, a plain file or a link out of node_modules is not what an install makes): "
+  local BPRE =
+    "node_modules/.bin changed (what `npm run` / `npx` starts on your machine; an install does this too, a plain file or a link out of node_modules is not what an install makes): "
   local function b(change, name, id)
     return { change = change, path = "/p/node_modules/.bin/" .. name, id = id }
   end
   it("bin: link targets and '(file)' are shown, the 6-entry cap ends in ', ...'", function()
-    local lines = guard.report(res({ bin = { b("added", "l", "link:../x/y.js"), b("added", "f", "sha:abc"), b("added", "o", "other") } }))
+    local lines = guard.report(
+      res({ bin = { b("added", "l", "link:../x/y.js"), b("added", "f", "sha:abc"), b("added", "o", "other") } })
+    )
     H.eq(BPRE .. "added 3: l -> ../x/y.js, f (file), o", lines[1])
     local many = {}
     for i = 1, 7 do
@@ -373,23 +429,27 @@ describe("end-of-run report formats, exactly", function()
     H.eq(BPRE .. "removed 6: r1, r2, r3, r4, r5, r6", guard.report(res({ bin = vim.list_slice(many, 1, 6) }))[1])
   end)
   it("bin: added, changed and removed come in that order", function()
-    local lines = guard.report(res({ bin = { b("removed", "c", "x"), b("changed", "b", "sha:1"), b("added", "a", "sha:2") } }))
+    local lines =
+      guard.report(res({ bin = { b("removed", "c", "x"), b("changed", "b", "sha:1"), b("added", "a", "sha:2") } }))
     H.eq(BPRE .. "added 1: a (file); changed 1: b (file); removed 1: c", lines[1])
   end)
-  it("bin: loud boundaries (a link to ../../ or an absolute path is loud; ../ and a relative inside is not; removal never)", function()
-    local function loud_of(change, id)
-      local _, loud = guard.report(res({ bin = { b(change, "x", id) } }))
-      return loud[1] == true
+  it(
+    "bin: loud boundaries (a link to ../../ or an absolute path is loud; ../ and a relative inside is not; removal never)",
+    function()
+      local function loud_of(change, id)
+        local _, loud = guard.report(res({ bin = { b(change, "x", id) } }))
+        return loud[1] == true
+      end
+      H.ok(loud_of("added", "link:/usr/bin/curl"))
+      H.ok(loud_of("added", "link:../../evil.sh"))
+      H.ok(loud_of("changed", "sha:1"))
+      H.not_ok(loud_of("added", "link:../pkg/cli.js"))
+      H.not_ok(loud_of("added", "link:pkg/cli.js"))
+      H.not_ok(loud_of("added", "link:.../x"))
+      H.not_ok(loud_of("removed", "sha:1"))
+      H.not_ok(loud_of("removed", "link:/usr/bin/curl"))
     end
-    H.ok(loud_of("added", "link:/usr/bin/curl"))
-    H.ok(loud_of("added", "link:../../evil.sh"))
-    H.ok(loud_of("changed", "sha:1"))
-    H.not_ok(loud_of("added", "link:../pkg/cli.js"))
-    H.not_ok(loud_of("added", "link:pkg/cli.js"))
-    H.not_ok(loud_of("added", "link:.../x"))
-    H.not_ok(loud_of("removed", "sha:1"))
-    H.not_ok(loud_of("removed", "link:/usr/bin/curl"))
-  end)
+  )
 end)
 
 describe("git write mode: host-side git battery after an agent that tried to plant (real sandbox)", function()
@@ -397,47 +457,74 @@ describe("git write mode: host-side git battery after an agent that tried to pla
   after_each(function()
     sb.config = vim.deepcopy(saved)
   end)
-  it("status, log, diff, fsck, gc, commit, fetch, checkout, submodule status and maintenance run nothing of the agent's", function()
-    H.need_sandbox()
-    if vim.fn.executable("git") ~= 1 then
-      harness.skip("git not installed")
+  it(
+    "status, log, diff, fsck, gc, commit, fetch, checkout, submodule status and maintenance run nothing of the agent's",
+    function()
+      H.need_sandbox()
+      if vim.fn.executable("git") ~= 1 then
+        harness.skip("git not installed")
+      end
+      local project = H.fixture("basic", { git = true })
+      local canary = H.tmpdir() .. "/FSRAN3"
+      local c = "touch " .. canary
+      local script = table.concat({
+        "cd " .. project,
+        "printf '[core]\\n\\tfsmonitor = "
+          .. c
+          .. '\\n\\thooksPath = /x\\n[filter "f"]\\n\\tsmudge = '
+          .. c
+          .. "\\n[alias]\\n\\tst = !"
+          .. c
+          .. "\\n[core]\\n\\tsshCommand = "
+          .. c
+          .. "\\n[credential]\\n\\thelper = !"
+          .. c
+          .. "\\n[gpg]\\n\\tprogram = "
+          .. c
+          .. "\\n' > .git/config.worktree",
+        "printf '[core]\\n\\tfsmonitor = " .. c .. "\\n' > .git/config.worktree.x",
+        "mkdir -p .git/worktrees/w .git/modules/m/hooks .git/hooks2",
+        "printf '#!/bin/sh\\n"
+          .. c
+          .. "\\n' > .git/modules/m/hooks/post-checkout; chmod +x .git/modules/m/hooks/post-checkout",
+        "printf '#!/bin/sh\\n" .. c .. "\\n' > .git/post-commit; chmod +x .git/post-commit",
+        "printf '[core]\\n\\tfsmonitor = " .. c .. "\\n' > .git/modules/m/config",
+        "echo '* filter=f' > .gitattributes",
+        "echo '* filter=f' > .git/info/attributes",
+        "echo /nonexistent > .git/objects/info/alternates",
+        "echo 'gitdir: /x' > .git/gitdir; echo ../../x > .git/worktrees/w/commondir",
+        "true",
+      }, "\n")
+      sb.config.network = "open"
+      sb.config.policy = vim.tbl_extend("force", sb.config.policy or {}, { git_write = true })
+      local wrapped, err, h = sb.wrap({ "bash", "-c", script }, project, H.tmpdir())
+      H.ok(wrapped, err)
+      vim.system(wrapped, { text = true, cwd = project }):wait(120000)
+      local seen = H.capture_notify(function()
+        h.release() -- the end-of-run sweep and git audit of the real flow
+      end)
+      H.ok(#seen > 0, "the sweep reported the planted names")
+      local function git(...)
+        return vim
+          .system({ "git", "-C", project, "-c", "user.name=t", "-c", "user.email=t@t", ... }, { text = true })
+          :wait(60000)
+      end
+      for _, args in ipairs({
+        { "status" },
+        { "log", "--oneline" },
+        { "diff" },
+        { "fsck" },
+        { "gc", "-q" },
+        { "commit", "-q", "--allow-empty", "-m", "host" },
+        { "fetch", "-q", "." },
+        { "checkout", "-q", "-b", "hostb" },
+        { "submodule", "status" },
+        { "maintenance", "run", "--auto" },
+        { "stash", "list" },
+      }) do
+        git(unpack(args))
+        H.eq(0, vim.fn.filereadable(canary), "git " .. args[1] .. " ran a planted command")
+      end
     end
-    local project = H.fixture("basic", { git = true })
-    local canary = H.tmpdir() .. "/FSRAN3"
-    local c = "touch " .. canary
-    local script = table.concat({
-      "cd " .. project,
-      "printf '[core]\\n\\tfsmonitor = " .. c .. "\\n\\thooksPath = /x\\n[filter \"f\"]\\n\\tsmudge = " .. c .. "\\n[alias]\\n\\tst = !" .. c .. "\\n[core]\\n\\tsshCommand = " .. c .. "\\n[credential]\\n\\thelper = !" .. c .. "\\n[gpg]\\n\\tprogram = " .. c .. "\\n' > .git/config.worktree",
-      "printf '[core]\\n\\tfsmonitor = " .. c .. "\\n' > .git/config.worktree.x",
-      "mkdir -p .git/worktrees/w .git/modules/m/hooks .git/hooks2",
-      "printf '#!/bin/sh\\n" .. c .. "\\n' > .git/modules/m/hooks/post-checkout; chmod +x .git/modules/m/hooks/post-checkout",
-      "printf '#!/bin/sh\\n" .. c .. "\\n' > .git/post-commit; chmod +x .git/post-commit",
-      "printf '[core]\\n\\tfsmonitor = " .. c .. "\\n' > .git/modules/m/config",
-      "echo '* filter=f' > .gitattributes",
-      "echo '* filter=f' > .git/info/attributes",
-      "echo /nonexistent > .git/objects/info/alternates",
-      "echo 'gitdir: /x' > .git/gitdir; echo ../../x > .git/worktrees/w/commondir",
-      "true",
-    }, "\n")
-    sb.config.network = "open"
-    sb.config.policy = vim.tbl_extend("force", sb.config.policy or {}, { git_write = true })
-    local wrapped, err, h = sb.wrap({ "bash", "-c", script }, project, H.tmpdir())
-    H.ok(wrapped, err)
-    vim.system(wrapped, { text = true, cwd = project }):wait(120000)
-    local seen = H.capture_notify(function()
-      h.release() -- the end-of-run sweep and git audit of the real flow
-    end)
-    H.ok(#seen > 0, "the sweep reported the planted names")
-    local function git(...)
-      return vim.system({ "git", "-C", project, "-c", "user.name=t", "-c", "user.email=t@t", ... }, { text = true }):wait(60000)
-    end
-    for _, args in ipairs({
-      { "status" }, { "log", "--oneline" }, { "diff" }, { "fsck" }, { "gc", "-q" },
-      { "commit", "-q", "--allow-empty", "-m", "host" }, { "fetch", "-q", "." }, { "checkout", "-q", "-b", "hostb" },
-      { "submodule", "status" }, { "maintenance", "run", "--auto" }, { "stash", "list" },
-    }) do
-      git(unpack(args))
-      H.eq(0, vim.fn.filereadable(canary), "git " .. args[1] .. " ran a planted command")
-    end
-  end)
+  )
 end)

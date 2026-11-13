@@ -202,7 +202,7 @@ describe("git write mode", function()
         H.eq(0, vim.fn.filereadable(project .. "/.git/fsmonitor--daemon.ipc"), "removed from the project")
         H.eq(0, vim.fn.isdirectory(project .. "/.git/evil"), "removed from the project")
         H.eq(1, vim.fn.filereadable(project .. "/.git/MERGE_MSG"), "what git itself writes stays")
-      H.eq(1, vim.fn.filereadable(project .. "/.git/index.lock"), "a lock file stays (git's own)")
+        H.eq(1, vim.fn.filereadable(project .. "/.git/index.lock"), "a lock file stays (git's own)")
         H.ok(require("xyno_sandbox.guard").dirty(project), "the project is marked")
         require("xyno_sandbox.guard").clear_dirty(project)
       end

