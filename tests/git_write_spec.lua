@@ -186,23 +186,26 @@ describe("git write mode", function()
       host_git_runs_nothing(project, canary)
     end)
 
-    it("a new top-level name in .git (outside the allowlist) is quarantined at the end of the run and marks the project", function()
-      local project = H.fixture("basic", { git = true })
-      local script = table.concat({
-        "P=" .. project .. "; cd $P",
-        "echo x > .git/fsmonitor--daemon.ipc; echo a=$?",
-        "mkdir .git/evil && echo y > .git/evil/z; echo b=$?",
-        "echo ok > .git/MERGE_MSG; echo c=$?",
-        "echo ok > .git/index.lock; echo d=$?",
-      }, "\n")
-      local out = inside(script, project, { git_write = true })
-      H.match(out, "a=0", true, out)
-      H.eq(0, vim.fn.filereadable(project .. "/.git/fsmonitor--daemon.ipc"), "removed from the project")
-      H.eq(0, vim.fn.isdirectory(project .. "/.git/evil"), "removed from the project")
-      H.eq(1, vim.fn.filereadable(project .. "/.git/MERGE_MSG"), "what git itself writes stays")
-      H.ok(require("xyno_sandbox.guard").dirty(project), "the project is marked")
-      require("xyno_sandbox.guard").clear_dirty(project)
-    end)
+    it(
+      "a new top-level name in .git (outside the allowlist) is quarantined at the end of the run and marks the project",
+      function()
+        local project = H.fixture("basic", { git = true })
+        local script = table.concat({
+          "P=" .. project .. "; cd $P",
+          "echo x > .git/fsmonitor--daemon.ipc; echo a=$?",
+          "mkdir .git/evil && echo y > .git/evil/z; echo b=$?",
+          "echo ok > .git/MERGE_MSG; echo c=$?",
+          "echo ok > .git/index.lock; echo d=$?",
+        }, "\n")
+        local out = inside(script, project, { git_write = true })
+        H.match(out, "a=0", true, out)
+        H.eq(0, vim.fn.filereadable(project .. "/.git/fsmonitor--daemon.ipc"), "removed from the project")
+        H.eq(0, vim.fn.isdirectory(project .. "/.git/evil"), "removed from the project")
+        H.eq(1, vim.fn.filereadable(project .. "/.git/MERGE_MSG"), "what git itself writes stays")
+        H.ok(require("xyno_sandbox.guard").dirty(project), "the project is marked")
+        require("xyno_sandbox.guard").clear_dirty(project)
+      end
+    )
 
     it("an ordinary add and commit in git write mode flags nothing and leaves the project unmarked", function()
       local project = H.fixture("basic", { git = true })
@@ -215,7 +218,11 @@ describe("git write mode", function()
       local project = H.fixture("basic", { git = true })
       vim.fn.mkdir(project .. "/.git/svn", "p")
       vim.fn.writefile({ "x" }, project .. "/.git/svn/f")
-      local out = inside("cd " .. project .. "; echo y > .git/svn/f; echo w=$?; mkdir .git/svn/g; echo m=$?", project, { git_write = true })
+      local out = inside(
+        "cd " .. project .. "; echo y > .git/svn/f; echo w=$?; mkdir .git/svn/g; echo m=$?",
+        project,
+        { git_write = true }
+      )
       H.no_match(out, "w=0", true, out)
       H.no_match(out, "m=0", true, out)
     end)
