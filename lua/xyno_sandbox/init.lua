@@ -601,6 +601,12 @@ local function sweep(h)
       res.planted, res.modified, res.review, res.moved, res.incomplete, res.tampered
     -- the empty placeholders bwrap mounted over an absent name stay behind when the directory holding them was RENAMED
     -- (mv sub sub_old): an empty read-only file or an empty directory, not something the agent created
+    -- git write mode: a new top-level name in a git directory that git itself never writes
+    if h.plan.git_audit and #h.plan.git_audit > 0 then
+      for _, p in ipairs(guard.git_audit(h.git_before, h.plan.git_audit)) do
+        res.planted[#res.planted + 1] = p
+      end
+    end
     local planted = {}
     for _, p in ipairs(res.planted) do
       local st = vim.uv.fs_lstat(p)
@@ -1019,6 +1025,7 @@ function M.wrap(cmd, project, tmp_dir, opts)
   local temp = prepare(plan)
   next_id = next_id + 1
   local h = { id = next_id, plan = plan, temp = temp, snapshot = guard.snapshot(project) }
+  h.git_before = guard.git_top(plan.git_audit)
   if netf then
     h.proxy, h.net_dir = netf.proxy, netf.net_dir
   end

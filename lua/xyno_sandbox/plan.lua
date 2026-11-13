@@ -1022,6 +1022,45 @@ M.GIT_WRITE_LOCKED = { "hooks", "config", "info", "config.worktree" }
 -- `branches/` (legacy remote definitions), `worktrees/` (a worktree's gitdir carries its own commondir), `modules/`
 -- (not renamable: it is a mount point of its own).
 M.GIT_WRITE_NOCREATE = { "rebase-merge", "rebase-apply", "sequencer", "remotes", "branches", "worktrees", "modules" }
+-- The top-level names of a git directory that stay writable in git write mode (an allowlist, nothing else): what git
+-- itself writes while it adds, commits, merges and resets. An existing name outside it is locked; a NEW one cannot be
+-- stopped by a mount (the directory has to be writable for index.lock), so the end-of-run audit (guard.git_audit)
+-- removes it and marks the project.
+M.GIT_WRITE_ALLOWED = {
+  HEAD = true,
+  ORIG_HEAD = true,
+  FETCH_HEAD = true,
+  COMMIT_EDITMSG = true,
+  TAG_EDITMSG = true,
+  SQUASH_MSG = true,
+  AUTO_MERGE = true,
+  CHERRY_PICK_HEAD = true,
+  REVERT_HEAD = true,
+  ["packed-refs"] = true,
+  shallow = true,
+  index = true,
+  objects = true,
+  refs = true,
+  logs = true,
+  description = true,
+  lfs = true,
+  ["rr-cache"] = true,
+  ["gc.log"] = true,
+  ["gc.pid"] = true,
+  ["lost-found"] = true,
+}
+M.GIT_WRITE_ALLOWED_PREFIX = { "MERGE_", "BISECT_", "NOTES_MERGE_", "sharedindex." }
+function M.git_write_allowed(name)
+  if M.GIT_WRITE_ALLOWED[name] or name:sub(-5) == ".lock" then
+    return true
+  end
+  for _, pre in ipairs(M.GIT_WRITE_ALLOWED_PREFIX) do
+    if name:sub(1, #pre) == pre then
+      return true
+    end
+  end
+  return false
+end
 M.GIT_MODULES_DEPTH = 4 -- nested submodule git directories handled below modules/
 
 -- Skipped by the directory walk (still locked when they ARE the project's own .git).
@@ -2487,6 +2526,7 @@ function M.build(input)
     ):format(M.SCAN_MAX_DIRS)
   end
   plan.git_write = {}
+  plan.git_audit = {}
   plan.git_binds = {}
   plan.git_pins = {}
   local git_masks = {}
@@ -2514,6 +2554,14 @@ function M.build(input)
             lock(b .. "/" .. sub, "git (write mode)")
           elseif sub == "hooks" or sub == "info" then
             git_masks[#git_masks + 1] = b .. "/" .. sub
+          elseif sub == "config.worktree" then
+            -- git reads it as a config file when extensions.worktreeConfig is set (core.fsmonitor, hooksPath,
+            -- sshCommand run on the host): an absent one is an empty read-only file, so it cannot be created
+            plan.git_pins[#plan.git_pins + 1] = {
+              src = b .. "/" .. sub,
+              copy = ("%s/%d.pin"):format(aux.git_dir, #plan.git_pins + 1),
+              text = "",
+            }
           end
         end
         -- commondir redirects git to ANOTHER common directory (its config, hooks): pinned to ".", which is the
@@ -2526,6 +2574,19 @@ function M.build(input)
             copy = ("%s/%d.pin"):format(aux.git_dir, #plan.git_pins + 1),
             text = ".\n",
           }
+        end
+        -- allowlist: every other EXISTING top-level name is read-only too (`svn/`, a daemon socket, anything unknown)
+        local handled = { commondir = true, modules = true }
+        for _, n in ipairs(M.GIT_WRITE_LOCKED) do
+          handled[n] = true
+        end
+        for _, n in ipairs(M.GIT_WRITE_NOCREATE) do
+          handled[n] = true
+        end
+        for _, e in ipairs(probes.list(b)) do
+          if not handled[e[1]] and not M.git_write_allowed(e[1]) then
+            lock(b .. "/" .. e[1], "git (write mode)")
+          end
         end
         for _, name in ipairs(M.GIT_WRITE_NOCREATE) do
           local d = b .. "/" .. name
@@ -2545,6 +2606,20 @@ function M.build(input)
           end
         end
       end
+      -- the directories whose top level the end-of-run audit reads (guard.git_audit): each git directory and every
+      -- submodule git directory below modules/
+      local function audited(b, depth)
+        plan.git_audit[#plan.git_audit + 1] = b
+        local d = b .. "/modules"
+        if depth < M.GIT_MODULES_DEPTH and probes.stat_type(d) == "directory" then
+          for _, mdir in ipairs(probes.glob(d .. "/*")) do
+            if probes.stat_type(mdir) == "directory" then
+              audited(mdir, depth + 1)
+            end
+          end
+        end
+      end
+      audited(p, 1)
       base(p, 1)
       plan.git_write[#plan.git_write + 1] = p
     else

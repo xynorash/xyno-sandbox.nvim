@@ -402,8 +402,15 @@ function M.pick_exception(plan, project, done)
 end
 
 --- Show the policy of a plan. With `confirm`, the operator launches or cancels.
---- @param opts { build: fun(once: table[]): table?, project: string, confirm?: boolean, full?: boolean,
----   status?: fun(): table, on_done?: fun(go: boolean, plan: table?, once: table[]) }
+--- @class xyno_sandbox.ShowOpts
+--- @field build fun(once: table[]): table?
+--- @field project string
+--- @field confirm? boolean
+--- @field full? boolean
+--- @field status? fun(): table
+--- @field on_done? fun(go: boolean, plan: table?, once: table[])
+
+--- @param opts xyno_sandbox.ShowOpts
 function M.show(opts)
   local once = {}
   local plan = opts.build(once)

@@ -591,6 +591,51 @@ local function force_delete(root, p)
   return rc
 end
 
+--- Top-level names of each git directory of git write mode (`dirs`, plan.git_audit), at launch.
+function M.git_top(dirs)
+  local out = {}
+  for _, d in ipairs(dirs or {}) do
+    local set = {}
+    for _, e in ipairs(list(d)) do
+      set[e[1]] = true
+    end
+    out[d] = set
+    local mset = {}
+    for _, e in ipairs(list(d .. "/modules")) do
+      mset[e[1]] = true
+    end
+    out[d .. "/modules"] = mset
+  end
+  return out
+end
+
+--- End of a git write mode run: the paths below a git directory that are NEW since launch and outside the allowlist
+--- (plan.git_write_allowed). A mount cannot refuse a new name in a directory git must write to, so this is the
+--- enforcement for those; a new submodule git directory below modules/ is not allowed at all. Returns paths.
+function M.git_audit(before, dirs)
+  local plan = require("xyno_sandbox.plan")
+  local out = {}
+  for _, d in ipairs(dirs or {}) do
+    local had = before and before[d] or {}
+    for _, e in ipairs(list(d)) do
+      if not had[e[1]] and not plan.git_write_allowed(e[1]) then
+        out[#out + 1] = d .. "/" .. e[1]
+      end
+    end
+  end
+  -- a new name below modules/ (a submodule git directory made by hand)
+  for _, d in ipairs(dirs or {}) do
+    local mod = d .. "/modules"
+    local had = before and before[mod] or {}
+    for _, e in ipairs(list(mod)) do
+      if not had[e[1]] then
+        out[#out + 1] = mod .. "/" .. e[1]
+      end
+    end
+  end
+  return out
+end
+
 --- Copy `paths` (planted names) into the quarantine and remove them from the project. Returns
 --- { dir, moved = { { path, ok } }, cut }. A parent directory the agent made read-only (555) is opened up for the removal and put back
 --- afterwards (a directory the sweep cannot list or enter never shows a planted name in the first place); a name that still cannot be removed is reported (`ok = false`).
