@@ -333,7 +333,7 @@ local function line_delta(a, b)
   if not a or not b then
     return nil, nil
   end
-  local ok, hunks = pcall(vim.diff, a, b, { result_type = "indices" })
+  local ok, hunks = pcall(vim.text.diff, a, b, { result_type = "indices" })
   if not ok or type(hunks) ~= "table" then
     return nil, nil
   end
@@ -359,7 +359,7 @@ local function diff_lines(a, b, max)
   if not a or not b then
     return nil
   end
-  local ok, hunks = pcall(vim.diff, a, b, { result_type = "indices" })
+  local ok, hunks = pcall(vim.text.diff, a, b, { result_type = "indices" })
   if not ok or type(hunks) ~= "table" then
     return nil
   end
