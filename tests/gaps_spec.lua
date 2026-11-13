@@ -66,6 +66,14 @@ describe("an edited version file or attribute file is reported WITH the lines th
     H.match(text, "line 6", true, text)
   end)
 
+  it("a created file is counted: lines added, none removed", function()
+    local p = project()
+    local _, text = sweep(p, function()
+      write(p .. "/.nvmrc", "a\nb\nc\n")
+    end)
+    H.match(text, "created " .. p .. "/.nvmrc +3 -0", true, text)
+  end)
+
   it("control characters in a changed line cannot forge a log line", function()
     local lines = guard._diff_lines("a\n", "b\27[31m\nred\n", 6)
     for _, l in ipairs(lines) do
@@ -208,6 +216,10 @@ describe("node_modules/.bin: what npm run / npx starts on your machine", functio
     local after = guard.snapshot(p)
     after.skip_truncated = true
     H.eq(0, #guard.compare(before, after).bin, "a cut walk reports through its own notice, not as a partial list")
+    local res2, text2 = sweep(project(), function() end)
+    H.eq(0, #res2.bin + #res2.trees)
+    H.no_match(text2, "node_modules/.bin", true, "no empty line for nothing")
+    H.no_match(text2, "build sources", true, "no empty line for nothing")
   end)
 
   it("at most 500 entries of one .bin are recorded", function()

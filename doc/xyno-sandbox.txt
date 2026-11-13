@@ -335,6 +335,16 @@ hostname allowlist.
     Not covered: .gradle/ (init scripts are loaded from the Gradle user home,
     not the project), .terraform/ (written by terraform init), globs such as
     *.code-workspace.
+    Round 9: an edited small file shows its first six changed lines; buildSrc/
+    and build-logic/ (Gradle compiles and runs them) are compared as a whole
+    and reported at error level; node_modules/.bin of the project and its
+    workspaces is compared by link target or hash (a regular file or a link
+    out of node_modules is an error, an install-style link a warning). All of
+    these are reports, nothing is undone.
+    Git write mode (policy.git_write): the writable names of a git directory
+    are an allowlist; others that exist are read-only, new ones are removed
+    and the project marked when the run ends; an absent config.worktree is an
+    empty read-only file.
     Build and CI files (Makefile, package.json, Cargo.toml, build.rs,
     .github/workflows ...) cannot be locked; the end of the run reports which
     changed, with lines added and removed.

@@ -140,7 +140,7 @@ function M.lines(plan, ctx)
       add("  " .. short(g, home))
     end
     add(
-      "  Read-only: hooks/, config, info/, config.worktree (no hook, fsmonitor, alias, filter or exclude can be planted)."
+      "  Read-only: hooks/, config, info/, config.worktree (also when absent), and every top-level name outside the allowlist that exists at launch. A new name outside it is removed when the run ends (no hook, fsmonitor, alias, filter or exclude can be planted)."
     )
     add(
       "  Not renamable (own mount): .git, modules/. Pinned: commondir. No state of rebase / am / worktree / submodule add (read-only or empty)."
