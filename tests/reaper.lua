@@ -63,12 +63,21 @@ function M.remove_tree(path)
   if st.type == "directory" then
     uv.fs_chmod(path, tonumber("700", 8))
     local h = uv.fs_scandir(path)
+    local clean = true
     while h do
       local name = uv.fs_scandir_next(h)
       if not name then
         break
       end
-      M.remove_tree(path .. "/" .. name)
+      -- (the owner mark goes LAST: a tree that cannot be removed completely keeps it, and the next run tries again
+      -- as soon as the runner is gone. Without it the remainder waited a day and was then removed by age only: this
+      -- is how 143 /tmp/xyno-run-* directories were left behind.)
+      if name ~= ".owner" and not M.remove_tree(path .. "/" .. name) then
+        clean = false
+      end
+    end
+    if clean then
+      M.remove_tree(path .. "/.owner")
     end
     return uv.fs_rmdir(path) and true or false
   end

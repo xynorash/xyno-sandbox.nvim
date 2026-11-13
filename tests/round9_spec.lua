@@ -183,6 +183,27 @@ describe("the runner removes trees that hold read-only directories", function()
     end
   )
 
+  it("a tree that cannot be removed completely keeps its owner mark, so the next pass tries again at once", function()
+    local base = H.tmpdir()
+    local dead = base .. "/xyno-run-STUBBN"
+    write(dead .. "/sub/stubborn", "x")
+    write(dead .. "/.owner", "999999:1")
+    local real = uv.fs_unlink
+    uv.fs_unlink = function(p)
+      if p:match("stubborn$") then
+        return nil, "EPERM"
+      end
+      return real(p)
+    end
+    local ok, n = pcall(reaper.reap_stale, { base })
+    uv.fs_unlink = real
+    H.ok(ok, tostring(n))
+    H.eq(0, n, "not counted as removed")
+    H.ok(uv.fs_lstat(dead .. "/.owner"), "the owner mark is still there: the next run does not wait a day")
+    H.eq(1, reaper.reap_stale({ base }), "and the next pass removes it")
+    H.eq(nil, uv.fs_lstat(dead))
+  end)
+
   it("a second pass has nothing left to do (no ownerless remainder waiting for a day)", function()
     local base = H.tmpdir()
     local dead = base .. "/xyno-sandbox-test-DEADRO"
