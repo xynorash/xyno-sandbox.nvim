@@ -42,19 +42,22 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          echo "sh -> $(readlink -f /bin/sh); uname: $(uname -r)"
-          ls -l /usr/bin/bwrap; getcap /usr/bin/bwrap
-          # plain pdeathsig check: kill the parent shell, then look at the child
-          sh -c 'bwrap --die-with-parent --unshare-user --unshare-pid --ro-bind / / --dev /dev --proc /proc sleep 307 & wait' &
-          P=$!; sleep 2; kill -9 $P; sleep 2
-          echo "--- after killing the parent (bwrap/sleep 307 lines):"
-          ps -eo pid,ppid,pgid,stat,args | grep -E "sleep 307|bwrap" | grep -v grep
-          pkill -f "sleep 307"
-          # process-group kill from a detached watcher
-          setsid sh -c 'sleep 308' & G=$!; sleep 1
-          ps -eo pid,ppid,pgid,sid,stat,args | grep "sleep 308" | grep -v grep
-          kill -KILL -- "-$G"; sleep 1
-          echo "--- after kill -KILL -pg:"; ps -eo pid,stat,args | grep "sleep 308" | grep -v grep
+          echo "uname: $(uname -r)"
+          try() { # name, flags...
+            n=$1; shift
+            sh -c "bwrap --die-with-parent $* --ro-bind / / --dev /dev --proc /proc sleep 3$RANDOM & wait" &
+            P=$!; sleep 2; kill -9 $P; sleep 2
+            left=$(ps -eo pid,ppid,stat,args | grep "bwrap --die-with-parent" | grep -v grep | grep -v "^ *$$ ")
+            if [ -n "$left" ]; then echo "SURVIVED [$n]: $left" | cut -c1-200; pkill -KILL -f "bwrap --die-with-parent"; else echo "gone     [$n]"; fi
+          }
+          try plain --unshare-user
+          try pid --unshare-user --unshare-pid
+          try newsession --unshare-user --new-session
+          try capdrop --unshare-user --cap-drop ALL
+          try disable-userns --unshare-user --disable-userns
+          try net --unshare-user --unshare-net
+          try ipcutscgroup --unshare-user --unshare-ipc --unshare-uts --unshare-cgroup-try
+          try all --new-session --unshare-user --disable-userns --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try --cap-drop ALL --unshare-net
           exit 0
 
       - name: Spec suite
