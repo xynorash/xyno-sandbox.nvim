@@ -38,18 +38,6 @@ jobs:
         # bwrap fail for an unprivileged user; the specs need a working sandbox.
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
-      - name: Diagnose the runner watchdog under dash (informational)
-        continue-on-error: true
-        run: |
-          set +e
-          setsid sleep 311 & sleep 1
-          PG=$(pgrep -f "sleep 311")
-          sh -c 'kill -0 -- "-$1" && echo "dash kill -0 -- -pg: ok" || echo "dash kill -0 -- -pg: FAILED"; kill -KILL -- "-$1"; echo "dash kill -KILL -- -pg rc=$?"' x "$PG"
-          sleep 1; pgrep -f "sleep 311" && { echo "sleep 311 SURVIVED"; pkill -KILL -f "sleep 311"; } || echo "sleep 311 gone"
-          sh -c 'set -- $(sed "s/^.*) //" "/proc/$$/stat" 2>/dev/null); echo "state=$1 field20=${20}"' 
-          sed 's/^.*) //' /proc/$$/stat | awk '{print "awk field20=" $20 " state=" $1}'
-          exit 0
-
       - name: Spec suite
         # Specs that need a working sandbox skip with a message on runners that
         # restrict user namespaces.

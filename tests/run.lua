@@ -258,10 +258,11 @@ alive() {
   [ -n "$1" ] && [ "$1" != Z ] && [ "${20}" = "$rstart" ]
 }
 while alive; do
-  kill -0 -- "-$pg" 2>/dev/null || exit 0
+  # dash's kill does not accept "--": try the plain form first, then the one with it
+  kill -0 "-$pg" 2>/dev/null || kill -0 -- "-$pg" 2>/dev/null || exit 0
   sleep 0.5
 done
-kill -KILL -- "-$pg" 2>/dev/null
+kill -KILL "-$pg" 2>/dev/null || kill -KILL -- "-$pg" 2>/dev/null
 for d in "$WD_ROOT" "$WD_TMP"; do
   [ -n "$d" ] && pkill -KILL -f -- "$d" 2>/dev/null
 done

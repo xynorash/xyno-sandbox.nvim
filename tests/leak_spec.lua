@@ -109,6 +109,20 @@ describe("a sandbox whose launcher dies", function()
       if f then
         f:close()
       end
+      local st = io.open("/proc/" .. p[1] .. "/status")
+      if st then
+        for line in st:lines() do
+          if line:match("^State") or line:match("^Sig[PC]nd") or line:match("^ShdPnd") or line:match("^PPid") or line:match("^NSpid") then
+            why = why .. " {" .. line:gsub("%s+", " ") .. "}"
+          end
+        end
+        st:close()
+      end
+      local w = io.open("/proc/" .. p[1] .. "/wchan")
+      if w then
+        why = why .. " wchan=" .. w:read("*a")
+        w:close()
+      end
     end
     local agent = procs("sleep 300")
     local relay_left = vim.tbl_filter(function(p)
