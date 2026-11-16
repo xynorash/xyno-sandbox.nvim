@@ -38,26 +38,16 @@ jobs:
         # bwrap fail for an unprivileged user; the specs need a working sandbox.
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
-      - name: Diagnose parent-death behaviour of the runner (informational)
+      - name: Diagnose the runner watchdog under dash (informational)
         continue-on-error: true
         run: |
           set +e
-          echo "uname: $(uname -r)"
-          try() { # name, flags...
-            n=$1; shift
-            sh -c "bwrap --die-with-parent $* --ro-bind / / --dev /dev --proc /proc sleep 3$RANDOM & wait" &
-            P=$!; sleep 2; kill -9 $P; sleep 2
-            left=$(ps -eo pid,ppid,stat,args | grep "bwrap --die-with-parent" | grep -v grep | grep -v "^ *$$ ")
-            if [ -n "$left" ]; then echo "SURVIVED [$n]: $left" | cut -c1-200; pkill -KILL -f "bwrap --die-with-parent"; else echo "gone     [$n]"; fi
-          }
-          try plain --unshare-user
-          try pid --unshare-user --unshare-pid
-          try newsession --unshare-user --new-session
-          try capdrop --unshare-user --cap-drop ALL
-          try disable-userns --unshare-user --disable-userns
-          try net --unshare-user --unshare-net
-          try ipcutscgroup --unshare-user --unshare-ipc --unshare-uts --unshare-cgroup-try
-          try all --new-session --unshare-user --disable-userns --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try --cap-drop ALL --unshare-net
+          setsid sleep 311 & sleep 1
+          PG=$(pgrep -f "sleep 311")
+          sh -c 'kill -0 -- "-$1" && echo "dash kill -0 -- -pg: ok" || echo "dash kill -0 -- -pg: FAILED"; kill -KILL -- "-$1"; echo "dash kill -KILL -- -pg rc=$?"' x "$PG"
+          sleep 1; pgrep -f "sleep 311" && { echo "sleep 311 SURVIVED"; pkill -KILL -f "sleep 311"; } || echo "sleep 311 gone"
+          sh -c 'set -- $(sed "s/^.*) //" "/proc/$$/stat" 2>/dev/null); echo "state=$1 field20=${20}"' 
+          sed 's/^.*) //' /proc/$$/stat | awk '{print "awk field20=" $20 " state=" $1}'
           exit 0
 
       - name: Spec suite

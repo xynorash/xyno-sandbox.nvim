@@ -102,14 +102,6 @@ describe("a sandbox whose launcher dies", function()
     )
     parent:kill(9)
     local left = H.wait_gone(project, 5000)
-    local agent = procs("sleep 300")
-    local relay_left = vim.tbl_filter(function(p)
-      return p[2]:find(h.net_dir, 1, true)
-    end, H.procs(h.net_dir))
-    for _, p in ipairs(relay_left) do
-      uv.kill(p[1], 9)
-    end
-    h.release()
     local why = ""
     for _, p in ipairs(left) do
       local f = io.open("/proc/" .. p[1] .. "/stat")
@@ -118,6 +110,14 @@ describe("a sandbox whose launcher dies", function()
         f:close()
       end
     end
+    local agent = procs("sleep 300")
+    local relay_left = vim.tbl_filter(function(p)
+      return p[2]:find(h.net_dir, 1, true)
+    end, H.procs(h.net_dir))
+    for _, p in ipairs(relay_left) do
+      uv.kill(p[1], 9)
+    end
+    h.release()
     H.eq({}, left, "bwrap survived its parent; /proc stat (state ppid pgrp ...)" .. why)
     H.eq({}, relay_left, "the relay survived the sandbox")
     for _, p in ipairs(agent) do
