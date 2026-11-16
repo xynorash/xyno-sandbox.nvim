@@ -14,13 +14,13 @@ local project, tmp
 before_each(function()
   store.dir_override = H.tmpdir() .. "/state"
   project, tmp = H.tmpdir(), H.tmpdir()
-  vim.uv.os_setenv("XS_TEST_API_KEY", "TOPSECRETVALUE")
+  vim.uv.os_setenv("AA_XS_TEST_API_KEY", "TOPSECRETVALUE")
 end)
 after_each(function()
   store.dir_override = nil
   sb.config = vim.deepcopy(saved)
   run.has_ui, vim.ui.select, vim.ui.input, ui.show = old_has_ui, old_select, old_input, old_show
-  vim.uv.os_unsetenv("XS_TEST_API_KEY")
+  vim.uv.os_unsetenv("AA_XS_TEST_API_KEY")
   pcall(vim.api.nvim_del_user_command, "XynoSandboxPolicy")
   pcall(vim.api.nvim_del_user_command, "XynoSandboxApprovals")
   pcall(vim.api.nvim_del_user_command, "XynoSandboxStatus")
@@ -45,7 +45,7 @@ describe("preview text", function()
     H.match(text, "Read-only", true)
     H.match(text, "Hidden credential paths", true)
     H.match(text, "Stripped environment variables (names only, values are never shown)", true)
-    H.match(text, "XS_TEST_API_KEY", true)
+    H.match(text, "AA_XS_TEST_API_KEY", true)
     H.match(text, "git directories locked", true)
     H.match(text, "network   FILTERED", true)
     H.match(text, "api.anthropic.com  [default]", true)
@@ -302,28 +302,28 @@ describe("real preview window", function()
         return table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
       end
       -- refuse first
-      answers = { "XS_TEST_API_KEY through", "Refuse" }
+      answers = { "AA_XS_TEST_API_KEY through", "Refuse" }
       vim.api.nvim_feedkeys("e", "x", false)
-      H.match(lines(), "XS_TEST_API_KEY", true)
+      H.match(lines(), "AA_XS_TEST_API_KEY", true)
       H.no_match(lines(), "Approved exceptions (1)", true)
       -- then approve once
-      answers = { "XS_TEST_API_KEY through", "launch only" }
+      answers = { "AA_XS_TEST_API_KEY through", "launch only" }
       vim.api.nvim_feedkeys("e", "x", false)
       H.match(lines(), "Approved exceptions (1)", true)
-      H.match(lines(), "env XS_TEST_API_KEY  [once]", true)
+      H.match(lines(), "env AA_XS_TEST_API_KEY  [once]", true)
       vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
       H.eq(true, final.go)
-      H.has(final.plan.env_kept, "XS_TEST_API_KEY")
-      H.not_ok(vim.tbl_contains(final.plan.env_strip, "XS_TEST_API_KEY"))
+      H.has(final.plan.env_kept, "AA_XS_TEST_API_KEY")
+      H.not_ok(vim.tbl_contains(final.plan.env_strip, "AA_XS_TEST_API_KEY"))
       local log = store.read_log()
       H.eq(2, #log)
       H.eq("refused", log[1].decision)
       H.eq("approved", log[2].decision)
-      H.eq("XS_TEST_API_KEY", log[2].name)
+      H.eq("AA_XS_TEST_API_KEY", log[2].name)
       H.eq({}, sb.approvals(project), "once is not remembered")
       -- and the launched argv really keeps the variable
       local wrapped, _, h = sb.wrap(CMD, project, tmp, { plan = final.plan })
-      H.not_ok(vim.tbl_contains(wrapped, "XS_TEST_API_KEY"))
+      H.not_ok(vim.tbl_contains(wrapped, "AA_XS_TEST_API_KEY"))
       h.release()
     end
   )
@@ -563,12 +563,12 @@ describe("stale confirmed plans", function()
   it("a rebuilt plan keeps the exceptions approved for this launch", function()
     need_bwrap()
     local p =
-      sb.plan(CMD, project, tmp, { exceptions = { { kind = "env", value = "XS_TEST_API_KEY", scope = "once" } } })
-    H.has(p.env_kept, "XS_TEST_API_KEY")
+      sb.plan(CMD, project, tmp, { exceptions = { { kind = "env", value = "AA_XS_TEST_API_KEY", scope = "once" } } })
+    H.has(p.env_kept, "AA_XS_TEST_API_KEY")
     vim.fn.writefile({ "x" }, project .. "/.envrc") -- the guard assumed it absent: the plan is stale
     local wrapped, _, h = sb.wrap(CMD, project, tmp, { plan = p })
     H.eq(wrapped, sb.argv(h.plan))
-    H.has(h.plan.env_kept, "XS_TEST_API_KEY")
+    H.has(h.plan.env_kept, "AA_XS_TEST_API_KEY")
     h.release()
   end)
 end)

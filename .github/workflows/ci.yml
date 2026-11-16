@@ -38,6 +38,25 @@ jobs:
         # bwrap fail for an unprivileged user; the specs need a working sandbox.
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
+      - name: Diagnose parent-death behaviour of the runner (informational)
+        continue-on-error: true
+        run: |
+          set +e
+          echo "sh -> $(readlink -f /bin/sh); uname: $(uname -r)"
+          ls -l /usr/bin/bwrap; getcap /usr/bin/bwrap
+          # plain pdeathsig check: kill the parent shell, then look at the child
+          sh -c 'bwrap --die-with-parent --unshare-user --unshare-pid --ro-bind / / --dev /dev --proc /proc sleep 307 & wait' &
+          P=$!; sleep 2; kill -9 $P; sleep 2
+          echo "--- after killing the parent (bwrap/sleep 307 lines):"
+          ps -eo pid,ppid,pgid,stat,args | grep -E "sleep 307|bwrap" | grep -v grep
+          pkill -f "sleep 307"
+          # process-group kill from a detached watcher
+          setsid sh -c 'sleep 308' & G=$!; sleep 1
+          ps -eo pid,ppid,pgid,sid,stat,args | grep "sleep 308" | grep -v grep
+          kill -KILL -- "-$G"; sleep 1
+          echo "--- after kill -KILL -pg:"; ps -eo pid,stat,args | grep "sleep 308" | grep -v grep
+          exit 0
+
       - name: Spec suite
         # Specs that need a working sandbox skip with a message on runners that
         # restrict user namespaces.
