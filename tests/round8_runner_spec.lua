@@ -43,6 +43,14 @@ describe("tests/run.lua when the runner itself is killed (kill -9)", function()
     for _, p in ipairs(H.procs("sleep 1203")) do
       left[#left + 1] = p
     end
+    local why = ""
+    for _, p in ipairs(left) do
+      local f = io.open("/proc/" .. p[1] .. "/stat")
+      why = why .. " [" .. p[1] .. ": " .. (f and (f:read("*a"):gsub("^%d+ %b() ", "")) or "gone") .. "]"
+      if f then
+        f:close()
+      end
+    end
     for _, p in ipairs(left) do
       uv.kill(p[1], 9)
     end
@@ -55,7 +63,7 @@ describe("tests/run.lua when the runner itself is killed (kill -9)", function()
     local reaper = dofile(H.repo .. "/tests/reaper.lua")
     H.ok(reaper.remove_owned_by(obj.pid, reaper.bases(H.repo)) >= 1, "its scratch directory was found and removed")
     H.ok(started, "the spec started")
-    H.ok(gone, "left behind: " .. vim.inspect(left))
+    H.ok(gone, "left behind: " .. vim.inspect(left) .. " /proc stat (state ppid pgrp ...)" .. why)
     H.eq({}, nvim_left, "the spec's nvim is gone")
   end)
 end)

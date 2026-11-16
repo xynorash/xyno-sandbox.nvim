@@ -110,7 +110,15 @@ describe("a sandbox whose launcher dies", function()
       uv.kill(p[1], 9)
     end
     h.release()
-    H.eq({}, left, "bwrap survived its parent")
+    local why = ""
+    for _, p in ipairs(left) do
+      local f = io.open("/proc/" .. p[1] .. "/stat")
+      why = why .. " [" .. p[1] .. ": " .. (f and (f:read("*a"):gsub("^%d+ %b() ", "")) or "gone") .. "]"
+      if f then
+        f:close()
+      end
+    end
+    H.eq({}, left, "bwrap survived its parent; /proc stat (state ppid pgrp ...)" .. why)
     H.eq({}, relay_left, "the relay survived the sandbox")
     for _, p in ipairs(agent) do
       uv.kill(p[1], 9)
