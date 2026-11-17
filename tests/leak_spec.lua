@@ -130,6 +130,23 @@ describe("a sandbox whose launcher dies", function()
         w:close()
       end
     end
+    if #left > 0 then
+      -- CI diagnostic: kernel view of what the survivors are doing (stack, scheduler, dmesg).
+      local pids = {}
+      for _, p in ipairs(left) do
+        pids[#pids + 1] = p[1]
+      end
+      local diag = vim.system({
+        "sh", "-c",
+        "uname -r; bwrap --version; nproc; uptime; cat /proc/pressure/cpu; "
+          .. "ps -eo pid,ppid,pgid,stat,pcpu,wchan:30,etime,args --sort=-pcpu | cut -c1-160 | head -25; "
+          .. "for p in \"$@\"; do echo \"== $p\"; for d in /proc/$p /proc/$p/task/*; do echo \"-- $d\"; sudo -n cat $d/stack 2>&1 | head -30; "
+          .. "cat $d/syscall; grep -E 'ctxt|State|Cpus_allowed_list' $d/status; head -12 $d/sched; done; "
+          .. "grep -r . /proc/$p/cgroup; ls /proc/$p/task | wc -l; done; sudo -n dmesg 2>&1 | tail -40",
+        "diag", unpack(vim.tbl_map(tostring, pids)),
+      }, { text = true }):wait(20000)
+      why = why .. "\nDIAG:\n" .. (diag.stdout or "") .. (diag.stderr or "")
+    end
     local agent = procs("sleep 300")
     local relay_left = vim.tbl_filter(function(p)
       return p[2]:find(h.net_dir, 1, true)
