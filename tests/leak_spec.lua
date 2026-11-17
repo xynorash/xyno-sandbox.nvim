@@ -106,7 +106,10 @@ describe("a sandbox whose launcher dies", function()
     -- (observed in CI: alive and in state R at 5 s, gone a moment later). The spec proves that it
     -- DIES, so it polls up to 30 s; a sandbox that really outlives its launcher still fails.
     local t0 = uv.hrtime()
-    local left = H.wait_gone(project, 30000)
+    vim.wait(30000, function()
+      return #H.procs(project) == 0
+    end, 100)
+    local left = H.procs(project) -- looked at BEFORE anything is killed (the diagnostics below)
     local took = (uv.hrtime() - t0) / 1e9
     local why = ""
     for _, p in ipairs(left) do
@@ -146,6 +149,9 @@ describe("a sandbox whose launcher dies", function()
         "diag", unpack(vim.tbl_map(tostring, pids)),
       }, { text = true }):wait(20000)
       why = why .. "\nDIAG:\n" .. (diag.stdout or "") .. (diag.stderr or "")
+    end
+    for _, p in ipairs(left) do
+      uv.kill(p[1], 9)
     end
     local agent = procs("sleep 300")
     local relay_left = vim.tbl_filter(function(p)
