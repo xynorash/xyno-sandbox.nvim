@@ -142,6 +142,9 @@ describe("a sandbox whose launcher dies", function()
       local diag = vim.system({
         "sh", "-c",
         "uname -r; bwrap --version; nproc; uptime; cat /proc/pressure/cpu; "
+          .. "echo MEMBERS; for d in /proc/[0-9]*; do ns=$(grep '^NSpid' $d/status 2>/dev/null | awk 'NF>2'); "
+          .. "[ -n \"$ns\" ] && { echo \"${d#/proc/} $ns ppid=$(grep '^PPid' $d/status | cut -f2) $(grep '^State' $d/status | cut -f2) wchan=$(cat $d/wchan) $(tr '\\0' ' ' < $d/cmdline | cut -c1-90)\"; "
+          .. "sudo -n cat $d/stack 2>&1 | head -6; }; done; echo ENDMEMBERS; "
           .. "ps -eo pid,ppid,pgid,stat,pcpu,wchan:30,etime,args --sort=-pcpu | cut -c1-160 | head -25; "
           .. "for p in \"$@\"; do echo \"== $p\"; for d in /proc/$p /proc/$p/task/*; do echo \"-- $d\"; sudo -n cat $d/stack 2>&1 | head -30; "
           .. "cat $d/syscall; grep -E 'ctxt|State|Cpus_allowed_list' $d/status; head -12 $d/sched; done; "
