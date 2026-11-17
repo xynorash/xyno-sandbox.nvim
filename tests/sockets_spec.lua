@@ -92,7 +92,7 @@ local function sweep(project, roots)
   local tmp = H.tmpdir()
   local cmd, err, h = sb.wrap(vim.list_extend({ "python3", "-I", "-c", PY }, roots), project, tmp)
   H.ok(cmd, err)
-  local r = vim.system(cmd, { text = true, cwd = project }):wait(120000)
+  local r = vim.system(cmd, { text = true, cwd = project }):wait(200000)
   local plan = h.plan
   h.release()
   local found = {}

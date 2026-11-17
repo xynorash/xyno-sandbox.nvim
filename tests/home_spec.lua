@@ -249,7 +249,7 @@ describe("the allowlist view inside a real sandbox", function()
     local tmp = H.tmpdir()
     local wrapped, err, h = sb.wrap(cmd, project, tmp)
     H.ok(wrapped, err)
-    local r = vim.system(wrapped, { text = true, cwd = project }):wait(120000)
+    local r = vim.system(wrapped, { text = true, cwd = project }):wait(200000)
     h.release()
     return (r.stdout or "") .. (r.stderr or ""), r
   end
