@@ -104,6 +104,31 @@ watch:start(500, 500, function()
   end
 end)
 
+-- Heartbeat. The host-side proxy lives in the nvim that launched the sandbox. When that nvim dies
+-- (kill -9, a crash) its listener is gone but the socket file stays: connecting to it is refused.
+-- bwrap's --die-with-parent is meant to take the sandbox along, but it did not always do so on
+-- the hosted ubuntu runner (kernel 7.0-azure, bubblewrap 0.11.1: both bwrap processes stayed asleep
+-- after their parent died), so the relay does not rely on it: after two refused probes in a row
+-- (a missing file is an ordinary release and was handled above) it kills its parent, the agent,
+-- which ends the sandbox's init and with it the pid namespace.
+local refused = 0
+local beat = uv.new_timer()
+beat:start(1000, 1000, function()
+  local probe = uv.new_pipe(false)
+  probe:connect(sock, function(cerr)
+    safe_close(probe)
+    if cerr and tostring(cerr):find("ECONNREFUSED", 1, true) then
+      refused = refused + 1
+      if refused >= 2 then
+        pcall(uv.kill, parent, 9)
+        os.exit(0)
+      end
+    else
+      refused = 0
+    end
+  end)
+end)
+
 local f = io.open(ready, "w")
 if not f then
   io.stderr:write("relay: cannot write " .. ready .. "\n")

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### CI portability: a sandbox that outlived its launcher on the hosted runner
+
+- **Found on GitHub Actions (ubuntu, kernel 7.0.0-azure, bubblewrap 0.11.1)**: after the launcher was killed with `-9`, both bwrap processes (the outer one and the pid-1 one of the namespace) stayed asleep for good, with no signal pending (read from `/proc` before anything was killed; an earlier reading was taken after the spec's own `kill -9` and showed a misleading R state with SIGKILL pending). A plugin-free probe on the same runner (bwrap alone, `--die-with-parent` with six growing flag sets from `--unshare-pid` to the full isolation list, parent shell killed, 3 tries each) died with its parent every time, so bwrap itself works there; the difference is in how the spec launched it, and the exact cause is not found. This is reported as unexplained, not as a runner limit.
+- **Fix (backstop)**: the relay probes the proxy socket every second; a socket file that refuses connections twice in a row means the launching Neovim is gone, and the relay kills its parent (the agent) so the sandbox ends. Only with the filtered network (no relay in `network = "open"`), 2 to 3 seconds. Spec: a dead proxy ends the relay and its parent (fails without the heartbeat); the launcher-death spec now uses a real launching Neovim that owns the proxy and the job, killed with `-9`, polls up to 30 s without killing anything, and prints the `/proc` state of survivors.
+- The real-sandbox cargo build and the connect sweep wait up to 200 s (was 120 s): they took 6 s and 36 s on the runner in one run and timed out in another; the cause of the stalls is not known.
+
 ### Tenth round: survivors of the independent mutation run
 
 - **Git write allowlist pinned (functional gap, reproduced by the verifier)**: flipping `HEAD`, `ORIG_HEAD`, `packed-refs` (and 13 more entries) to `false` in `plan.GIT_WRITE_ALLOWED` survived the whole suite although `git checkout -b`, `git reset --hard` and `git pack-refs --all` then fail. New specs: every name of the allowlist and every prefix (`MERGE_`, `BISECT_`, `NOTES_MERGE_`, `sharedindex.`, with the near-misses) from a literal list, and real bubblewrap runs of checkout -b, commit, reset --hard, pack-refs, tag -a, merge (squash and no-ff), fetch, gc and update-ref. Mutation check on copies: all 16 flipped entries, all 3 removed prefixes now fail a spec (`gc.log` / `gc.pid` too).

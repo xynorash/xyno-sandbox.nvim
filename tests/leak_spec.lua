@@ -72,6 +72,23 @@ describe("the in-sandbox relay", function()
     H.eq({}, H.wait_gone(r.dir .. "/net/proxy.sock", 4000), "the relay outlived its parent")
   end)
 
+  it("heartbeat: a proxy that is dead (socket file left behind, connections refused) ends the relay AND its parent", function()
+    local r = host_relay()
+    local sock = r.dir .. "/net/proxy.sock"
+    H.eq(1, #procs(sock))
+    -- a socket file nobody listens on, swapped in atomically (a missing file is an ordinary release)
+    local dead = uv.new_pipe(false)
+    H.ok(dead:bind(sock .. ".new"))
+    H.ok(uv.fs_rename(sock .. ".new", sock))
+    H.eq({}, H.wait_gone(sock, 8000), "the relay outlived its dead proxy")
+    local gone = vim.wait(3000, function()
+      return not uv.kill(r.sh.pid, 0)
+    end, 50)
+    dead:close()
+    r.sh:kill(9)
+    H.ok(gone, "the relay left its parent (the agent) alive")
+  end)
+
   it("exits when the proxy's socket is gone", function()
     local r = host_relay()
     H.eq(1, #procs(r.dir .. "/net/proxy.sock"))
@@ -82,100 +99,81 @@ describe("the in-sandbox relay", function()
 end)
 
 describe("a sandbox whose launcher dies", function()
-  it("takes bwrap, the agent and the relay with it (--die-with-parent)", function()
+  it("takes bwrap, the agent and the relay with it (--die-with-parent, and the relay's heartbeat)", function()
     H.need_sandbox()
+    -- The launcher is a real nvim that owns the proxy and the job, as in use; killing it with -9 is the
+    -- crash. (A plain `sh` standing in for the launcher was not enough: on the hosted ubuntu runner,
+    -- kernel 7.0-azure + bubblewrap 0.11.1, killing such a parent left both bwrap processes asleep
+    -- although the same flags die with their parent from a bare shell; --die-with-parent alone is not
+    -- relied on, the relay notices the dead proxy and ends the agent.)
     local project, tmp = H.tmpdir(), H.tmpdir()
-    local cmd, err, h = sb.wrap({ "sleep", "300" }, project, tmp)
-    H.ok(cmd, err)
-    -- a parent we can kill without touching bwrap itself
-    local parent = vim.system({ "sh", "-c", '"$@" & wait', "xyno-leak-parent", unpack(cmd) }, { cwd = project })
+    local dir = H.tmpdir()
+    local ready = dir .. "/ready"
+    local script = dir .. "/launcher.lua"
+    vim.fn.writefile({
+      ("vim.opt.runtimepath:prepend(%q)"):format(H.repo),
+      'local sb = require("xyno_sandbox")',
+      ('require("xyno_sandbox.store").dir_override = %q'):format(dir .. "/state"),
+      ("local cmd, err, h = sb.wrap({ 'sleep', '300' }, %q, %q)"):format(project, tmp),
+      "if not cmd then io.stderr:write(tostring(err)) os.exit(3) end",
+      "vim.fn.jobstart(cmd, { cwd = " .. ("%q"):format(project) .. " })",
+      ("vim.fn.writefile({ h.net_dir }, %q)"):format(ready),
+      "vim.wait(600000, function() return false end)",
+    }, script)
+    local launcher = vim.system({ vim.v.progpath, "-u", "NONE", "-i", "NONE", "--headless", "-l", script }, { text = true })
+    local net_dir
     H.ok(
       vim.wait(10000, function()
-        return #H.procs("proxy.sock") > 0
+        local f = io.open(ready)
+        if f then
+          net_dir = f:read("*l")
+          f:close()
+        end
+        return net_dir ~= nil
           and #H.procs(project) > 0
           and #H.procs("sleep 300") > 0
           and vim.iter(H.procs("relay.lua")):any(function(p)
-            return p[2]:find(h.net_dir, 1, true)
+            return p[2]:find(net_dir, 1, true)
           end)
       end, 100),
       "the sandbox did not come up"
     )
-    parent:kill(9)
-    -- Teardown of a pid + net + mount namespace pair is not instant: on the hosted ubuntu runner
-    -- (kernel 7.0-azure) the sandbox's init needed 5 to 6 s to die after its parent was killed
-    -- (observed in CI: alive and in state R at 5 s, gone a moment later). The spec proves that it
-    -- DIES, so it polls up to 30 s; a sandbox that really outlives its launcher still fails.
+    launcher:kill(9)
+    -- poll without killing anything: a sandbox that does not end by itself must FAIL here
     local t0 = uv.hrtime()
     vim.wait(30000, function()
       return #H.procs(project) == 0
     end, 100)
-    local left = H.procs(project) -- looked at BEFORE anything is killed (the diagnostics below)
     local took = (uv.hrtime() - t0) / 1e9
-    local why = ""
-    for _, p in ipairs(left) do
-      local f = io.open("/proc/" .. p[1] .. "/stat")
-      why = why .. " [" .. p[1] .. ": " .. (f and (f:read("*a"):gsub("^%d+ %b() ", "")) or "gone") .. "]"
-      if f then
-        f:close()
-      end
+    local left = H.procs(project)
+    local relay_left = vim.tbl_filter(function(p)
+      return p[2]:find(net_dir, 1, true)
+    end, H.procs("relay.lua"))
+    local agent = procs("sleep 300")
+    local function state(p)
       local st = io.open("/proc/" .. p[1] .. "/status")
+      local out = ""
       if st then
         for line in st:lines() do
-          if line:match("^State") or line:match("^Sig[PC]nd") or line:match("^ShdPnd") or line:match("^PPid") or line:match("^NSpid") then
-            why = why .. " {" .. line:gsub("%s+", " ") .. "}"
+          if line:match("^State") or line:match("^PPid") or line:match("^NSpid") then
+            out = out .. " {" .. line:gsub("%s+", " ") .. "}"
           end
         end
         st:close()
       end
-      local w = io.open("/proc/" .. p[1] .. "/wchan")
-      if w then
-        why = why .. " wchan=" .. w:read("*a")
-        w:close()
-      end
+      return "[" .. p[1] .. out .. "]"
     end
-    if #left > 0 then
-      -- CI diagnostic: kernel view of what the survivors are doing (stack, scheduler, dmesg).
-      local pids = {}
-      for _, p in ipairs(left) do
-        pids[#pids + 1] = p[1]
-      end
-      local diag = vim.system({
-        "sh", "-c",
-        "uname -r; bwrap --version; nproc; uptime; cat /proc/pressure/cpu; "
-          .. "echo MEMBERS; for d in /proc/[0-9]*; do ns=$(grep '^NSpid' $d/status 2>/dev/null | awk 'NF>2'); "
-          .. "[ -n \"$ns\" ] && { echo \"${d#/proc/} $ns ppid=$(grep '^PPid' $d/status | cut -f2) $(grep '^State' $d/status | cut -f2) wchan=$(cat $d/wchan) $(tr '\\0' ' ' < $d/cmdline | cut -c1-90)\"; "
-          .. "sudo -n cat $d/stack 2>&1 | head -6; }; done; echo ENDMEMBERS; "
-          .. "ps -eo pid,ppid,pgid,stat,pcpu,wchan:30,etime,args --sort=-pcpu | cut -c1-160 | head -25; "
-          .. "for p in \"$@\"; do echo \"== $p\"; for d in /proc/$p /proc/$p/task/*; do echo \"-- $d\"; sudo -n cat $d/stack 2>&1 | head -30; "
-          .. "cat $d/syscall; grep -E 'ctxt|State|Cpus_allowed_list' $d/status; head -12 $d/sched; done; "
-          .. "grep -r . /proc/$p/cgroup; ls /proc/$p/task | wc -l; done; sudo -n dmesg 2>&1 | tail -40",
-        "diag", unpack(vim.tbl_map(tostring, pids)),
-      }, { text = true }):wait(20000)
-      why = why .. "\nDIAG:\n" .. (diag.stdout or "") .. (diag.stderr or "")
+    local why = ""
+    for _, p in ipairs(vim.list_extend(vim.list_extend(vim.deepcopy(left), relay_left), agent)) do
+      why = why .. " " .. state(p)
     end
-    for _, p in ipairs(left) do
+    for _, p in ipairs(vim.list_extend(vim.list_extend(vim.deepcopy(left), relay_left), agent)) do
       uv.kill(p[1], 9)
     end
-    local agent = procs("sleep 300")
-    local relay_left = vim.tbl_filter(function(p)
-      return p[2]:find(h.net_dir, 1, true)
-    end, H.procs(h.net_dir))
-    for _, p in ipairs(relay_left) do
-      uv.kill(p[1], 9)
-    end
-    h.release()
-    H.eq({}, left, ("bwrap survived its parent for %.1fs; /proc stat (state ppid pgrp ...)"):format(took) .. why)
+    vim.fn.delete(net_dir, "rf")
+    H.eq({}, left, ("bwrap survived its launcher for %.1fs:%s"):format(took, why))
     H.eq({}, relay_left, "the relay survived the sandbox")
-    for _, p in ipairs(agent) do
-      uv.kill(p[1], 9)
-    end
-    H.eq(
-      {},
-      vim.tbl_filter(function(p)
-        return p[2] == "sleep 300 " or p[2] == "sleep 300"
-      end, procs("sleep 300")),
-      "the agent survived the sandbox"
-    )
+    H.eq({}, agent, "the agent survived the sandbox")
   end)
 
   it("the plan always carries --die-with-parent", function()
