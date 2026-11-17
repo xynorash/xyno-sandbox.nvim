@@ -124,6 +124,21 @@ describe("a sandbox whose launcher dies", function()
         w:close()
       end
     end
+    if #left > 0 then
+      -- CI diagnostic: does the survivor die later, and what is every process of its pid namespace doing?
+      local t0 = uv.hrtime()
+      local late = H.wait_gone(project, 25000)
+      why = why .. (" | gone after +%.1fs more: %s"):format((uv.hrtime() - t0) / 1e9, #late == 0 and "yes" or "NO")
+      local diag = vim.system({
+        "sh", "-c",
+        "uname -r; bwrap --version; cat /proc/1/cmdline | tr '\\0' ' '; echo; "
+          .. "ps -eo pid,ppid,pgid,sid,stat,wchan:30,etime,args --forest | cut -c1-180; "
+          .. "for d in /proc/[0-9]*; do n=$(grep '^NSpid' $d/status 2>/dev/null | awk 'NF>2'); "
+          .. "[ -n \"$n\" ] && { echo \"== $d $n\"; grep -E '^(Name|State|PPid|SigPnd|ShdPnd|SigBlk|SigIgn|SigCgt)' $d/status | tr '\\n' ' '; echo; "
+          .. "cat $d/wchan; echo; cat $d/syscall; sudo -n cat $d/stack 2>&1 | head -20; }; done",
+      }, { text = true }):wait()
+      why = why .. "\nDIAG:\n" .. (diag.stdout or "") .. (diag.stderr or "")
+    end
     local agent = procs("sleep 300")
     local relay_left = vim.tbl_filter(function(p)
       return p[2]:find(h.net_dir, 1, true)
