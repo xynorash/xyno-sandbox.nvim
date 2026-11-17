@@ -19,7 +19,9 @@ xyno-sandbox.nvim wraps a command-line coding agent in bubblewrap (`bwrap`)
 and refuses to start it without a sandbox. The filesystem is read-only except
 the project and a scratch directory, credentials are hidden, secret
 environment variables are stripped, and files that would later run outside the
-sandbox are locked read-only. The network stays open.
+sandbox are locked read-only. Network egress is default-deny: the sandbox has
+no network of its own and reaches a short hostname allowlist through a local
+filtering proxy (|xyno-sandbox-network|). `network = "open"` opts out.
 
 The policy knows the config, cache and state directories of one agent CLI,
 but |wrap()| takes any command.
@@ -40,6 +42,17 @@ but |wrap()| takes any command.
       allow_unsandboxed = false,
       keymaps = false,
       commands = true,
+      preview = "once",
+      strip_skip_permissions = false,
+      agent_cmd = nil,
+      network = "filtered",
+      allow_hosts = nil,
+      policy = {
+        readonly = {}, writable = {}, hidden = {},
+        guard_dirs = {}, guard_files = {},
+        scrub = { contains = {}, prefix = {}, exact = {} },
+        scan_depth = 8,
+      },
     })
 <
                                                           *xyno-sandbox-sandbox*
@@ -53,6 +66,23 @@ allow_unsandboxed       boolean, default false
     macOS, Linux without bwrap). It never disables a working sandbox. Only the
     boolean `true` counts.
 
+                                                        *xyno-sandbox-network*
+network                 "filtered" | "open", default "filtered"
+    filtered: `bwrap --unshare-net` plus a CONNECT-only filtering proxy in
+    Neovim, reached through a unix socket and a relay inside the sandbox
+    (HTTPS_PROXY points at it). Only names on the allowlist are reachable;
+    raw IPs, DNS, UDP and host loopback are not. No DNS is done in the
+    sandbox: resolver sockets are hidden and the proxy resolves allowed names.
+    If this cannot be enforced the agent does not start. open: unrestricted,
+    shown as OPEN in the preview. Anything but "open" counts as filtered.
+
+                                                     *xyno-sandbox-allow_hosts*
+allow_hosts             list of strings, default nil
+    nil uses require("xyno_sandbox").default_hosts (api.anthropic.com,
+    platform.claude.com, crates.io, static.crates.io, index.crates.io). A list
+    replaces them. Entries: `host`, `host:port`, `*.suffix`. More hosts can be
+    approved in the preview with `e` (logged, revocable).
+
                                                          *xyno-sandbox-keymaps*
 keymaps                 false or table, default false
     No global keymap is set by default. `{ status = "<lhs>" }` maps normal mode
@@ -62,6 +92,56 @@ keymaps                 false or table, default false
 commands                boolean, default true
     Register |:XynoSandboxStatus| and |:XynoSandboxRun|.
 
+                                                         *xyno-sandbox-preview*
+preview                 "always" | "once" | "never", default "once"
+    Show the policy preview (see |:XynoSandboxPolicy|) before a launch: every
+    launch, the first launch of each project, or never. Needs a UI.
+
+                                                *xyno-sandbox-strip_skip_permissions*
+strip_skip_permissions  boolean, default false
+    `true` removes `--dangerously-skip-permissions` from the command. The
+    preview always shows a line "Agent permission prompts: ON/OFF".
+
+                                                            *xyno-sandbox-home*
+home                    "allowlist" (default) | "denylist"
+    allowlist: $HOME is an empty tmpfs; only the project, the scratch dir,
+    the agent's writable paths, toolchain dirs (~/.cargo, ~/.rustup, the
+    CARGO_HOME-style variables, $PATH entries under $HOME, the agent binary)
+    and policy.home_allow are shown. denylist: all of $HOME is readable
+    except the hidden credential list.
+
+                                                *xyno-sandbox-expert_exceptions*
+expert_exceptions       boolean, default false
+    true lets "env" exceptions for LD_PRELOAD, PATH, LD_LIBRARY_PATH and
+    other variables that decide which code runs be approved (they still need
+    a variable the policy strips).
+
+                                                          *xyno-sandbox-policy*
+policy                  table, default {}
+    Additive lists, validated by setup() (an invalid value raises and changes
+    nothing):
+      readonly     more read-only locks (project-relative, absolute or ~/)
+      writable     more writable paths (absolute or ~/, never / or $HOME)
+      hidden       more hidden paths (absolute or ~/)
+      guard_dirs   project-relative dirs masked when absent
+      guard_files  project-relative files bound empty and read-only when absent
+      scrub        { contains, prefix, exact }: more variable names to strip
+      scan_depth   depth of the nested .git / member walk, 1 to 32, default 8
+      home_allow   more $HOME paths shown read-only (home = "allowlist")
+      keep_run     paths below /run or /var/tmp bound back read-only (no sockets!)
+      project_secrets  true (default): hide .env, *.pem, *.key, .npmrc ... in the project
+      secret_files more file name globs to hide in the project
+      secret_allow file names or project-relative paths never hidden
+      symlinks     "warn" (list links out of the project) | "refuse"
+      content_scan true (default): scan project files for known token formats
+                   (cloud/forge tokens, private keys) and hide files that have one
+      tree_secrets true (default): hide secret names (.ssh, .npmrc, credentials,
+                   secrets/ ...) inside the trees shown whole from $HOME
+      claude_share names below ~/.claude shown read-only in the sandbox (default
+                   none; the login and this project's transcripts are always there)
+
+`sandbox` and `allow_unsandboxed` may also be functions returning the boolean.
+
 Mapping from xynovim: `vim.g.xynovim_99_sandbox = false` is
 `setup({ sandbox = false })` and `vim.g.xynovim_99_allow_unsandboxed = true`
 is `setup({ allow_unsandboxed = true })`.
@@ -70,15 +150,38 @@ is `setup({ allow_unsandboxed = true })`.
 4. Commands                                                *xyno-sandbox-commands*
 
                                                           *:XynoSandboxStatus*
-:XynoSandboxStatus      Show how an agent would run here: sandboxed,
-                        unsandboxed (and why) or refused (and why).
+:XynoSandboxStatus[!]   Show how an agent would run here: sandboxed,
+                        unsandboxed (and why) or refused (and why, with a fix
+                        hint). ! re-runs the readiness probe.
+
+                                                          *:XynoSandboxPolicy*
+:XynoSandboxPolicy[!] [dir]
+                        Show the policy preview: writable, read-only, locked
+                        git directories, guarded and hidden paths, stripped
+                        variable NAMES, network, the permission-bypass line.
+                        ! lists every entry. In the window: e considers one
+                        exception (approve once, approve for the project, or
+                        refuse; every decision is logged to
+                        stdpath("state")/xyno-sandbox/exceptions.log).
+
+                                                      *:XynoSandboxApprovals*
+:XynoSandboxApprovals   List the remembered approvals (x revokes the one under
+                        the cursor). `revoke {id}` revokes by id, `log` opens
+                        the decision log.
+
+                                                         *:XynoSandboxReview*
+:XynoSandboxReview [clear] [dir]
+                        Show the files a run planted (moved into the quarantine
+                        when it ended). `clear` removes the mark so that the
+                        next launch is allowed again.
 
                                                              *:XynoSandboxRun*
 :XynoSandboxRun {cmd} [args...]
                         Run the command in a terminal split, wrapped. The
                         project is the current directory. Without a sandbox it
                         prints a one-line error and starts nothing. Every
-                        explicitly unsandboxed run warns.
+                        explicitly unsandboxed run warns. A job that cannot start
+                        leaves no empty split.
 
 ==============================================================================
 5. Lua API                                                     *xyno-sandbox-api*
@@ -96,6 +199,22 @@ require("xyno_sandbox").wrap({cmd}, {project}, {tmp_dir})
     {project} and {tmp_dir} are writable inside the sandbox. The agent starts
     in Neovim's current directory when that is inside {project}, otherwise in
     {project}.
+
+                                                                      *plan()*
+require("xyno_sandbox").plan({cmd}, {project}, {tmp_dir}, {opts})
+    The structured plan the preview shows and |wrap()| runs. Pure builder:
+    require("xyno_sandbox.plan").build(). `nil, reason` when refused.
+
+                                                                  *statusline()*
+require("xyno_sandbox").statusline()
+    "sandbox: on", "sandbox: checking", "sandbox: OFF" or "sandbox: refused",
+    plus " x2" for two running sandboxes. A lualine component; never blocks.
+    statusline_hl() gives a matching highlight group.
+
+                                                              *approve()*
+require("xyno_sandbox").approve({project}, {kind}, {value}, {scope})
+    Log and apply an exception: kind "env", "unhide" or "writable", scope
+    "once" or "project". refuse(), approvals() and revoke() complete it.
 
                                                                         *run()*
 require("xyno_sandbox").run({cmd}, {opts})
@@ -117,24 +236,124 @@ require("xyno_sandbox").readonly_paths({project})
 `bwrap` gets a read-only bind of `/`, private /dev, /proc and /tmp, new user,
 pid, ipc, uts and cgroup namespaces, nested user namespaces disabled, all
 capabilities dropped and no controlling terminal. The project, the scratch
-directory and a few agent and cargo cache paths are writable. Git directories,
+directory and a few agent and cargo cache paths are writable. Git directories (down to 8 levels),
 `.cargo`, `.envrc`, `.vscode`, the agent's project directory and the agent settings, hooks, skills
 and memory are read-only (or masked with an empty read-only directory when
-absent). Credential directories and files are replaced by empty ones.
-Environment variables that look like secrets are removed.
+absent). Credential directories and files are replaced by empty ones. In the
+allowlist view ~/.claude is a throw-away tmpfs holding the login (read-only),
+this project's transcripts and the policy.claude_share names; other projects'
+transcripts, history, sessions and settings are not there. /home (other users,
+the account's real home when it is not $HOME) is hidden. Git configs are shown
+as sanitized copies (URL tokens, credential helpers and auth headers removed).
+bwrap, the agent and the network relay end with Neovim (--die-with-parent; the
+relay also exits on SIGTERM, on parent loss and when the proxy socket is gone).
+Environment variables that look like secrets are removed: bwrap itself starts
+with `env -i` and only the allowed variables (the bwrap found by the readiness
+check is named by its absolute path), so /proc/1/environ has none of
+them. /run, /var/tmp and /tmp are empty tmpfs (no host unix sockets). $HOME is
+an allowlist by default. Project secrets (.env, *.pem, ...) are hidden. The
+preview is rendered from the same options as the command line.
 
 ==============================================================================
 7. Residual risks                                              *xyno-sandbox-risks*
 
-It is a denylist on a read-only view of the filesystem with the network open.
+It is a denylist on a read-only view of the filesystem with egress limited to a
+hostname allowlist.
 
-  - the agent's credential file under its config directory must stay readable
-    and writable.
-  - everything unlisted under `$HOME` is readable.
-  - loopback services and abstract sockets are reachable.
+  - the agent's credential file under its config directory in `$HOME` must stay readable
+    (bound read-only: a token refresh inside the sandbox is not saved).
+  - with home = "denylist", everything unlisted under `$HOME` is readable; with
+    the default allowlist the rest of the filesystem (/etc, /var, /opt, files
+    of other users) still is.
+  - project secrets are found by file name and, for known token formats only,
+    by content (bounded scan: 4000 files, 6000 directories, 256 KB each, 400 ms). Not found: plain
+    passwords, generic keys, JWTs, database URLs, encoded or split secrets,
+    large or binary files, skipped directories, anything past a limit, a
+    header that is URL-encoded, an HTML entity, hex, base64 wrapped inside the
+    header or encoded twice, UTF-16 text. The scan is linear in the size of a
+    line and checks its time budget inside a file too. A line
+    saying "example" no longer hides a real token (only a match that spells
+    out it is a placeholder is ignored). A hard link to a hidden file outside
+    the project cannot be hidden (the plan warns); one to a credential of the
+    hidden list in $HOME is found and hidden. So is a project name for a file
+    that runs outside the sandbox later (~/.bashrc, ~/.gitconfig,
+    ~/.config/direnv, ~/.claude/settings.json, the project's .git/hooks ...):
+    it is hidden, the comparison looks at up to 1500 files. Other multi-link
+    files are reported as a note. A private key header inside base64 is found.
+    The login file ~/.claude/.credentials.json is read-only in both home views
+    and a project hard link of it is hidden.
+    A writable approval for any of those places, below one or above one
+    (~/.config), is refused; there is no override (expert_exceptions only
+    concerns environment variables).
+  - directories shown whole from $HOME (a $PATH entry's parent) are searched
+    for secret NAMES (.ssh, .npmrc, credentials, secrets/ ...), not content;
+    policy.tree_secrets = false turns it off.
+  - the environment scrub finds secrets by name and by known value formats
+    (ghp_, AKIA, sk-ant-, private keys, user:password@ URLs); an unknown format
+    under an unlisted name stays (add it to policy.scrub).
+  - sockets in the project are hidden everywhere (also target/, node_modules/,
+    .git/, 24 levels, 30000 directories); beyond that budget they stay
+    connectable and the plan says so.
+  - the ~/.claude.json copy drops API keys, the e-mail address, account ids,
+    its env map, hooks, auth helpers, MCP server env and headers and
+    token-looking strings; a user-scope MCP server that needs
+    a token from its config does not work inside.
+  - after kill -9 of Neovim its private copies, the empty file of the
+    launch and Neovim's emptied temporary directory stay until the next
+    launch (any wrap()) removes them.
+    Symlinks out of the project are listed, not blocked (unless
+    policy.symlinks = "refuse").
+  - with network = "open", loopback services and abstract sockets are reachable.
   - cargo's `registry/src` and `git` are writable.
-  - a nested `.git` deeper than 2 levels is not locked.
-  - masks leave empty directories behind.
+  - a nested `.git` deeper than 8 levels (policy.scan_depth) is not locked.
+    What is ABSENT in a subdirectory: the shallowest ones (at most 360 mounts)
+    get .cargo/.claude/.vscode/.git (directories) and
+    .envrc/.mcp.json/.nvim.lua/.mise.toml/.exrc (files) masked, so they cannot
+    be created. Anywhere else the agent can create them during the run; when
+    the run ends every NEW protected name in the tree is copied into the
+    quarantine (stdpath("state")/xyno-sandbox/quarantine), removed from the
+    project and the project is marked: the next launch is refused until
+    |:XynoSandboxReview| `clear`. Nothing is swept after kill -9 of Neovim.
+    The sweep also enters target/, node_modules/ and virtualenvs (own budget:
+    4000 directories, 0.7 s). When the walk at the end of a run stops at a
+    bound it did not stop at at launch, the project is marked for review too
+    (the tree grew past what can be checked); a tree that was already too big
+    is only reported, and a name planted beyond the bound is not found. A
+    directory renamed during the run (mv sub sub_old) is recognised by inode
+    and not quarantined (unless its content changed, see below). Also covered: .githooks .mvn .pnpmfile.cjs
+    .dir-locals.el .lvimrc (read-only), .npmrc .yarnrc .yarnrc.yml (hidden
+    when present, guarded when absent). Round 8: the content of protected
+    names is hashed at launch and compared at the end: a protected name that
+    moved (mv sub sub_old) and has a new or changed file inside is "tampered"
+    (error notice with lines added and removed, project marked); an existing
+    one that changed deep in the tree is reported with lines added and
+    removed. .devcontainer.json .bazelrc .bazelversion .bazeliskrc .lefthook
+    .cargo-husky .sbtopts .jvmopts .bundle are read-only; gradle.properties,
+    build.gradle(.kts), pom.xml, Gemfile, Procfile, .nvmrc, .python-version,
+    .gitattributes and similar are reported when edited. A planted name under
+    a parent made chmod 555 is still quarantined (the mode is put back).
+    Not covered: .gradle/ (init scripts are loaded from the Gradle user home,
+    not the project), .terraform/ (written by terraform init), globs such as
+    *.code-workspace.
+    Round 9: an edited small file shows its first six changed lines; buildSrc/
+    and build-logic/ (Gradle compiles and runs them) are compared as a whole
+    and reported at error level; node_modules/.bin of the project and its
+    workspaces is compared by link target or hash (a regular file or a link
+    out of node_modules is an error, an install-style link a warning). All of
+    these are reports, nothing is undone.
+    Git write mode (policy.git_write): the writable names of a git directory
+    are an allowlist; others that exist are read-only, new ones are removed
+    and the project marked when the run ends; an absent config.worktree is an
+    empty read-only file.
+    Build and CI files (Makefile, package.json, Cargo.toml, build.rs,
+    .github/workflows ...) cannot be locked; the end of the run reports which
+    changed, with lines added and removed.
+  - filtered mode: the agent can read its own token and send it to an allowed
+    host; allowed hosts that accept uploads are exfiltration channels; the
+    check is on the CONNECT name (no TLS interception, SNI is not compared);
+    wildcard entries let subdomain labels reach your resolver.
+  - placeholders of the guards are removed when the run ends, not after a
+    crash; masks inside the agent's config directory stay.
 
 ==============================================================================
 8. Platforms                                               *xyno-sandbox-platforms*

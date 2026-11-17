@@ -6,6 +6,11 @@
 --   it(name, fn)              a test; any error fails it
 --   before_each / after_each  hooks of the enclosing describe (outer first / last)
 --   pending(name, reason)     a registered but skipped test
+--   xfail(name, reason, fn)   a test of the CORRECT behaviour that is known to fail (a documented
+--                             limit). It fails -> reported XFAIL with the reason, counted as
+--                             xfailed (not a failure). It passes -> reported FAIL "XPASS": the
+--                             limit is gone, so the xfail must be turned into a normal test.
+--                             A skip inside it (e.g. no sandbox here) is a skip.
 --   skip(reason)              callable from a test or hook: counts as skipped
 local M = {}
 
@@ -42,6 +47,10 @@ function M.install()
   end
   _G.it = function(name, fn)
     table.insert(cur.items, { name = name, fn = fn, group = cur })
+  end
+  _G.xfail = function(name, reason, fn)
+    assert(type(reason) == "string" and reason ~= "", "xfail needs a reason")
+    table.insert(cur.items, { name = name, fn = fn, group = cur, xfail = reason })
   end
   _G.pending = function(name, reason)
     table.insert(cur.items, { name = name, group = cur, pending = reason or "pending" })
@@ -100,13 +109,13 @@ function M.run(out)
     io.stdout:write(s, "\n")
     io.stdout:flush()
   end
-  local n = { passed = 0, failed = 0, skipped = 0 }
+  local n = { passed = 0, failed = 0, skipped = 0, xfailed = 0 }
 
   local function report(kind, name, detail, secs)
     n[kind] = n[kind] + 1
-    local label = ({ passed = "ok  ", failed = "FAIL", skipped = "SKIP" })[kind]
+    local label = ({ passed = "ok  ", failed = "FAIL", skipped = "SKIP", xfailed = "XFAIL" })[kind]
     local line = ("%s %s"):format(label, name)
-    if kind == "skipped" and detail then
+    if (kind == "skipped" or kind == "xfailed") and detail then
       line = line .. " (" .. detail .. ")"
     end
     if secs and secs >= 1 then
@@ -159,7 +168,21 @@ function M.run(out)
           ok, err = false, aerr
         end
         local secs = (vim.uv.hrtime() - t0) / 1e9
-        if ok then
+        if item.xfail and ok then
+          report(
+            "failed",
+            name,
+            "XPASS: expected to fail (" .. item.xfail .. ") but it passed; make it a normal test",
+            secs
+          )
+        elseif item.xfail and not is_skip(err) then
+          report(
+            "xfailed",
+            name,
+            "known limit: " .. item.xfail .. " | " .. tostring(err):gsub("\n.*", ""):sub(1, 120),
+            secs
+          )
+        elseif ok then
           report("passed", name, nil, secs)
         elseif is_skip(err) then
           report("skipped", name, err.reason, secs)

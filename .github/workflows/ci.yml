@@ -33,6 +33,11 @@ jobs:
       - name: Install bubblewrap
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
+      - name: Allow unprivileged user namespaces (CI only)
+        # Ubuntu 24.04 runners set kernel.apparmor_restrict_unprivileged_userns=1, which makes
+        # bwrap fail for an unprivileged user; the specs need a working sandbox.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
       - name: Spec suite
         # Specs that need a working sandbox skip with a message on runners that
         # restrict user namespaces.

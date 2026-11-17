@@ -102,28 +102,53 @@ function H.tmpdir()
   return dir
 end
 
+local sandbox_verdict -- { ok, why }, once per process
+
+function H.reset_sandbox_verdict()
+  sandbox_verdict = nil
+end
+
 function H.sandbox_available()
+  if sandbox_verdict then
+    return sandbox_verdict[1], sandbox_verdict[2]
+  end
+  local function verdict(ok, why)
+    sandbox_verdict = { ok, why }
+    return ok, why
+  end
   if vim.fn.executable("bwrap") ~= 1 then
-    return false, "bwrap not found"
+    return verdict(false, "bwrap not found")
   end
   local dir = H.tmpdir()
   local prev = vim.fn.chdir(dir)
-  local cmd, err = require("xyno_sandbox").wrap({ "true" }, dir, dir)
+  local cmd, err, handle = require("xyno_sandbox").wrap({ "true" }, dir, dir)
   vim.fn.chdir(prev)
   if not cmd then
-    return false, err
+    return verdict(false, err)
   end
-  local r = vim.system(cmd, { cwd = dir }):wait(10000)
+  local r = vim.system(cmd, { cwd = dir }):wait(15000)
+  if handle then
+    handle.release()
+  end
   if r.code ~= 0 then
-    return false, "bwrap cannot create a sandbox here: " .. vim.trim(r.stderr or "")
+    return verdict(false, "bwrap cannot create a sandbox here: " .. vim.trim(r.stderr or ""))
   end
-  return true
+  return verdict(true)
 end
 
---- Skip the test unless bwrap can create a sandbox here.
+--- Skip the test unless bwrap can create a sandbox here. When the runner's own probe found bubblewrap
+--- working (XYNO_TEST_SANDBOX_OK), a sandbox that does not start is a FAILURE (a broken launcher must
+--- not turn 90 specs into skips).
 function H.need_sandbox()
   local ok, why = H.sandbox_available()
   if not ok then
+    if vim.env.XYNO_TEST_SANDBOX_OK == "1" then
+      error(
+        "bubblewrap works on this machine (the runner probed it) but the plugin cannot start a sandbox: "
+          .. tostring(why),
+        2
+      )
+    end
     harness.skip(why)
   end
 end
@@ -181,6 +206,40 @@ function H.docs_text()
     end
   end
   return table.concat(parts, "\n")
+end
+
+--- Live processes whose command line contains `marker` (plain): { { pid, cmdline }, ... }. Linux only.
+function H.procs(marker)
+  local out = {}
+  for name in vim.fs.dir("/proc") do
+    local pid = tonumber(name)
+    if pid and pid ~= vim.uv.os_getpid() then
+      local f = io.open("/proc/" .. name .. "/cmdline", "rb")
+      if f then
+        local c = (f:read("a") or ""):gsub("%z", " ")
+        f:close()
+        if c:find(marker, 1, true) then
+          out[#out + 1] = { pid, c }
+        end
+      end
+    end
+  end
+  return out
+end
+
+--- Wait up to `ms` for no process to mention `marker`; returns the survivors (empty = all gone).
+--- Survivors are killed (-9) so a failing spec does not leave them behind.
+function H.wait_gone(marker, ms)
+  local left
+  vim.wait(ms or 5000, function()
+    left = H.procs(marker)
+    return #left == 0
+  end, 50)
+  left = H.procs(marker)
+  for _, p in ipairs(left) do
+    vim.uv.kill(p[1], 9)
+  end
+  return left
 end
 
 --- Delete temp dirs.

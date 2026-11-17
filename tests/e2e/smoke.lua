@@ -2,7 +2,8 @@
 -- `dir =`, setup() runs, and every documented command exists.
 --   LAZY_PATH=<lazy.nvim checkout> nvim --headless -u tests/e2e/smoke.lua
 -- Run it with a clean XDG environment so nothing from a personal config leaks.
-local repo = vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p"))))
+local repo =
+  vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p"))))
 if repo == "" or repo == "." then
   repo = vim.uv.cwd()
 end
@@ -24,13 +25,17 @@ end
 
 require("lazy").setup({
   { dir = repo, name = "xyno-sandbox.nvim", main = "xyno_sandbox", opts = {} },
-}, { lockfile = vim.fn.stdpath("state") .. "/lazy-lock.json", install = { missing = false }, checker = { enabled = false } })
+}, {
+  lockfile = vim.fn.stdpath("state") .. "/lazy-lock.json",
+  install = { missing = false },
+  checker = { enabled = false },
+})
 
 -- lazy.nvim loads `opts` plugins on startup (VimEnter in headless -l mode is not
 -- fired, so load explicitly)
 require("lazy").load({ plugins = { "xyno-sandbox.nvim" } })
 
-for _, cmd in ipairs({ "XynoSandboxStatus", "XynoSandboxRun" }) do
+for _, cmd in ipairs({ "XynoSandboxStatus", "XynoSandboxPolicy", "XynoSandboxApprovals", "XynoSandboxRun" }) do
   if vim.fn.exists(":" .. cmd) ~= 2 then
     fail("command missing: " .. cmd)
   end
@@ -39,7 +44,18 @@ local ok, sb = pcall(require, "xyno_sandbox")
 if not ok then
   fail("require xyno_sandbox: " .. tostring(sb))
 end
-for _, fn in ipairs({ "setup", "status", "wrap", "run", "scrub_names", "readonly_paths" }) do
+for _, fn in ipairs({
+  "setup",
+  "status",
+  "wrap",
+  "run",
+  "scrub_names",
+  "readonly_paths",
+  "plan",
+  "argv",
+  "approve",
+  "statusline",
+}) do
   if type(sb[fn]) ~= "function" then
     fail("missing function: " .. fn)
   end

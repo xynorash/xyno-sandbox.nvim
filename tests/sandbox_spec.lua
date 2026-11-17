@@ -47,18 +47,6 @@ local function fake_home(opts)
   return dir
 end
 
---- Run `fn`; if it fails, report the test as skipped with `reason` (a confirmed
---- bug in the module under test, kept as the assertion of the CORRECT behaviour).
-local function known_bug(reason, fn)
-  local ok, err = pcall(fn)
-  if not ok then
-    if harness.is_skip(err) then
-      error(err, 0)
-    end
-    harness.skip("KNOWN BUG: " .. reason .. " | " .. tostring(err):gsub("\n.*", ""))
-  end
-end
-
 --- xyno_sandbox loaded as if $HOME were `home`.
 local function load_for(home)
   local old = vim.uv.os_getenv("HOME")
@@ -67,13 +55,16 @@ local function load_for(home)
   local m = require(MOD)
   vim.uv.os_setenv("HOME", old)
   package.loaded[MOD] = real_mod
+  -- the older behaviour specs below pin the denylist view of $HOME (everything readable except the hidden
+  -- credentials); the default allowlist view has its own specs in home_spec.lua
+  m.config.home = "denylist"
   return m
 end
 
 --- wrap() with nvim's cwd set to `cwd` (default project), restoring it after.
-local function wrap(m, cmd, project, tmp, cwd)
+local function wrap(m, cmd, project, tmp, cwd, env)
   local prev = vim.fn.chdir(cwd or project)
-  local ok, a = pcall(m.wrap, cmd, project, tmp)
+  local ok, a = pcall(m.wrap, cmd, project, tmp, env and { env = env } or nil)
   vim.fn.chdir(prev)
   assert(ok, a)
   return a
@@ -123,11 +114,12 @@ end
 local function sb(m, home, script, project, opts)
   H.need_sandbox()
   local tmp = H.tmpdir()
-  local cmd = wrap(m, { "bash", "-c", script }, project, tmp)
   local env = { HOME = home }
   for k, v in pairs((opts or {}).env or {}) do
     env[k] = v
   end
+  -- bwrap starts with an empty environment (`env -i`): what the script should see goes into the plan
+  local cmd = wrap(m, { "bash", "-c", script }, project, tmp, nil, env)
   local r = vim.system(cmd, { cwd = project, text = true, env = env }):wait((opts or {}).timeout or 60000)
   return r, tmp
 end
@@ -146,6 +138,7 @@ after_each(function()
   end
   env_restore = {}
   package.loaded[MOD] = real_mod
+  H.reset_sandbox_verdict()
 end)
 
 -- ------------------------------------------------------------ 1, 17: opt-out
@@ -226,34 +219,44 @@ describe("opt-out", function()
     with_g("sandbox", nil, function()
       with_g("allow_unsandboxed", true, function()
         H.eq("bwrap", real_mod.status().mode)
-        H.eq("bwrap", real_mod.wrap({ "true" }, H.tmpdir(), H.tmpdir())[1])
+        local got, _, h = real_mod.wrap({ "true" }, H.tmpdir(), H.tmpdir())
+        H.eq("env", vim.fs.basename(got[1]))
+        local bw
+        for _, x in ipairs(got) do
+          bw = bw or (vim.fs.basename(x) == "bwrap" and x or nil)
+        end
+        H.eq("/", (bw or ""):sub(1, 1), "bwrap is named by its absolute path (env -i has no PATH)")
+        h.release()
       end)
     end)
   end)
 
-  it("a platform without bubblewrap (has('linux') == 0, e.g. Windows or macOS) refuses even with a bwrap on PATH", function()
-    local real_has = vim.fn.has
-    vim.fn.has = function(f)
-      if f == "linux" then
-        return 0
+  it(
+    "a platform without bubblewrap (has('linux') == 0, e.g. Windows or macOS) refuses even with a bwrap on PATH",
+    function()
+      local real_has = vim.fn.has
+      vim.fn.has = function(f)
+        if f == "linux" then
+          return 0
+        end
+        return real_has(f)
       end
-      return real_has(f)
-    end
-    local ok, err = pcall(function()
-      with_g("sandbox", nil, function()
-        with_g("allow_unsandboxed", nil, function()
-          local st = real_mod.status()
-          H.eq("refused", st.mode)
-          H.ok(st.reason:find("Linux", 1, true), st.reason)
-          local got, reason = real_mod.wrap({ "claude" }, "/tmp", "/tmp")
-          H.eq(nil, got)
-          H.ok(reason, "a reason comes with the refusal")
+      local ok, err = pcall(function()
+        with_g("sandbox", nil, function()
+          with_g("allow_unsandboxed", nil, function()
+            local st = real_mod.status()
+            H.eq("refused", st.mode)
+            H.ok(st.reason:find("Linux", 1, true), st.reason)
+            local got, reason = real_mod.wrap({ "claude" }, "/tmp", "/tmp")
+            H.eq(nil, got)
+            H.ok(reason, "a reason comes with the refusal")
+          end)
         end)
       end)
-    end)
-    vim.fn.has = real_has
-    assert(ok, err)
-  end)
+      vim.fn.has = real_has
+      assert(ok, err)
+    end
+  )
 end)
 
 -- ---------------------------------------------------- 2, 3: layout and binds
@@ -269,36 +272,74 @@ describe("wrapped command layout", function()
     local cwd = project .. "/sub"
     mkdir(cwd)
     local a = wrap(m, { "echo", "hi there" }, project, tmp, cwd)
+    H.eq({ "env", "-i" }, { vim.fs.basename(a[1]), a[2] }, "bwrap starts with an empty environment")
+    local at
+    for i, x in ipairs(a) do
+      if vim.fs.basename(x) == "bwrap" and at == nil then
+        at = i
+      end
+    end
+    a[at] = "bwrap" -- (the absolute path of the binary is checked in round6_spec)
+    a = vim.list_slice(a, at)
     local prefix = {
-      "bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--disable-userns", "--unshare-pid",
-      "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--cap-drop", "ALL", "--ro-bind", "/", "/",
-      "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
+      "bwrap",
+      "--die-with-parent",
+      "--new-session",
+      "--unshare-user",
+      "--disable-userns",
+      "--unshare-pid",
+      "--unshare-ipc",
+      "--unshare-uts",
+      "--unshare-cgroup-try",
+      "--cap-drop",
+      "ALL",
+      "--unshare-net",
+      "--ro-bind",
+      "/",
+      "/",
+      "--dev",
+      "/dev",
+      "--proc",
+      "/proc",
+      "--tmpfs",
+      "/tmp",
     }
     H.eq(prefix, vim.list_slice(a, 1, #prefix))
+    -- filtered network (the default): the command runs behind the relay launcher
     local n = #a
-    H.eq({ "--chdir", cwd, "--", "echo", "hi there" }, vim.list_slice(a, n - 4, n))
+    local c = find_seq(a, "--chdir", cwd, "--", "sh", "-c")
+    H.ok(c, "--chdir <cwd> -- sh -c <relay launcher>")
+    H.eq({ "echo", "hi there" }, vim.list_slice(a, n - 1, n))
+    H.eq("xyno-net", a[c + 6])
   end)
 
-  it("--chdir is the project root unless nvim's cwd is inside the project (from $HOME the agent started in $HOME)", function()
-    if vim.fn.executable("bwrap") ~= 1 then
-      return harness.skip("bwrap not found")
+  it(
+    "--chdir is the project root unless nvim's cwd is inside the project (from $HOME the agent started in $HOME)",
+    function()
+      if vim.fn.executable("bwrap") ~= 1 then
+        return harness.skip("bwrap not found")
+      end
+      local home = fake_home()
+      local m = load_for(home)
+      local project, tmp = H.tmpdir(), H.tmpdir()
+      local function chdir_of(cwd)
+        local a = wrap(m, { "true" }, project, tmp, cwd)
+        for i = #a, 1, -1 do
+          if a[i] == "--chdir" then
+            return a[i + 1]
+          end
+        end
+      end
+      H.eq(project, chdir_of(home), "cwd = $HOME")
+      H.eq(project, chdir_of(H.tmpdir()), "cwd elsewhere under /tmp")
+      H.eq(project, chdir_of(project))
+      mkdir(project .. "/crates")
+      H.eq(project .. "/crates", chdir_of(project .. "/crates"))
+      mkdir(project .. "-sibling")
+      H.eq(project, chdir_of(project .. "-sibling"), "a sibling sharing the name prefix is not inside")
+      vim.fn.delete(project .. "-sibling", "rf")
     end
-    local home = fake_home()
-    local m = load_for(home)
-    local project, tmp = H.tmpdir(), H.tmpdir()
-    local function chdir_of(cwd)
-      local a = wrap(m, { "true" }, project, tmp, cwd)
-      return a[#a - 2]
-    end
-    H.eq(project, chdir_of(home), "cwd = $HOME")
-    H.eq(project, chdir_of(H.tmpdir()), "cwd elsewhere under /tmp")
-    H.eq(project, chdir_of(project))
-    mkdir(project .. "/crates")
-    H.eq(project .. "/crates", chdir_of(project .. "/crates"))
-    mkdir(project .. "-sibling")
-    H.eq(project, chdir_of(project .. "-sibling"), "a sibling sharing the name prefix is not inside")
-    vim.fn.delete(project .. "-sibling", "rf")
-  end)
+  )
 
   it("wrap refuses a missing tmp_dir", function()
     local ok, err = pcall(real_mod.wrap, { "true" }, "/tmp", nil)
@@ -345,8 +386,13 @@ describe("wrapped command layout", function()
     local m = load_for(home)
     local project, tmp = H.tmpdir(), H.tmpdir()
     local writable = {
-      "/.claude", "/.cache/claude", "/.local/state/claude", "/.cargo/registry", "/.cargo/git",
-      "/.cargo/.package-cache", "/.cargo/.package-cache-mutate",
+      "/.claude",
+      "/.cache/claude",
+      "/.local/state/claude",
+      "/.cargo/registry",
+      "/.cargo/git",
+      "/.cargo/.package-cache",
+      "/.cargo/.package-cache-mutate",
     }
     local never = { "/.local/share/claude", "/.cargo/bin", "/.cargo/config.toml" }
 
@@ -386,8 +432,19 @@ describe("scrub_names", function()
 
   it("hits names containing a secret-ish word", function()
     local words = {
-      "TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "APIKEY", "CREDENTIAL", "PRIVATE_KEY", "ACCESS_KEY",
-      "AUTH_SOCK", "AGENT_INFO", "PASSPHRASE", "ASKPASS",
+      "TOKEN",
+      "SECRET",
+      "PASSWORD",
+      "PASSWD",
+      "API_KEY",
+      "APIKEY",
+      "CREDENTIAL",
+      "PRIVATE_KEY",
+      "ACCESS_KEY",
+      "AUTH_SOCK",
+      "AGENT_INFO",
+      "PASSPHRASE",
+      "ASKPASS",
     }
     local env, want = {}, {}
     for _, w in ipairs(words) do
@@ -402,8 +459,21 @@ describe("scrub_names", function()
 
   it("hits the listed prefixes", function()
     local prefixes = {
-      "AWS_", "AZURE_", "GOOGLE_", "GCP_", "GCLOUD_", "DOCKER_", "KUBE", "GH_", "GITHUB_", "GITLAB_", "NPM_",
-      "CARGO_REGISTR", "VAULT_", "OPENAI_", "STRIPE_",
+      "AWS_",
+      "AZURE_",
+      "GOOGLE_",
+      "GCP_",
+      "GCLOUD_",
+      "DOCKER_",
+      "KUBE",
+      "GH_",
+      "GITHUB_",
+      "GITLAB_",
+      "NPM_",
+      "CARGO_REGISTR",
+      "VAULT_",
+      "OPENAI_",
+      "STRIPE_",
     }
     local env, want = {}, {}
     for _, p in ipairs(prefixes) do
@@ -418,8 +488,16 @@ describe("scrub_names", function()
 
   it("hits the exact names", function()
     local names = {
-      "DATABASE_URL", "DBUS_SESSION_BUS_ADDRESS", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "SSH_AUTH_SOCK",
-      "GPG_AGENT_INFO", "KUBECONFIG", "MYSQL_PWD", "SSHPASS",
+      "DATABASE_URL",
+      "DBUS_SESSION_BUS_ADDRESS",
+      "DISPLAY",
+      "WAYLAND_DISPLAY",
+      "XAUTHORITY",
+      "SSH_AUTH_SOCK",
+      "GPG_AGENT_INFO",
+      "KUBECONFIG",
+      "MYSQL_PWD",
+      "SSHPASS",
     }
     local env = { PWD = "/home/x/proj", DATABASE_URL_X = "1", MYDISPLAY = "1" }
     for _, n in ipairs(names) do
@@ -431,16 +509,27 @@ describe("scrub_names", function()
 
   it("matches case-insensitively on the upper-cased name, returns sorted, keeps PATH/HOME/LANG", function()
     local env = {
-      github_token = "1", My_Secret = "1", aws_region = "1", display = "1", Zeta_Password = "1",
-      PATH = "/bin", HOME = "/h", LANG = "C", EDITOR = "nvim",
+      github_token = "1",
+      My_Secret = "1",
+      aws_region = "1",
+      display = "1",
+      Zeta_Password = "1",
+      PATH = "/bin",
+      HOME = "/h",
+      LANG = "C",
+      EDITOR = "nvim",
     }
     H.eq({ "My_Secret", "Zeta_Password", "aws_region", "display", "github_token" }, m.scrub_names(env, true))
   end)
 
   it("keeps the claude auth variables with a non-file login and scrubs them with a file login", function()
-    local env = { ANTHROPIC_API_KEY = "1", ANTHROPIC_AUTH_TOKEN = "1", CLAUDE_CODE_OAUTH_TOKEN = "1", OTHER_TOKEN = "1" }
+    local env =
+      { ANTHROPIC_API_KEY = "1", ANTHROPIC_AUTH_TOKEN = "1", CLAUDE_CODE_OAUTH_TOKEN = "1", OTHER_TOKEN = "1" }
     H.eq({ "OTHER_TOKEN" }, m.scrub_names(env, false))
-    H.eq({ "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OTHER_TOKEN" }, m.scrub_names(env, true))
+    H.eq(
+      { "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OTHER_TOKEN" },
+      m.scrub_names(env, true)
+    )
   end)
 
   it("computes file_login from ~/.claude/.credentials.json when not given", function()
@@ -494,24 +583,79 @@ end)
 
 describe("hidden credentials", function()
   local hidden_dirs = {
-    "/.ssh", "/.gnupg", "/.aws", "/.azure", "/.gsutil", "/.boto", "/.docker", "/.kube", "/.terraform.d",
-    "/.pki", "/.password-store",
-    "/.config/gh", "/.config/rclone", "/.config/pulumi", "/.config/helm", "/.config/gcloud", "/.config/op",
-    "/.config/doctl", "/.config/hub", "/.config/Bitwarden", "/.config/1Password", "/.config/keepassxc",
-    "/.config/pulse", "/.config/Slack", "/.config/discord", "/.config/Signal", "/.config/rustdesk",
-    "/.config/winapps", "/.config/freerdp", "/.config/obs-studio", "/.config/JetBrains",
-    "/.config/google-chrome", "/.config/chromium", "/.config/BraveSoftware", "/.config/microsoft-edge",
-    "/.config/vivaldi", "/.config/opera", "/.mozilla", "/.thunderbird", "/.cache/google-chrome",
-    "/.local/share/keyrings", "/.local/share/password-store", "/.local/share/gnome-keyring",
-    "/.local/share/kwalletd", "/.local/share/TelegramDesktop", "/.local/share/fish",
-    "/.claude/daemon", "/.claude/sessions", "/.config/spotify", "/.config/herdr", "/.anydesk",
-    "/.neuralstark-live", "/.local/share/winapps",
+    "/.ssh",
+    "/.gnupg",
+    "/.aws",
+    "/.azure",
+    "/.gsutil",
+    "/.boto",
+    "/.docker",
+    "/.kube",
+    "/.terraform.d",
+    "/.pki",
+    "/.password-store",
+    "/.config/gh",
+    "/.config/rclone",
+    "/.config/pulumi",
+    "/.config/helm",
+    "/.config/gcloud",
+    "/.config/op",
+    "/.config/doctl",
+    "/.config/hub",
+    "/.config/Bitwarden",
+    "/.config/1Password",
+    "/.config/keepassxc",
+    "/.config/pulse",
+    "/.config/Slack",
+    "/.config/discord",
+    "/.config/Signal",
+    "/.config/rustdesk",
+    "/.config/winapps",
+    "/.config/freerdp",
+    "/.config/obs-studio",
+    "/.config/JetBrains",
+    "/.config/google-chrome",
+    "/.config/chromium",
+    "/.config/BraveSoftware",
+    "/.config/microsoft-edge",
+    "/.config/vivaldi",
+    "/.config/opera",
+    "/.mozilla",
+    "/.thunderbird",
+    "/.cache/google-chrome",
+    "/.local/share/keyrings",
+    "/.local/share/password-store",
+    "/.local/share/gnome-keyring",
+    "/.local/share/kwalletd",
+    "/.local/share/TelegramDesktop",
+    "/.local/share/fish",
+    "/.claude/daemon",
+    "/.claude/sessions",
+    "/.config/spotify",
+    "/.config/herdr",
+    "/.anydesk",
+    "/.neuralstark-live",
+    "/.local/share/winapps",
   }
   local hidden_files = {
-    "/.vault-token", "/.netrc", "/.git-credentials", "/.npmrc", "/.pypirc", "/.cargo/credentials",
-    "/.cargo/credentials.toml", "/.pub-cache/credentials.json", "/.android/adbkey", "/.Xauthority",
-    "/.pulse-cookie", "/.config/git/credentials", "/.bash_history", "/.zsh_history", "/.python_history",
-    "/.lesshst", "/.config/fish/fish_history", "/.claude/history.jsonl",
+    "/.vault-token",
+    "/.netrc",
+    "/.git-credentials",
+    "/.npmrc",
+    "/.pypirc",
+    "/.cargo/credentials",
+    "/.cargo/credentials.toml",
+    "/.pub-cache/credentials.json",
+    "/.android/adbkey",
+    "/.Xauthority",
+    "/.pulse-cookie",
+    "/.config/git/credentials",
+    "/.bash_history",
+    "/.zsh_history",
+    "/.python_history",
+    "/.lesshst",
+    "/.config/fish/fish_history",
+    "/.claude/history.jsonl",
   }
 
   local function populated()
@@ -553,33 +697,19 @@ describe("hidden credentials", function()
     end
   end)
 
-  it("hides the existing system sockets and /run/user/<uid>", function()
+  it("masks the host's /run (system sockets, /run/user/<uid>) and /var/tmp with an empty tmpfs", function()
     if vim.fn.executable("bwrap") ~= 1 then
       return harness.skip("bwrap not found")
     end
     local a = wrap(load_for(fake_home()), { "true" }, H.tmpdir(), H.tmpdir())
-    local sys = {
-      "/run/user/" .. uid, "/run/docker.sock", "/run/docker", "/run/containerd", "/run/podman", "/run/libvirt",
-      "/run/dbus", "/run/snapd.socket", "/run/snapd-snap.socket", "/run/tailscale", "/run/seatd.sock",
-    }
-    local seen = 0
-    for _, p in ipairs(sys) do
-      local st = vim.uv.fs_stat(p)
-      if st then
-        seen = seen + 1
-        if st.type == "directory" then
-          expect_seq(a, "--tmpfs", p)
-        else
-          H.ok(hidden_file(a, p), "socket not hidden: " .. p)
-        end
+    for _, p in ipairs({ "/run", "/var/tmp" }) do
+      if vim.uv.fs_stat(p) then
+        expect_seq(a, "--tmpfs", p)
       else
         expect_no_seq(a, "--tmpfs", p)
-        H.not_ok(hidden_file(a, p))
       end
     end
-    if seen == 0 then
-      harness.skip("none of the system paths exist on this machine (list was checked for absence only)")
-    end
+    expect_seq(a, "--tmpfs", "/tmp")
   end)
 
   it("really hides credentials inside the sandbox (dir empty, file empty)", function()
@@ -587,7 +717,8 @@ describe("hidden credentials", function()
     local home = populated()
     local m = load_for(home)
     local r = sb(
-      m, home,
+      m,
+      home,
       'echo "ssh=[$(ls -A "$HOME/.ssh" | wc -l)] netrc=[$(cat "$HOME/.netrc" 2>/dev/null | wc -c)] hist=[$(cat "$HOME/.bash_history" 2>/dev/null | wc -c)] '
         .. 'daemon=[$(ls -A "$HOME/.claude/daemon" | wc -l)] prompts=[$(cat "$HOME/.claude/history.jsonl" 2>/dev/null | wc -c)]"',
       H.tmpdir()
@@ -656,7 +787,7 @@ describe("readonly_paths", function()
     return s
   end
 
-  it("finds every .git up to 2 levels deep and resolves gitdir/commondir from a .git file", function()
+  it("finds every .git down to the scan depth and resolves gitdir/commondir from a .git file", function()
     local home = fake_home()
     local m = load_for(home)
     local base = H.tmpdir()
@@ -668,7 +799,8 @@ describe("readonly_paths", function()
     write(base .. "/store/wt/x/commondir", "../../common\n")
     write(project .. "/sub/.git", "gitdir: ../../store/wt/x\n")
     mkdir(project .. "/a/b/.git") -- depth 2: locked
-    mkdir(project .. "/a/b/c/.git") -- depth 3: not locked
+    mkdir(project .. "/a/b/c/d/e/.git") -- depth 5: locked since the walk goes 8 levels deep
+    mkdir(project .. "/a/b/c/d/e/f/g/h/i/.git") -- depth 9: beyond the scan depth
     mkdir(project .. "/target/.git") -- skipped
     mkdir(project .. "/node_modules/.git")
     mkdir(project .. "/.cache/.git")
@@ -678,7 +810,8 @@ describe("readonly_paths", function()
     H.ok(ro[vim.uv.fs_realpath(base .. "/store/wt/x")], "gitdir behind the .git file")
     H.ok(ro[vim.uv.fs_realpath(base .. "/store/common")], "commondir")
     H.ok(ro[project .. "/a/b/.git"])
-    H.not_ok(ro[project .. "/a/b/c/.git"], "deeper than 2 is not locked (documented residual)")
+    H.ok(ro[project .. "/a/b/c/d/e/.git"], "a nested .git at depth 5 is locked")
+    H.not_ok(ro[project .. "/a/b/c/d/e/f/g/h/i/.git"], "beyond 8 levels is not locked (documented residual)")
     H.not_ok(ro[project .. "/target/.git"])
     H.not_ok(ro[project .. "/node_modules/.git"])
     H.not_ok(ro[project .. "/.cache/.git"])
@@ -703,8 +836,16 @@ describe("readonly_paths", function()
     local m = load_for(fake_home())
     local project = H.tmpdir()
     local present = {
-      ".gitmodules", ".envrc", ".mise.toml", ".tool-versions", ".nvim.lua", ".nvimrc", ".exrc",
-      ".vscode/tasks.json", ".vscode/settings.json", ".mcp.json",
+      ".gitmodules",
+      ".envrc",
+      ".mise.toml",
+      ".tool-versions",
+      ".nvim.lua",
+      ".nvimrc",
+      ".exrc",
+      ".vscode/tasks.json",
+      ".vscode/settings.json",
+      ".mcp.json",
     }
     for _, p in ipairs(present) do
       write(project .. "/" .. p)
@@ -723,14 +864,15 @@ describe("readonly_paths", function()
     end
   end)
 
-  it("locks .cargo and .envrc of members up to depth 3, not hidden or skipped dirs", function()
+  it("locks .cargo and .envrc of members down to the scan depth, not hidden or skipped dirs", function()
     local m = load_for(fake_home())
     local project = H.tmpdir()
     mkdir(project .. "/m1/.cargo")
     write(project .. "/m1/.envrc")
     mkdir(project .. "/x/y/.cargo")
     write(project .. "/x/y/z/.envrc")
-    mkdir(project .. "/x/y/z/w/.cargo") -- depth 4: not locked
+    mkdir(project .. "/x/y/z/w/.cargo") -- depth 4: locked now (was a documented gap)
+    mkdir(project .. "/p/q/r/s/t/u/v/w/x/.cargo") -- depth 9: beyond the scan depth
     mkdir(project .. "/.hid/.cargo")
     mkdir(project .. "/target/foo/.cargo")
     mkdir(project .. "/node_modules/foo/.cargo")
@@ -739,7 +881,8 @@ describe("readonly_paths", function()
     H.ok(ro[project .. "/m1/.envrc"])
     H.ok(ro[project .. "/x/y/.cargo"])
     H.ok(ro[project .. "/x/y/z/.envrc"])
-    H.not_ok(ro[project .. "/x/y/z/w/.cargo"])
+    H.ok(ro[project .. "/x/y/z/w/.cargo"], "a member at depth 4")
+    H.not_ok(ro[project .. "/p/q/r/s/t/u/v/w/x/.cargo"])
     H.not_ok(ro[project .. "/.hid/.cargo"])
     H.not_ok(ro[project .. "/target/foo/.cargo"])
     H.not_ok(ro[project .. "/node_modules/foo/.cargo"])
@@ -749,7 +892,8 @@ describe("readonly_paths", function()
     local home = fake_home()
     local m = load_for(home)
     local files = { "settings.json", "settings.local.json", "CLAUDE.md", "keybindings.json" }
-    local dirs = { "hooks", "commands", "agents", "skills", "plugins", "output-styles", "ide", "rules", "chrome", "security" }
+    local dirs =
+      { "hooks", "commands", "agents", "skills", "plugins", "output-styles", "ide", "rules", "chrome", "security" }
     for _, f in ipairs(files) do
       write(home .. "/.claude/" .. f)
     end
@@ -823,7 +967,8 @@ describe("readonly_paths", function()
     local _, masks = m.readonly_paths(project)
     H.has(masks, project .. "/c1/.cargo")
     H.not_ok(contains(masks, project .. "/c2/.cargo"))
-    H.not_ok(contains(masks, project .. "/plain/.cargo"))
+    -- (a directory without Cargo.toml is not a crate, but the shallow subdirectories get .cargo masked too)
+    H.has(masks, project .. "/plain/.cargo")
     H.has(masks, project .. "/deep/er/crate/.cargo")
   end)
 
@@ -951,7 +1096,8 @@ describe("sandbox behaviour", function()
   it("cannot commit: .git is read-only", function()
     local home, m, project = env()
     local r = sb(
-      m, home,
+      m,
+      home,
       "echo change >> src/lib.rs; git add -A 2>&1; git -c user.name=t -c user.email=t@t commit -m x 2>&1; "
         .. "echo hook > .git/hooks/pre-commit 2>&1; echo rc=$?",
       project
@@ -966,10 +1112,10 @@ describe("sandbox behaviour", function()
     local home, m, project = env()
     local script = table.concat({
       'fail() { if "$@" 2>/dev/null; then echo "WROTE: $*"; fi; }',
-      'fail sh -c \'echo x >> "$HOME/.bashrc"\'',
-      'fail sh -c \'echo x >> "$HOME/.profile"\'',
-      'fail sh -c \'echo x > "$HOME/.config/autostart/evil.desktop"\'',
-      'fail sh -c \'echo x > "$HOME/.config/systemd/user/evil.service"\'',
+      "fail sh -c 'echo x >> \"$HOME/.bashrc\"'",
+      "fail sh -c 'echo x >> \"$HOME/.profile\"'",
+      "fail sh -c 'echo x > \"$HOME/.config/autostart/evil.desktop\"'",
+      "fail sh -c 'echo x > \"$HOME/.config/systemd/user/evil.service\"'",
       "fail sh -c 'echo x > /etc/cron.d/evil'",
       "fail sh -c 'echo x > /var/spool/cron/evil'",
       'ln -s "$HOME/.bashrc" link-to-bashrc',
@@ -987,8 +1133,8 @@ describe("sandbox behaviour", function()
     local home, m, project = env()
     local script = table.concat({
       'fail() { if "$@" 2>/dev/null; then echo "WROTE: $*"; fi; }',
-      'fail sh -c \'echo x > "/proc/self/root$HOME/.bashrc"\'',
-      'fail sh -c \'echo x > "/proc/1/root$HOME/.bashrc"\'',
+      "fail sh -c 'echo x > \"/proc/self/root$HOME/.bashrc\"'",
+      "fail sh -c 'echo x > \"/proc/1/root$HOME/.bashrc\"'",
       "fail mount -t tmpfs none /mnt",
       "fail unshare -r true",
       "fail unshare -U true",
@@ -1038,7 +1184,8 @@ describe("sandbox behaviour", function()
     -- the real module and real $HOME: ~/.cargo/registry is bound writable there
     local tmp = H.tmpdir()
     local prev = vim.fn.chdir(project)
-    local cmd = real_mod.wrap({ "bash", "-c", "cargo build --offline 2>&1 && cargo test --no-run --offline 2>&1" }, project, tmp)
+    local cmd =
+      real_mod.wrap({ "bash", "-c", "cargo build --offline 2>&1 && cargo test --no-run --offline 2>&1" }, project, tmp)
     vim.fn.chdir(prev)
     local r = vim.system(cmd, { cwd = project, text = true }):wait(240000)
     H.eq(0, r.code, out(r))
@@ -1077,7 +1224,7 @@ describe("project memory directory", function()
       'd="' .. d .. '"',
       'fail() { if "$@" 2>/dev/null; then echo "WROTE: $*"; fi; }',
       'fail mkdir -p "$d/memory/sub"',
-      'fail sh -c \'echo planted > "$d/memory/MEMORY.md"\'',
+      "fail sh -c 'echo planted > \"$d/memory/MEMORY.md\"'",
       'fail mv "$d/memory" "$d/memory-moved"',
       'fail sh -c \'mkdir /tmp/x && mv /tmp/x "$d/memory2" && mv "$d/memory2" "$d/memory"\'',
       'fail ln -sfn /tmp "$d/memory"',
@@ -1109,7 +1256,7 @@ describe("former known bugs", function()
       'echo planted > "$d/memory/MEMORY.md" 2>/dev/null && echo PLANTED',
       -- other projects' transcripts are read-only too
       'mkdir -p "' .. home .. '/.claude/projects/other" 2>/dev/null && echo OTHER-CREATED',
-      'echo ok',
+      "echo ok",
     }, "\n")
     local r = sb(m, home, script, project)
     H.match(r.stdout, "ok", true, out(r))
@@ -1135,7 +1282,12 @@ describe("former known bugs", function()
     local m = load_for(home)
     mkdir(home .. "/.claude/security/agent-sdk-venv/lib")
     local project = H.tmpdir()
-    local r = sb(m, home, 'touch "' .. home .. '/.claude/security/agent-sdk-venv/lib/x.pth" 2>/dev/null && echo WRITABLE; echo done', project)
+    local r = sb(
+      m,
+      home,
+      'touch "' .. home .. '/.claude/security/agent-sdk-venv/lib/x.pth" 2>/dev/null && echo WRITABLE; echo done',
+      project
+    )
     H.match(r.stdout, "done", true, out(r))
     H.no_match(r.stdout, "WRITABLE", true, out(r))
     H.eq(0, vim.fn.filereadable(home .. "/.claude/security/agent-sdk-venv/lib/x.pth"))
@@ -1161,16 +1313,18 @@ describe("network", function()
     return srv, srv:getsockname().port
   end
 
-  it("reaches loopback listeners (documented residual; ::1 too, the netns is shared) but not /run/user/UID", function()
+  it("network = 'open': reaches loopback listeners (the netns is shared) but not /run/user/UID", function()
     H.need_sandbox()
     local srv, port = listener("127.0.0.1")
     H.ok(srv, "could not listen on 127.0.0.1")
     local srv6, port6 = listener("::1")
     local home = fake_home()
     local m = load_for(home)
+    m.config.network = "open"
     local script = table.concat({
       "(exec 3<>/dev/tcp/127.0.0.1/" .. port .. ") 2>/dev/null && echo v4=reachable || echo v4=blocked",
-      port6 and ("(exec 3<>/dev/tcp/::1/" .. port6 .. ") 2>/dev/null && echo v6=reachable || echo v6=blocked") or "echo v6=nolistener",
+      port6 and ("(exec 3<>/dev/tcp/::1/" .. port6 .. ") 2>/dev/null && echo v6=reachable || echo v6=blocked")
+        or "echo v6=nolistener",
       "[ -e /run/user/" .. uid .. "/bus ] && echo bus=visible || echo bus=hidden",
     }, "\n")
     local r = sb(m, home, script, H.tmpdir())
@@ -1193,6 +1347,7 @@ end)
 describe("headless skip", function()
   it("sandbox_available reports why when bwrap is missing, and need_sandbox skips", function()
     setenv("PATH", "/nonexistent-xyno-path")
+    setenv("XYNO_TEST_SANDBOX_OK", "") -- (the runner's "bubblewrap works" mark turns a skip into a failure)
     local ok, why = H.sandbox_available()
     H.eq(false, ok)
     H.match(why, "bwrap not found", true)
@@ -1204,14 +1359,16 @@ describe("headless skip", function()
 
   it("need_sandbox skips with the bwrap message when a user namespace cannot be created", function()
     -- a fake bwrap that fails like a CI container without userns
+    require("xyno_sandbox.probe").reset() -- (a runner without bwrap seeds the verdict; this spec needs the real one)
     local bin = H.tmpdir()
     write(bin .. "/bwrap", "#!/bin/sh\necho 'bwrap: No permissions to create a new namespace' >&2\nexit 1\n")
     vim.uv.fs_chmod(bin .. "/bwrap", tonumber("755", 8))
     setenv("PATH", bin .. ":" .. vim.uv.os_getenv("PATH"))
     local ok, why = H.sandbox_available()
     H.eq(false, ok)
-    H.match(why, "bwrap cannot create a sandbox here", true)
+    H.match(why, "bwrap cannot create a user namespace", true)
     H.match(why, "No permissions to create a new namespace", true)
+    H.match(why, "unprivileged_userns_clone", true, "the probe's hint is part of the refusal")
   end)
 end)
 
@@ -1224,7 +1381,7 @@ describe("README residual-risk claims", function()
       "credential file under its config directory in `$HOME` must stay readable",
       "everything unlisted under `$HOME` is readable",
       "loopback services",
-      "nested `.git` deeper than 2 levels is not locked",
+      "nested `.git` deeper than 8 levels is not locked",
     }) do
       H.has(text, claim)
     end
