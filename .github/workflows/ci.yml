@@ -38,9 +38,6 @@ jobs:
         # bwrap fail for an unprivileged user; the specs need a working sandbox.
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
-      - name: Diagnostic - bwrap --die-with-parent without the plugin
-        run: sh tests/ci/die_with_parent_probe.sh
-
       - name: Spec suite
         # Specs that need a working sandbox skip with a message on runners that
         # restrict user namespaces.
